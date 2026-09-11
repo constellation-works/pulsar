@@ -58,14 +58,29 @@ claude mcp add pulsar -- uv --directory /path/to/pulsar run pulsar serve
 |---|---|---|
 | `whoami` | `GET /2/users/me` | cached; `{user_id, username}` of the bound account |
 | `create_post` | `POST /2/tweets` | `text`, optional `reply_to_post_id`, `quote_post_id`, `media_ids`, `dry_run` |
-| `upload_media` | `POST /2/media/upload` | images only in v1; `path` or `base64` + `mime` → `{media_id}` |
+| `upload_media` | `POST /2/media/upload/initialize` → `/{id}/append` → `/{id}/finalize` | images only in v1; `path` or `base64` + `mime` → `{media_id}` |
 | `delete_post` | `DELETE /2/tweets/:id` | `post_id` → `{ok: true}` |
 
-`create_post` returns `{ok, post_id, url, text}`; with `dry_run: true` it
-validates only and returns `estimated_cost_usd`.
+`create_post` returns `{ok: true, post_id, url, text}`; with `dry_run: true` it
+validates only (no network call) and returns `weighted_length`, `has_url` and
+`estimated_cost_usd`. Every tool takes an optional `caller` (agent id) for the
+write log; `PULSAR_CALLER` in the server's environment is the fallback.
 
-Errors are structured: `auth_expired`, `invalid_text`, `secret_detected`,
-`duplicate`, `forbidden`, `rate_limited`, `api_error`.
+Failures never raise into the client; they come back as
+`{ok: false, code, message, detail?}` so the agent can branch on `code`:
+
+| code | meaning | what to do |
+|---|---|---|
+| `auth_expired` | no token, or refresh failed (revoked / app reset) | stop; a human runs `pulsar auth login` |
+| `invalid_text` | empty, over 280 weighted chars, control chars, reply+quote together | rewrite |
+| `secret_detected` | text matches a credential pattern | rewrite; never retry verbatim |
+| `invalid_media` | bad path/base64, non-image, >5MB | fix the input |
+| `duplicate` / `forbidden` / `rate_limited` / `not_found` | X's reason, passed through in `detail` | duplicate: change text; rate_limited: wait |
+| `api_error` | anything else from X or the network | retry later, report |
+
+Off-box callers (Grok Bot) can use the streamable-HTTP transport instead of
+stdio: `uv run pulsar serve --transport http --port 8977` binds loopback only;
+exposing it (Caddy, tailnet) and putting auth in front is an operator step.
 
 ### Safety
 
@@ -79,10 +94,18 @@ Errors are structured: `auth_expired`, `invalid_text`, `secret_detected`,
   network call — including on `dry_run`.
 - `create_post` is meant to be called only on explicit user intent in the
   calling chat, or from a standing routine Daniel enabled. The connector cannot
-  verify intent; that rule lives with the caller.
+  verify intent; that rule lives with the caller (and is repeated in the tool
+  description and server instructions).
+- Encrypted-at-rest means Fernet with a key file beside the bundle (both 0600,
+  directory 0700). It protects against backups, `cat`, and stray commits — not
+  against a compromised host account. That is the intended boundary: the
+  *agent* never holds secrets; the connector process does.
 
 ## Development
 
 ```sh
-make check     # lint + tests
+make check     # ruff lint + format check + pytest (no network; fake X transport)
 ```
+
+`tests/conftest.py` holds the scripted X API; tests drive the server through a
+real MCP client session over the in-memory transport.

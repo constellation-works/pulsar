@@ -17,7 +17,7 @@ pulsar = "pulsar.cli:main"
 [dependency-groups]
 dev = [
     "pytest>=8",
-    "pytest-asyncio>=0.24",
+    "anyio>=4",
     "ruff>=0.6",
 ]
 
@@ -36,5 +36,4 @@ target-version = "py312"
 select = ["E", "F", "I", "B", "UP"]
 
 [tool.pytest.ini_options]
-asyncio_mode = "auto"
 testpaths = ["tests"]
