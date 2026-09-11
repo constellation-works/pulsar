@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.ruff_cache/
+dist/
+*.egg-info/
+# never commit a token bundle, even a test one
+*.tokens.json
+.orbit/*
+!.orbit/auto_tasks/
+!.orbit/resources/
+!.orbit/routines/
+!.orbit/config.toml
+.orbit/**/*.lock

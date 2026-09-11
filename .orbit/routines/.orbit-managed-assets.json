@@ -1,0 +1,85 @@
+{
+  "schemaVersion": 2,
+  "assetKind": "routine",
+  "assets": {
+    "auto_task_scheduler": "3dbcd7a79a1dfc484de8794d188fefc00158fafa6a05fff80fac7d65441ef3a7",
+    "ci_failure_sweep": "9b33812ef4d32d15ad6e9f6e214961846b92e7cdd55e78a1931e37ca4b8ab307",
+    "dependabot_alert_sweep": "4fbea69d95f01658386d3d092bf7e3a51118633011f546bba7fa5054bcab4882",
+    "ship_sweep": "21db0796e677fd43a3553dcce22f04d9465c29d126dfb72c73a4a530ee8c172a",
+    "task_pilot": "5bfc5d28d2e4651d49225c0e5a1f7acf2f90a9069d2b7d4813c70267a102d25b",
+    "task_triage": "027d057bacf5b102e4ea5a622ac5f45390ffc85eff05a22d39004472551062ea",
+    "worktree_gc": "d5a124f7ac2e79bf091ca0149b11b4e18c9a53106a0656026c7b4390e051500c"
+  },
+  "routineProvenance": {
+    "auto_task_scheduler": {
+      "templateDigest": "7f3b1a41dfe43b5445b47450f21d8e424fcdeeaa977a6f09d4ded03fc7ed16be",
+      "renderedDigest": "3dbcd7a79a1dfc484de8794d188fefc00158fafa6a05fff80fac7d65441ef3a7",
+      "binding": {
+        "name": "auto-task-scheduler-pulsar",
+        "hosts": [
+          "dk-server-1"
+        ]
+      }
+    },
+    "ci_failure_sweep": {
+      "templateDigest": "a1b01d81293cbddb16f636aaf1d097a1ef7c1a90f88046a0b9223bc1a6158825",
+      "renderedDigest": "9b33812ef4d32d15ad6e9f6e214961846b92e7cdd55e78a1931e37ca4b8ab307",
+      "binding": {
+        "name": "ci-failure-sweep-pulsar",
+        "hosts": [
+          "dk-server-1"
+        ]
+      }
+    },
+    "dependabot_alert_sweep": {
+      "templateDigest": "e66de2d11cf610f8bb9100845aafe8a85a33bc5678a10e30bd062d6894ad0d0f",
+      "renderedDigest": "4fbea69d95f01658386d3d092bf7e3a51118633011f546bba7fa5054bcab4882",
+      "binding": {
+        "name": "dependabot-alert-sweep-pulsar",
+        "hosts": [
+          "dk-server-1"
+        ]
+      }
+    },
+    "ship_sweep": {
+      "templateDigest": "416134b342e33f1b2565b88bc2e41b885a39b21c02324f0c8ed79bec74c562d1",
+      "renderedDigest": "21db0796e677fd43a3553dcce22f04d9465c29d126dfb72c73a4a530ee8c172a",
+      "binding": {
+        "name": "ship-sweep-pulsar",
+        "hosts": [
+          "dk-server-1"
+        ]
+      }
+    },
+    "task_pilot": {
+      "templateDigest": "f8b9699a0dc505ea5cbe44998b88995b8720d6e0bdde3fa6ab3f40bec863f280",
+      "renderedDigest": "5bfc5d28d2e4651d49225c0e5a1f7acf2f90a9069d2b7d4813c70267a102d25b",
+      "binding": {
+        "name": "task-pilot-pulsar",
+        "hosts": [
+          "dk-server-1"
+        ]
+      }
+    },
+    "task_triage": {
+      "templateDigest": "21feb397078d47165a0e2a618e8f0dfc97cdbd02c60d0595d71b43b20abd7c5e",
+      "renderedDigest": "027d057bacf5b102e4ea5a622ac5f45390ffc85eff05a22d39004472551062ea",
+      "binding": {
+        "name": "task-triage-pulsar",
+        "hosts": [
+          "dk-server-1"
+        ]
+      }
+    },
+    "worktree_gc": {
+      "templateDigest": "b03d4f900f0746dd317d82fc11b6cd81a398edee18519e3f650d37ed9195a70d",
+      "renderedDigest": "d5a124f7ac2e79bf091ca0149b11b4e18c9a53106a0656026c7b4390e051500c",
+      "binding": {
+        "name": "worktree-gc-pulsar",
+        "hosts": [
+          "dk-server-1"
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,92 @@
+[crews.opus]
+backend = "cli"
+model = "opus"
+provider = "claude"
+
+[crews.sonnet]
+backend = "cli"
+model = "sonnet"
+provider = "claude"
+
+[crews.fable]
+backend = "cli"
+model = "fable"
+provider = "claude"
+
+[crews.sol]
+backend = "cli"
+model = "gpt-5.6-sol"
+provider = "codex"
+
+[crews.terra]
+backend = "cli"
+model = "gpt-5.6-terra"
+provider = "codex"
+
+[crews.luna]
+backend = "cli"
+model = "gpt-5.6-luna"
+provider = "codex"
+
+[crews.gemini]
+backend = "cli"
+model = "pro"
+provider = "gemini"
+
+[crews.grok]
+backend = "cli"
+model = "grok-4.6"
+provider = "grok"
+
+[docs]
+roots = [
+    "docs/",
+    "codebases/",
+    "runbooks/",
+    "rules/",
+    "environments/",
+    "design/",
+]
+
+# dk-server-1 is itself the trust/sandbox boundary for agent runs, so codex runs
+# without its own inner sandbox. workspace-write spins up a bwrap network namespace
+# that fails on this box ("bwrap: loopback: Failed RTM_NEWADDR: Operation not
+# permitted"), killing all exec + MCP for the run (see friction F2026-07-002).
+[execution.codex]
+sandbox = "danger-full-access"
+
+[execution.env]
+pass = [
+    "HOME",
+    "PATH",
+    "CODEX_HOME",
+    "TMPDIR",
+    "USER",
+    "__CF_USER_TEXT_ENCODING",
+]
+
+[graph]
+editing = false
+
+[scoring]
+enabled = true
+
+[task.approval]
+delegate_approval = true
+required_for_agent = true
+
+[workflow]
+auto_ship = true
+base_branch = "agent-main"
+default_crew = "terra"
+
+[tasks]
+# Disjoint task-id range for this box (dk-server-1): the Mac keeps 0–9999,
+# the box allocates 10000+ so cross-machine export/import never collides.
+# Forward-only floor, re-applied on every runtime build. See ORB-00034.
+id_start = 10000
+
+[crews.system]
+provider = "codex"
+model = "gpt-5.6-luna"
+backend = "cli"
