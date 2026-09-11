@@ -2,7 +2,8 @@
 
 pulsar's Orbit workspace was first initialized on dk-server-1 (2026-09-11) by
 mistake; the connector, its browser auth, and its callers live on the Mac, so
-the Mac is the owner. The box-side registration has been removed. The task
+the Mac is the owner. The box-side registration is to be removed by the operator
+(`ORBIT_OPERATOR=1 orbit workspace remove ws_pulsar` on dk-server-1). The task
 that tracked the v1 implementation is exported here so the Mac's store can
 adopt it instead of re-filing.
 
