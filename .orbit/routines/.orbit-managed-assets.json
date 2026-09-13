@@ -2,83 +2,54 @@
   "schemaVersion": 2,
   "assetKind": "routine",
   "assets": {
-    "auto_task_scheduler": "3dbcd7a79a1dfc484de8794d188fefc00158fafa6a05fff80fac7d65441ef3a7",
-    "ci_failure_sweep": "9b33812ef4d32d15ad6e9f6e214961846b92e7cdd55e78a1931e37ca4b8ab307",
-    "dependabot_alert_sweep": "4fbea69d95f01658386d3d092bf7e3a51118633011f546bba7fa5054bcab4882",
-    "ship_sweep": "21db0796e677fd43a3553dcce22f04d9465c29d126dfb72c73a4a530ee8c172a",
-    "task_pilot": "5bfc5d28d2e4651d49225c0e5a1f7acf2f90a9069d2b7d4813c70267a102d25b",
-    "task_triage": "027d057bacf5b102e4ea5a622ac5f45390ffc85eff05a22d39004472551062ea",
-    "worktree_gc": "d5a124f7ac2e79bf091ca0149b11b4e18c9a53106a0656026c7b4390e051500c"
+    "ci_failure_sweep": "c049820447edd0d2fbfb6b768351f921f29ef827037554222aaa14216ed2faf7",
+    "dependabot_alert_sweep": "008280238de7420f1f6ed302e40f0470c14baa85aeb6603fda18686a86ac5c5b",
+    "ship_sweep": "df2addbcaf33be0e346f917ca0b25630358797f488ed1a2626ebde60d9167aa1",
+    "task_pilot": "a67aa4d5d5e1f79547c443b67a25965ebfd4b090791d04a4993a16cc8a2c3213",
+    "task_triage": "83310d0258de6e30a07fee25e003e2db6ecc42d2487f1c790e079755360e74e3",
+    "worktree_gc": "06876c7d06d649f3b773440b81eadbba8f372f6248f22ac76a8815e16a9f03de"
   },
   "routineProvenance": {
-    "auto_task_scheduler": {
-      "templateDigest": "7f3b1a41dfe43b5445b47450f21d8e424fcdeeaa977a6f09d4ded03fc7ed16be",
-      "renderedDigest": "3dbcd7a79a1dfc484de8794d188fefc00158fafa6a05fff80fac7d65441ef3a7",
-      "binding": {
-        "name": "auto-task-scheduler-pulsar",
-        "hosts": [
-          "dk-server-1"
-        ]
-      }
-    },
     "ci_failure_sweep": {
-      "templateDigest": "a1b01d81293cbddb16f636aaf1d097a1ef7c1a90f88046a0b9223bc1a6158825",
-      "renderedDigest": "9b33812ef4d32d15ad6e9f6e214961846b92e7cdd55e78a1931e37ca4b8ab307",
+      "templateDigest": "dd6dca0e91d15f802682ece4b28ca2c00cc7da743e8360cc9e13843424094cdf",
+      "renderedDigest": "c049820447edd0d2fbfb6b768351f921f29ef827037554222aaa14216ed2faf7",
       "binding": {
-        "name": "ci-failure-sweep-pulsar",
-        "hosts": [
-          "dk-server-1"
-        ]
+        "name": "ci-failure-sweep-pulsar"
       }
     },
     "dependabot_alert_sweep": {
-      "templateDigest": "e66de2d11cf610f8bb9100845aafe8a85a33bc5678a10e30bd062d6894ad0d0f",
-      "renderedDigest": "4fbea69d95f01658386d3d092bf7e3a51118633011f546bba7fa5054bcab4882",
+      "templateDigest": "da691ec375f100347b657c0221c2b55c35eafbe498a247676743e9e30650a716",
+      "renderedDigest": "008280238de7420f1f6ed302e40f0470c14baa85aeb6603fda18686a86ac5c5b",
       "binding": {
-        "name": "dependabot-alert-sweep-pulsar",
-        "hosts": [
-          "dk-server-1"
-        ]
+        "name": "dependabot-alert-sweep-pulsar"
       }
     },
     "ship_sweep": {
-      "templateDigest": "416134b342e33f1b2565b88bc2e41b885a39b21c02324f0c8ed79bec74c562d1",
-      "renderedDigest": "21db0796e677fd43a3553dcce22f04d9465c29d126dfb72c73a4a530ee8c172a",
+      "templateDigest": "2791a05add6dc2ecfe5149ee0afb6ff5fcd80ce57fc5b7937944d24a67697e88",
+      "renderedDigest": "df2addbcaf33be0e346f917ca0b25630358797f488ed1a2626ebde60d9167aa1",
       "binding": {
-        "name": "ship-sweep-pulsar",
-        "hosts": [
-          "dk-server-1"
-        ]
+        "name": "ship-sweep-pulsar"
       }
     },
     "task_pilot": {
-      "templateDigest": "f8b9699a0dc505ea5cbe44998b88995b8720d6e0bdde3fa6ab3f40bec863f280",
-      "renderedDigest": "5bfc5d28d2e4651d49225c0e5a1f7acf2f90a9069d2b7d4813c70267a102d25b",
+      "templateDigest": "0abd33a5901e5b71d01f54dd545b256631b4b59396cd0ee788817ea5b6189701",
+      "renderedDigest": "a67aa4d5d5e1f79547c443b67a25965ebfd4b090791d04a4993a16cc8a2c3213",
       "binding": {
-        "name": "task-pilot-pulsar",
-        "hosts": [
-          "dk-server-1"
-        ]
+        "name": "task-pilot-pulsar"
       }
     },
     "task_triage": {
-      "templateDigest": "21feb397078d47165a0e2a618e8f0dfc97cdbd02c60d0595d71b43b20abd7c5e",
-      "renderedDigest": "027d057bacf5b102e4ea5a622ac5f45390ffc85eff05a22d39004472551062ea",
+      "templateDigest": "eeecdfa493fdcddd62a0b923fdfca64b1c27bfd996a96761776d8657fa18e2c7",
+      "renderedDigest": "83310d0258de6e30a07fee25e003e2db6ecc42d2487f1c790e079755360e74e3",
       "binding": {
-        "name": "task-triage-pulsar",
-        "hosts": [
-          "dk-server-1"
-        ]
+        "name": "task-triage-pulsar"
       }
     },
     "worktree_gc": {
-      "templateDigest": "b03d4f900f0746dd317d82fc11b6cd81a398edee18519e3f650d37ed9195a70d",
-      "renderedDigest": "d5a124f7ac2e79bf091ca0149b11b4e18c9a53106a0656026c7b4390e051500c",
+      "templateDigest": "17a1fe2182a607f6391c5d73b958c3a1cfb83288811a199702da110b5b32fb0c",
+      "renderedDigest": "06876c7d06d649f3b773440b81eadbba8f372f6248f22ac76a8815e16a9f03de",
       "binding": {
-        "name": "worktree-gc-pulsar",
-        "hosts": [
-          "dk-server-1"
-        ]
+        "name": "worktree-gc-pulsar"
       }
     }
   }

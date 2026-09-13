@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "orbit": {
+      "args": [
+        "mcp",
+        "serve",
+        "--operator",
+        "--workspace",
+        "ws_pulsar"
+      ],
+      "command": "orbit"
+    }
+  }
+}

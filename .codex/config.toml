@@ -1,0 +1,10 @@
+[mcp_servers.orbit]
+args = [
+    "mcp",
+    "serve",
+    "--operator",
+    "--workspace",
+    "ws_pulsar",
+]
+command = "orbit"
+enabled = true
