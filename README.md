@@ -57,17 +57,24 @@ claude mcp add pulsar -- uv --directory /path/to/pulsar run pulsar serve
 
 ### Tools
 
-| Tool | X endpoint | Notes |
-|---|---|---|
-| `whoami` | `GET /2/users/me` | cached; `{user_id, username}` of the bound account |
-| `create_post` | `POST /2/tweets` | `text`, optional `reply_to_post_id`, `quote_post_id`, `media_ids`, `dry_run` |
-| `upload_media` | `POST /2/media/upload/initialize` → `/{id}/append` → `/{id}/finalize` | images only in v1; `path` or `base64` + `mime` → `{media_id}` |
-| `delete_post` | `DELETE /2/tweets/:id` | `post_id` → `{ok: true}` |
+| Tool | Annotation | X endpoint | Notes |
+|---|---|---|---|
+| `whoami` | read-only | `GET /2/users/me` | cached; `{user_id, username}` of the bound account |
+| `validate_post` | read-only | — | `text`, optional `reply_to_post_id`, `quote_post_id`; no network, no log |
+| `create_post` | publishes | `POST /2/tweets` | `text`, optional `reply_to_post_id`, `quote_post_id`, `media_ids`, `dry_run` (legacy) |
+| `upload_media` | publishes | `POST /2/media/upload/initialize` → `/{id}/append` → `/{id}/finalize` | images only in v1; `path` or `base64` + `mime` → `{media_id}` |
+| `delete_post` | destructive | `DELETE /2/tweets/:id` | `post_id` → `{ok: true}` |
 
-`create_post` returns `{ok: true, post_id, url, text}`; with `dry_run: true` it
-validates only (no network call) and returns `weighted_length`, `has_url` and
-`estimated_cost_usd`. Every tool takes an optional `caller` (agent id) for the
-write log; `PULSAR_CALLER` in the server's environment is the fallback.
+`validate_post` returns `{ok: true, text, weighted_length, has_url,
+estimated_cost_usd}` without touching the network. `create_post` returns
+`{ok: true, post_id, url, text}`; `dry_run: true` returns what `validate_post`
+does plus `dry_run: true`, and is kept for callers that predate `validate_post`.
+Every writing tool takes an optional `caller` (agent id) for the write log;
+`PULSAR_CALLER` in the server's environment is the fallback.
+
+The *Annotation* column is what the server advertises through MCP tool
+annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`). See
+[The caller boundary](#the-caller-boundary) for why.
 
 Failures never raise into the client; they come back as
 `{ok: false, code, message, detail?}` so the agent can branch on `code`:
@@ -85,6 +92,31 @@ Off-box callers (Grok Bot) can use the streamable-HTTP transport instead of
 stdio: `uv run pulsar serve --transport http --port 8977` binds loopback only;
 exposing it (Caddy, tailnet) and putting auth in front is an operator step.
 
+### The caller boundary
+
+pulsar does not decide whether a post *should* go out. It cannot: it sees a
+tool call, not the conversation that led to it. Intent enforcement is the
+caller's job — the agent harness, the MCP client's permission layer, or a
+routine's own guard.
+
+What pulsar does do is make that boundary legible to a policy layer that gates
+by tool name and annotations, which is how most harness permission systems
+work:
+
+- `whoami` and `validate_post` carry `readOnlyHint: true`. A harness can
+  auto-allow them; nothing leaves the host.
+- `create_post` and `upload_media` carry `readOnlyHint: false,
+  destructiveHint: false`. They publish; prompt on them.
+- `delete_post` carries `destructiveHint: true`. Prompt harder.
+
+`create_post(dry_run=true)` predates `validate_post` and still works, but it is
+the same tool name as a live post — a policy engine that gates by name cannot
+tell them apart without parsing arguments. New callers should validate with
+`validate_post` and reserve `create_post` for the moment intent is established.
+
+The `caller` argument and the write log are audit, not enforcement: they record
+who claimed to make a write, after the fact.
+
 ### Safety
 
 - No tool accepts a token, key, or secret argument. Credentials never cross the
@@ -96,9 +128,9 @@ exposing it (Caddy, tailnet) and putting auth in front is an operator step.
   AWS keys, PEM blocks, …) is rejected with `secret_detected` before any
   network call — including on `dry_run`.
 - `create_post` is meant to be called only on explicit user intent in the
-  calling chat, or from a standing routine Daniel enabled. The connector cannot
-  verify intent; that rule lives with the caller (and is repeated in the tool
-  description and server instructions).
+  calling chat, or from a standing routine the owner enabled. The connector
+  cannot verify intent; that rule lives with the caller (and is repeated in the
+  tool description and server instructions).
 - Encrypted-at-rest means Fernet with a key file beside the bundle (both 0600,
   directory 0700). It protects against backups, `cat`, and stray commits — not
   against a compromised host account. That is the intended boundary: the
