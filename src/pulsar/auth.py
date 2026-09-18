@@ -165,7 +165,19 @@ def login(
     if "error" in query:
         raise PulsarError(API_ERROR, f"X denied authorization: {query['error'][0]}")
     bundle = exchange_code(client_id, query["code"][0], pkce, transport=transport)
-    store = TokenStore(paths)
-    store.save(bundle)
-    save_client_id(paths, client_id)
+    bind(paths, client_id, bundle)
     return bundle
+
+
+def bind(paths: Paths, client_id: str, bundle: TokenBundle) -> None:
+    """Persist a freshly issued bundle as this host's binding.
+
+    A new token may belong to a different account than the last one, so the
+    cached identity must not outlive the token it described — otherwise
+    ``whoami`` and ``auth status`` keep naming the old account while posts go
+    to the new one.
+    """
+    TokenStore(paths).save(bundle)
+    save_client_id(paths, client_id)
+    if paths.whoami_cache.exists():
+        paths.whoami_cache.unlink()

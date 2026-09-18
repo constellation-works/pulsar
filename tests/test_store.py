@@ -45,3 +45,14 @@ def test_from_token_response_defaults():
     assert b.expires_at == 1010.0
     assert b.refresh_token is None
     assert b.token_type == "bearer"
+
+
+def test_rebinding_drops_the_cached_identity(store, bundle, paths):
+    from pulsar.auth import bind, load_client_id
+
+    store.save(bundle)
+    paths.whoami_cache.write_text('{"user_id": "1", "username": "old-account"}\n')
+    bind(paths, "client-new", bundle)
+    assert not paths.whoami_cache.exists(), "stale whoami must not survive a re-login"
+    assert load_client_id(paths) == "client-new"
+    assert store.load() == bundle

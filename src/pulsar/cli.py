@@ -33,6 +33,9 @@ def _auth_login(args: argparse.Namespace) -> int:
         f"authorized; scopes: {bundle.scope or '(unreported)'}; "
         f"token bundle stored under {paths.home}"
     )
+    # Always probe live here: the whole point is to show which account the
+    # human just bound, not what a previous login cached.
+    args.offline = False
     return _auth_status(args)
 
 
