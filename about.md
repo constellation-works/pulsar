@@ -1,7 +1,7 @@
 ---
 codebase: pulsar
 owner: daniel
-summary: X (Twitter) write connector — an MCP server that posts as @constworks so agents never hold credentials.
+summary: X (Twitter) write connector — an MCP server that posts as a human-authorized X account so agents never hold credentials.
 status: active
 stack: Python
 gate: direct

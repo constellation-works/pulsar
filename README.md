@@ -1,8 +1,10 @@
 # pulsar
 
-**pulsar** is the constellation's X (Twitter) write connector: a small MCP server
-that lets an agent (Grok Bot, an Orbit routine, a Claude session) post as
-**@constworks** without a browser login or a Bearer token pasted into chat.
+**pulsar** is an X (Twitter) write connector: a small MCP server that lets an
+agent (an Orbit routine, a Claude or Codex session, a bot) post as **whichever
+X account a human authorized on the host** — without a browser login or a
+Bearer token pasted into chat. One connector instance is bound to one account;
+run a second instance with its own `PULSAR_HOME` to post as another.
 
 Auth belongs to the connector process, never to the agent. pulsar holds an
 OAuth 2.0 user token (PKCE, `tweet.read tweet.write users.read offline.access`),
@@ -29,8 +31,9 @@ uv sync
    uv run pulsar auth login --client-id <CLIENT_ID>
    ```
 
-   A browser opens, you approve as @constworks, and pulsar stores the token
-   bundle encrypted under `~/.config/pulsar/` (override with `PULSAR_HOME`).
+   A browser opens, you approve as the account that should post, and pulsar
+   stores the token bundle encrypted under `~/.config/pulsar/` (override with
+   `PULSAR_HOME`).
 3. Check the binding:
 
    ```sh
