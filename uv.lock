@@ -396,6 +396,7 @@ dependencies = [
     { name = "cryptography" },
     { name = "httpx" },
     { name = "mcp" },
+    { name = "pydantic" },
 ]
 
 [package.dev-dependencies]
@@ -410,6 +411,7 @@ requires-dist = [
     { name = "cryptography", specifier = ">=43" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "mcp", specifier = ">=1.2" },
+    { name = "pydantic", specifier = ">=2" },
 ]
 
 [package.metadata.requires-dev]

@@ -477,3 +477,26 @@ def test_error_results_carry_retryable():
     assert PulsarError("duplicate", "no").to_result()["retryable"] is False
     assert AuthExpired().to_result()["retryable"] is False
     assert OutcomeUnknown("ReadTimeout").to_result()["retryable"] is False
+
+
+async def test_401_after_another_process_rotated_retries_without_refreshing(store, authed, fake_x):
+    rotated = TokenBundle(
+        access_token=ROTATED_ACCESS,
+        refresh_token=ROTATED_REFRESH,
+        expires_at=time.time() + 7200,
+        scope=authed.scope,
+        client_id=authed.client_id,
+    )
+
+    def handler(request):
+        if request.headers.get("Authorization") == f"Bearer {ACCESS}":
+            store.save(rotated)  # a sibling process refreshed while our call was in flight
+            return httpx.Response(401, json={"title": "Unauthorized"})
+        return fake_x.handle(request)
+
+    client = XClient(store, transport=httpx.MockTransport(handler))
+    try:
+        assert (await client.me())["username"] == "constworks"
+    finally:
+        await client.aclose()
+    assert fake_x.calls("POST", "/oauth2/token") == [], "no second rotation"

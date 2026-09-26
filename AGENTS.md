@@ -6,8 +6,9 @@
 - Credentials never cross the tool boundary. No tool may accept a token, key,
   or secret as an argument, and no tool may return one. Token storage stays
   encrypted under the pulsar home directory.
-- Every live write goes through the local write log and the secret scanner.
-  Do not add a bypass flag for either.
+- Every live write goes through the ledger (SQLite `ledger.sqlite3`, recorded
+  before the network call; `writes.jsonl` is its export) and the secret
+  scanner. Do not add a bypass flag for either.
 - Live X calls need a human-authorized token on the host; tests must never hit
   the network — use the fake transport in `tests/`.
 - `agent-main` is the landing branch; commit directly, no PR gate. Daniel owns

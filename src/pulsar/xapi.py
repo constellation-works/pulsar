@@ -233,8 +233,11 @@ class XClient:
                 raise OutcomeUnknown(f"{name} after the request may have reached X") from exc
             raise PulsarError(API_ERROR, f"X request failed: {name}", retryable=True) from exc
         if resp.status_code == 401 and _retry:
-            bundle = await self._bundle()
-            await self.refresh(bundle)
+            current = await self._bundle()
+            if current.access_token == token:
+                await self.refresh(current)
+            # Otherwise another process rotated since we read the token: retry with
+            # its bundle rather than burn a second rotation of the refresh token.
             return await self.request(
                 method,
                 path,
