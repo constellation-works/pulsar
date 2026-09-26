@@ -7,8 +7,9 @@ import re
 import unicodedata
 from dataclasses import dataclass
 
-from .config import COST_PLAIN_POST_USD, COST_URL_POST_USD, MAX_POST_WEIGHTED_LENGTH
+from .config import MAX_POST_WEIGHTED_LENGTH
 from .errors import INVALID_TEXT, SECRET_DETECTED, PulsarError
+from .settings import Prices
 
 # Close enough to twitter-text's URL extraction for length/cost purposes.
 URL_RE = re.compile(
@@ -77,7 +78,7 @@ class TextReport:
     estimated_cost_usd: float
 
 
-def validate_text(text: str | None) -> TextReport:
+def validate_text(text: str | None, prices: Prices | None = None) -> TextReport:
     """Raise PulsarError(invalid_text | secret_detected) or return a report."""
     if text is None or not isinstance(text, str):
         raise PulsarError(INVALID_TEXT, "text is required")
@@ -105,5 +106,5 @@ def validate_text(text: str | None) -> TextReport:
         text=text,
         weighted_length=length,
         has_url=has_url,
-        estimated_cost_usd=COST_URL_POST_USD if has_url else COST_PLAIN_POST_USD,
+        estimated_cost_usd=(prices or Prices()).for_post(has_url=has_url),
     )

@@ -1,8 +1,8 @@
 import pytest
 
-from pulsar.config import COST_PLAIN_POST_USD, COST_URL_POST_USD
 from pulsar.errors import INVALID_TEXT, SECRET_DETECTED, PulsarError
 from pulsar.guard import scan_for_secrets, validate_text, weighted_length
+from pulsar.settings import DEFAULT_PLAIN_POST_USD, DEFAULT_URL_POST_USD, Prices
 
 
 def test_weighted_length_counts_urls_as_23_and_emoji_as_2():
@@ -63,6 +63,12 @@ def test_ordinary_text_has_no_secret_hits():
 def test_cost_estimate_depends_on_url():
     plain = validate_text("Hello from the constellation.")
     linked = validate_text("Read more at https://constellation-works.com/orbit")
-    assert plain.estimated_cost_usd == COST_PLAIN_POST_USD
-    assert linked.estimated_cost_usd == COST_URL_POST_USD
+    assert plain.estimated_cost_usd == DEFAULT_PLAIN_POST_USD
+    assert linked.estimated_cost_usd == DEFAULT_URL_POST_USD
     assert linked.has_url and not plain.has_url
+
+
+def test_cost_comes_from_the_configured_price_table():
+    prices = Prices(plain_post_usd=0.01, url_post_usd=0.5)
+    assert validate_text("plain", prices).estimated_cost_usd == 0.01
+    assert validate_text("see https://example.com", prices).estimated_cost_usd == 0.5

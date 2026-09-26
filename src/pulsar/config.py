@@ -12,6 +12,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from .fsutil import ensure_private_dir
+
 X_AUTHORIZE_URL = "https://x.com/i/oauth2/authorize"
 X_TOKEN_URL = "https://api.x.com/2/oauth2/token"
 X_API_BASE = "https://api.x.com/2"
@@ -20,10 +22,6 @@ SCOPES = ("tweet.read", "tweet.write", "users.read", "offline.access")
 CALLBACK_HOST = "127.0.0.1"
 CALLBACK_PORT = 8976
 CALLBACK_PATH = "/callback"
-
-# Rough X credit pricing; verify live before relying on it (see README).
-COST_PLAIN_POST_USD = 0.015
-COST_URL_POST_USD = 0.20
 
 MAX_POST_WEIGHTED_LENGTH = 280
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
@@ -63,9 +61,20 @@ class Paths:
     def write_log(self) -> Path:
         return self.home / "writes.jsonl"
 
+    @property
+    def ledger_db(self) -> Path:
+        return self.home / "ledger.sqlite3"
+
+    @property
+    def refresh_lock(self) -> Path:
+        return self.home / "refresh.lock"
+
+    @property
+    def settings_file(self) -> Path:
+        return self.home / "config.toml"
+
     def ensure(self) -> None:
-        self.home.mkdir(parents=True, exist_ok=True)
-        os.chmod(self.home, 0o700)
+        ensure_private_dir(self.home)
 
 
 def default_paths() -> Paths:

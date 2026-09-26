@@ -39,6 +39,7 @@ from .config import (
 )
 from .errors import INVALID_MEDIA, SECRET_DETECTED, PulsarError
 from .guard import scan_for_secrets, validate_text
+from .settings import Prices, Settings, load_settings
 from .store import TokenStore
 from .writelog import WriteLog
 from .xapi import MediaProcessingError, XClient
@@ -65,10 +66,12 @@ class Runtime:
         self,
         paths: Paths | None = None,
         *,
+        settings: Settings | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
         **client_kwargs: Any,
     ) -> None:
         self.paths = paths or default_paths()
+        self.settings = settings or load_settings(self.paths)
         self.store = TokenStore(self.paths)
         self.client = XClient(self.store, transport=transport, **client_kwargs)
         self.log = WriteLog(self.paths)
@@ -149,8 +152,10 @@ def _load_media(path: str | None, base64_data: str | None, mime: str | None) -> 
     return data, mime
 
 
-def _validate(text: str, reply_to_post_id: str | None, quote_post_id: str | None) -> dict[str, Any]:
-    report = validate_text(text)
+def _validate(
+    text: str, reply_to_post_id: str | None, quote_post_id: str | None, prices: Prices
+) -> dict[str, Any]:
+    report = validate_text(text, prices)
     if reply_to_post_id and quote_post_id:
         raise PulsarError("invalid_text", "a post cannot be both a reply and a quote in v1")
     return {
@@ -159,7 +164,7 @@ def _validate(text: str, reply_to_post_id: str | None, quote_post_id: str | None
         "weighted_length": report.weighted_length,
         "has_url": report.has_url,
         "estimated_cost_usd": report.estimated_cost_usd,
-        "pricing_note": "rough X credit pricing; verify live",
+        "pricing_note": "from the configured price table; verify on the X developer portal",
     }
 
 
@@ -193,7 +198,7 @@ def build_server(runtime: Runtime | None = None) -> MCPServer:
         reply_to_post_id: str | None = None,
         quote_post_id: str | None = None,
     ) -> dict[str, Any]:
-        return _validate(text, reply_to_post_id, quote_post_id)
+        return _validate(text, reply_to_post_id, quote_post_id, rt.settings.prices)
 
     @server.tool(
         description=(
@@ -213,7 +218,7 @@ def build_server(runtime: Runtime | None = None) -> MCPServer:
         dry_run: bool = False,
         caller: str | None = None,
     ) -> dict[str, Any]:
-        validated = _validate(text, reply_to_post_id, quote_post_id)
+        validated = _validate(text, reply_to_post_id, quote_post_id, rt.settings.prices)
         if dry_run:
             rt.log.append(tool="create_post", caller=caller, text=text, dry_run=True)
             return {**validated, "dry_run": True}

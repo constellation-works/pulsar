@@ -43,6 +43,21 @@ uv sync
 Refresh happens automatically. When a refresh fails (token revoked, app reset),
 tools return `auth_expired` and a human re-runs `auth login`.
 
+## Configuration
+
+Optional `config.toml` in the pulsar home. Every key has a default, and an
+unknown key or bad value fails with `invalid_config` rather than silently
+falling back:
+
+```toml
+[prices]                 # USD per post, used for estimated_cost_usd
+plain_post_usd = 0.015   # X changes its price list; verify on the developer portal
+url_post_usd = 0.20
+
+[media]
+roots = ["~/workspace/constellation/marketing"]   # default: the server's cwd
+```
+
 ## Run as an MCP server
 
 ```sh
