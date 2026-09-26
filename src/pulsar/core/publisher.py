@@ -9,11 +9,13 @@ The order is the safety argument:
 2. **Digest** the plan, with the loaded media bytes' hashes, so the key and
    (in phase 4) the approval are bound to exactly what goes out.
 3. **Claim** the ledger row. Policy (budget, daily cap, quiet hours) runs
-   inside the claim's write transaction, so two concurrent callers cannot
-   both spend the last dollar.
+   inside the claim's write transaction, and a claimed plan's unsent posts
+   are reserved against the budget until they are sent or settled, so two
+   concurrent callers cannot both spend the last dollar.
 4. **Publish item by item**. Each post is marked ``submitting`` before its
-   request leaves and settled after. A thread replies to the previous item's
-   id, and a resumed thread continues from the last published item.
+   media upload and re-stamped (a compare-and-set) just before the post
+   request leaves, and settled after. A thread replies to the previous
+   item's id, and a resumed thread continues from the last published item.
    A definitive failure after at least one post leaves the row ``partial``;
    an ambiguous one leaves it ``unknown`` for ``reconcile``.
 
@@ -197,6 +199,14 @@ class Publisher:
         loaded: dict[MediaRef, LoadedMedia] = {}
         prepared: list[PreparedPost] = []
         for idx, spec in enumerate(posts):
+            # Every provider's check_post scans too; this one does not depend on it.
+            hits = scan_for_secrets(spec.text)
+            if hits:
+                raise PulsarError(
+                    SECRET_DETECTED,
+                    "post text contains something that looks like a credential",
+                    detail={"matched": hits, "post": idx},
+                )
             try:
                 check = channel.check_post(spec, prices)
             except PulsarError as exc:
@@ -261,6 +271,8 @@ class Publisher:
                 detail={"retry_after": plan.not_before.isoformat()},
             )
         key = check_key(idempotency_key) or default_key(prepared.digest, bound.user_id)
+        if scan_for_secrets(caller):
+            raise PulsarError(SECRET_DETECTED, "caller looks like it contains a credential")
         channel = bound.channel
         intents = [
             ItemIntent(
@@ -306,11 +318,12 @@ class Publisher:
         post_ids = {i.idx: i.post_id for i in record.items if i.state == PUBLISHED}
         error: PulsarError | None = None
         live: dict[int, Published] = {}
+        lost = False  # the row stopped being ours: leave it to whoever holds it now
         for idx, post in enumerate(prepared.posts):
             if idx in post_ids:
                 continue
             reply_to = post_ids.get(idx - 1) if idx else plan.reply_to
-            self.ledger.begin_item(key, idx)
+            stamp = self.ledger.begin_item(key, idx)
             media_ids: list[str] = list(post.uploaded)
             try:
                 for m in post.media:
@@ -328,6 +341,17 @@ class Publisher:
                 self.ledger.item_failed(key, idx, _unexpected(exc))
                 self.ledger.finish(key)
                 raise
+            if self.ledger.item_sending(key, idx, stamp) is None:
+                # A slow upload let reconcile settle this item (or a retry
+                # take it over). Posting now could publish it twice.
+                error = PulsarError(
+                    API_ERROR,
+                    "this post was settled by another process while its media uploaded; "
+                    "nothing was posted",
+                    retryable=False,
+                )
+                lost = True
+                break
             try:
                 published = await channel.create(
                     post.check.text,
@@ -383,7 +407,7 @@ class Publisher:
                     )
                 break
         try:
-            final = self.ledger.finish(key)
+            final = (self.ledger.get_plan(key) or record) if lost else self.ledger.finish(key)
         except Exception:
             log.exception("ledger: could not finish %s", key)
             final = record
@@ -404,7 +428,11 @@ class Publisher:
         An item is published if a post with its fingerprint appeared after it
         was sent and is not already another item's post; failed if the
         provider's listing is complete, the grace period has passed and no
-        such post exists; otherwise it stays unknown.
+        such post exists; otherwise it stays unknown. An item without a
+        fingerprint (a row from before ledger v2) is never found absent.
+
+        Verdicts are written in one transaction only if the row is still as
+        it was listed; a row a live sender touched meanwhile is left alone.
         """
         now = self._now()
         results: list[dict[str, Any]] = []
@@ -412,14 +440,26 @@ class Publisher:
             if record.account_alias != bound.alias:
                 continue
             open_items = [i for i in record.items if i.state in ("unknown", "submitting")]
+            seen = {i.idx: (i.state, i.submitted_at) for i in open_items}
             created = parse_ts(record.created_at)
             sent = [parse_ts(i.submitted_at) for i in open_items if i.submitted_at is not None]
             since = (min(sent) if sent else created) - CLOCK_SKEW
             recent = await bound.channel.recent_posts(since)
             taken = self.ledger.known_post_ids([p.post_id for p in recent.posts])
             verdicts: list[dict[str, Any]] = []
+            resolved: dict[int, tuple[str, str | None] | None] = {}
             for item in open_items:
                 sent_at = parse_ts(item.submitted_at) if item.submitted_at else created
+                if item.fingerprint is None:
+                    verdicts.append(
+                        {
+                            "idx": item.idx,
+                            "resolved": None,
+                            "reason": "no fingerprint (recorded before ledger v2): repeat the "
+                            "same request to attach one, then reconcile again",
+                        }
+                    )
+                    continue
                 match = next(
                     (
                         p
@@ -431,20 +471,28 @@ class Publisher:
                     None,
                 )
                 if match is not None:
-                    self.ledger.resolve_item(
-                        record.key, item.idx, post_id=match.post_id, url=match.url
-                    )
+                    resolved[item.idx] = (match.post_id, match.url)
                     taken.add(match.post_id)
                     verdicts.append(
                         {"idx": item.idx, "resolved": "published", "post_id": match.post_id}
                     )
                 elif recent.complete and now - sent_at >= RECONCILE_GRACE:
-                    self.ledger.resolve_item(record.key, item.idx, post_id=None, url=None)
+                    resolved[item.idx] = None
                     verdicts.append({"idx": item.idx, "resolved": "absent"})
                 else:
                     reason = "listing incomplete" if not recent.complete else "within grace period"
                     verdicts.append({"idx": item.idx, "resolved": None, "reason": reason})
-            final = self.ledger.finish(record.key)
+            final = self.ledger.settle(record.key, seen=seen, verdicts=resolved)
+            if final is None:
+                results.append(
+                    {
+                        "idempotency_key": record.key,
+                        "state": "changed",
+                        "items": [],
+                        "note": "a sender updated this row while reconcile ran; left as is",
+                    }
+                )
+                continue
             results.append({"idempotency_key": record.key, "state": final.state, "items": verdicts})
         return results
 

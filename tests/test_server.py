@@ -621,3 +621,18 @@ async def test_identity_looked_up_before_a_relogin_is_not_trusted_after_it(
     assert (await rt.whoami())["username"] == "constworks"
     assert len(fake_x.calls("GET", "/users/me")) == 1
     await rt.aclose()
+
+
+async def test_create_post_on_a_skipped_key_is_a_conflict_not_a_receipt(
+    session, authed, fake_x, paths
+):
+    from pulsar.core.ledger import AccountRef, Ledger
+
+    ref = AccountRef(alias=ALIAS, provider="x")
+    Ledger(paths).skip(key="never", provider="x", account=ref, caller="op", note="dropped")
+    out = _payload(
+        await session.call_tool("create_post", {"text": "hi", "idempotency_key": "never"})
+    )
+    assert out["ok"] is False and out["code"] == "idempotency_conflict"
+    assert out["detail"]["state"] == "skipped"
+    assert fake_x.calls("POST", "/tweets") == []

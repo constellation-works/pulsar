@@ -1,12 +1,16 @@
 """X as a ``Channel``: capabilities, offline checks, and one network step per call.
 
 Reconcile matching: X rewrites posted text. Every link becomes a ``t.co``
-link, ``&``/``<``/``>`` come back HTML-escaped, and a post with media gets a
-trailing ``t.co`` link to the media. ``fingerprint`` therefore hashes the
-text with every URL removed, entities unescaped, NFC and whitespace
-collapsed. Two posts that differ only in their links fingerprint the same;
-reconcile only compares posts by one account inside the claim's time window,
-where that collision is not a realistic risk.
+link, ``&``/``<``/``>`` come back HTML-escaped, a post with media gets a
+trailing ``t.co`` link to the media, and a reply gets the replied-to
+accounts' ``@handles`` prepended. ``fingerprint`` therefore hashes the text
+with every URL and any leading run of ``@handles`` removed, NFC and
+whitespace collapsed; ``remote_fingerprint`` unescapes X's entities first
+(only X's copy: a local ``&amp;`` is literal text). Two posts that differ
+only in their links or leading mentions fingerprint the same; reconcile only
+compares posts by one account inside the claim's time window, where that
+collision is not a realistic risk (and would err towards "published", never
+towards a second post).
 
 Alt text goes to ``POST /2/media/metadata`` after the upload and before
 the post. X accepts alt text for images and GIFs; for video it is kept in
@@ -53,6 +57,8 @@ RECONCILE_MAX_PAGES = 3
 
 _TCO = re.compile(r"https?://t\.co/\S+")
 _WS = re.compile(r"\s+")
+# The @handles X puts in front of a reply (after whitespace is collapsed).
+_LEADING_MENTIONS = re.compile(r"^(?:@[A-Za-z0-9_]{1,15} )+")
 
 CAPABILITIES = Capabilities(
     provider="x",
@@ -83,11 +89,18 @@ def post_url(handle: str, post_id: str) -> str:
 
 
 def fingerprint(text: str) -> str:
-    plain = unicodedata.normalize("NFC", html.unescape(text))
+    """The match key for text as pulsar sends it."""
+    plain = unicodedata.normalize("NFC", text)
     plain = _TCO.sub(" ", plain)
     plain = URL_RE.sub(" ", plain)
     plain = _WS.sub(" ", plain).strip()
+    plain = _LEADING_MENTIONS.sub("", plain)
     return hashlib.sha256(plain.encode("utf-8")).hexdigest()
+
+
+def remote_fingerprint(text: str) -> str:
+    """The match key for a post's ``text`` as X returns it (entity-escaped)."""
+    return fingerprint(html.unescape(text))
 
 
 class XChannel:
@@ -208,7 +221,7 @@ class XChannel:
                         post_id=post["id"],
                         url=post_url(self.handle, post["id"]),
                         created_at=created or since,
-                        fingerprint=fingerprint(str(post.get("text", ""))),
+                        fingerprint=remote_fingerprint(str(post.get("text", ""))),
                     )
                 )
             token = obj(body.get("meta")).get("next_token")

@@ -55,6 +55,7 @@ from ..core.accounts import (
 from ..core.adapter import Identity
 from ..core.errors import (
     API_ERROR,
+    IDEMPOTENCY_CONFLICT,
     INVALID_ARGUMENT,
     INVALID_TEXT,
     UNSUPPORTED,
@@ -62,7 +63,7 @@ from ..core.errors import (
     OutcomeUnknown,
     PulsarError,
 )
-from ..core.ledger import PUBLISHED, Ledger, check_key, request_digest
+from ..core.ledger import PUBLISHED, SKIPPED, Ledger, check_key, request_digest
 from ..core.media import load_media
 from ..core.paths import Paths, default_paths
 from ..core.plan import Plan, alias_provider
@@ -450,6 +451,12 @@ def build_server(runtime: Runtime | None = None) -> MCPServer:
             )
         if outcome.error is not None:
             raise outcome.error
+        if outcome.record.state == SKIPPED:
+            raise PulsarError(
+                IDEMPOTENCY_CONFLICT,
+                "the operator marked this idempotency_key skipped; nothing was posted",
+                detail={"idempotency_key": outcome.record.key, "state": SKIPPED},
+            )
         return _legacy_receipt(outcome, prepared)
 
     @server.tool(

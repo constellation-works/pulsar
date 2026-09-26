@@ -48,7 +48,7 @@ import logging
 import sqlite3
 import time
 import unicodedata
-from collections.abc import Callable, Generator, Sequence
+from collections.abc import Callable, Generator, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -85,6 +85,10 @@ ITEM_STATES = frozenset({PENDING, SUBMITTING, PUBLISHED, FAILED, UNKNOWN})
 FINISHED_STATES = frozenset({PUBLISHED, PARTIAL, FAILED, UNKNOWN})
 # Item states that may have cost money: counted by ``usage``.
 COMMITTED_ITEM_STATES = (SUBMITTING, PUBLISHED, UNKNOWN)
+# Rows whose ``pending`` items are still going to be sent: those items are
+# reserved against the budget from the claim on, so a concurrent claim cannot
+# spend what a thread in progress was admitted with.
+OPEN_ROW_STATES = (PENDING, SUBMITTING)
 
 # Stored on an item that reconcile proved was never published. Ledger-only:
 # no tool returns it as an error code.
@@ -813,13 +817,19 @@ class Ledger:
         tool or account, and ``outcome_unknown`` when an earlier attempt is
         in flight (``submitting``) or ended ambiguously (``unknown``). A
         ``failed`` or ``partial`` row is re-armed: its failed items go back
-        to ``pending`` and its published ones stay published.
+        to ``pending`` and its published ones stay published. Re-armed and
+        still-pending items take the new intent's fingerprint and price.
+
+        Pending items of an open row count toward ``usage`` from the claim
+        on (a reservation), so ``admit`` for a second plan sees what a
+        thread in progress was admitted with.
         """
         if not items:
             raise ValueError("a plan has at least one item")
         if provider != account.provider:
             raise ValueError(f"provider {provider!r} is not the account's {account.provider!r}")
         now = self._stamp()
+        blocked: OutcomeUnknown | None = None
         with self._connect() as conn, _immediate(conn):
             existing = _load(conn, key)
             if existing is None:
@@ -855,40 +865,68 @@ class Ledger:
                 raise _conflict(key, existing.state)
             if existing.state == PUBLISHED:
                 return existing
+            write_id = _write_id(conn, key)
             in_flight = any(i.state == SUBMITTING for i in existing.items)
             if existing.state in (SUBMITTING, UNKNOWN) or in_flight:
+                # Same request, so the intents describe these very posts: give
+                # rows migrated from v1 (no fingerprint) one, so reconcile can
+                # match them. Committed before the refusal is raised.
+                conn.executemany(
+                    "UPDATE items SET fingerprint = ? WHERE write_id = ? AND idx = ?"
+                    " AND fingerprint IS NULL",
+                    [(it.fingerprint, write_id, idx) for idx, it in enumerate(items)],
+                )
                 state = SUBMITTING if in_flight else existing.state
-                raise OutcomeUnknown(
+                blocked = OutcomeUnknown(
                     f"an earlier attempt with this idempotency_key is {state}",
                     detail={"idempotency_key": key, "state": state},
                 )
-            if admit is not None:
-                admit(_usage(conn, account.alias, day_start=day_start, month_start=month_start))
-            write_id = _write_id(conn, key)
-            if existing.state == PENDING:
-                conn.execute(
-                    "UPDATE writes SET caller = ?, updated_at = ? WHERE id = ?",
-                    (caller, now, write_id),
-                )
-            else:  # failed or partial: nothing is in flight; re-send what did not go out
-                conn.execute(
-                    "UPDATE items SET state = ?, error_code = NULL, error_message = NULL,"
+            else:
+                if admit is not None:
+                    admit(
+                        _usage(
+                            conn,
+                            account.alias,
+                            day_start=day_start,
+                            month_start=month_start,
+                            exclude_write_id=write_id,
+                        )
+                    )
+                # Pending and failed items (re)take the current intent: its
+                # fingerprint and price, and now as their reservation time.
+                conn.executemany(
+                    "UPDATE items SET state = ?, text_sha256 = ?, fingerprint = ?,"
+                    " est_cost_usd = ?, error_code = NULL, error_message = NULL,"
                     " retryable = NULL, submitted_at = NULL, updated_at = ?"
-                    " WHERE write_id = ? AND state = ?",
-                    (PENDING, now, write_id, FAILED),
-                )
-                conn.execute(
-                    "UPDATE writes SET state = ?, caller = ?, error_code = NULL,"
-                    " error_message = NULL, retryable = NULL, attempts = attempts + 1,"
-                    " updated_at = ? WHERE id = ?",
-                    (PENDING, caller, now, write_id),
-                )
-            return _require(conn, key)
+                    " WHERE write_id = ? AND idx = ? AND state IN (?, ?)",
+                    [
+                        (PENDING, it.text_sha256, it.fingerprint, float(it.est_cost_usd), now,
+                         write_id, idx, PENDING, FAILED)
+                        for idx, it in enumerate(items)
+                    ],
+                )  # fmt: skip
+                if existing.state == PENDING:
+                    conn.execute(
+                        "UPDATE writes SET caller = ?, updated_at = ? WHERE id = ?",
+                        (caller, now, write_id),
+                    )
+                else:  # failed or partial: nothing is in flight; re-send what did not go out
+                    conn.execute(
+                        "UPDATE writes SET state = ?, caller = ?, error_code = NULL,"
+                        " error_message = NULL, retryable = NULL, attempts = attempts + 1,"
+                        " updated_at = ? WHERE id = ?",
+                        (PENDING, caller, now, write_id),
+                    )
+                return _require(conn, key)
+        assert blocked is not None  # every other path returned inside the transaction
+        raise blocked
 
-    def begin_item(self, key: str, idx: int) -> None:
+    def begin_item(self, key: str, idx: int) -> str:
         """Compare-and-set item ``idx`` from ``pending`` to ``submitting``, committed
-        before its request leaves. Raises ``outcome_unknown`` when the item is
-        not pending (another caller started it) or the row is no longer open."""
+        before its request leaves. Returns the ``submitted_at`` stamp, the
+        sender's token for ``item_sending``. Raises ``outcome_unknown`` when
+        the item is not pending (another caller started it) or the row is no
+        longer open."""
         now = self._stamp()
         with self._connect() as conn, _immediate(conn):
             record = _require(conn, key)
@@ -917,6 +955,23 @@ class Ledger:
                 "UPDATE writes SET state = ?, updated_at = ? WHERE id = ?",
                 (SUBMITTING, now, write_id),
             )
+        return now
+
+    def item_sending(self, key: str, idx: int, stamp: str) -> str | None:
+        """Re-stamp ``submitted_at`` just before the post request leaves (after
+        media uploads, which can take minutes), so staleness is measured from
+        the send. A compare-and-set on ``stamp``: ``None`` means the item is no
+        longer this sender's (reconcile settled it, or a retry took it over)
+        and the post must not be sent."""
+        now = self._stamp()
+        with self._connect() as conn, _immediate(conn):
+            cur = conn.execute(
+                "UPDATE items SET submitted_at = ?, updated_at = ?"
+                " WHERE write_id = (SELECT id FROM writes WHERE idempotency_key = ?)"
+                " AND idx = ? AND state = ? AND submitted_at = ?",
+                (now, now, key, idx, SUBMITTING, stamp),
+            )
+            return now if cur.rowcount == 1 else None
 
     def item_published(
         self,
@@ -1023,37 +1078,64 @@ class Ledger:
         """
         now = self._stamp()
         with self._connect() as conn, _immediate(conn):
+            record = _finish(conn, key, now)
+        self._emit(record)
+        return record
+
+    def settle(
+        self,
+        key: str,
+        *,
+        seen: Mapping[int, tuple[str, str | None]],
+        verdicts: Mapping[int, tuple[str, str | None] | None],
+    ) -> PlanRecord | None:
+        """Reconcile's verdicts and ``finish``, in one transaction, if the row is
+        as reconcile saw it.
+
+        ``seen`` is each open (unknown or submitting) item's ``(state,
+        submitted_at)`` when reconcile listed the row; ``verdicts`` maps an
+        item to ``(post_id, url)`` (published) or ``None`` (provably absent).
+        If the row's open items changed since (a live sender re-stamped or
+        finished one, or started another), nothing is written and ``None`` is
+        returned: the row is not reconcile's to settle.
+        """
+        now = self._stamp()
+        with self._connect() as conn, _immediate(conn):
             record = _require(conn, key)
-            if record.state == SKIPPED or not record.items:
-                raise ValueError(f"{key!r} is {record.state} with no posts; nothing to finish")
+            open_now = {
+                i.idx: (i.state, i.submitted_at)
+                for i in record.items
+                if i.state in (UNKNOWN, SUBMITTING)
+            }
+            if record.state not in (UNKNOWN, SUBMITTING) or open_now != dict(seen):
+                return None
             write_id = _write_id(conn, key)
-            conn.execute(
-                "UPDATE items SET state = ?, error_code = ?, error_message = ?, retryable = 0,"
-                " updated_at = ? WHERE write_id = ? AND state = ?",
-                (UNKNOWN, OUTCOME_UNKNOWN, "no outcome was recorded for this post", now,
-                 write_id, SUBMITTING),
-            )  # fmt: skip
-            record = _require(conn, key)
-            state = derive_state(record.items)
-            first = record.items[0]
-            culprit = next((i for i in record.items if i.state != PUBLISHED and i.error_code), None)
-            conn.execute(
-                "UPDATE writes SET state = ?, post_id = ?, url = ?, error_code = ?,"
-                " error_message = ?, retryable = ?, updated_at = ? WHERE id = ?",
-                (
-                    state,
-                    first.post_id,
-                    first.url,
-                    None if state == PUBLISHED or culprit is None else culprit.error_code,
-                    None if state == PUBLISHED or culprit is None else culprit.error_message,
-                    None
-                    if state == PUBLISHED or culprit is None or culprit.retryable is None
-                    else int(culprit.retryable),
-                    now,
-                    write_id,
-                ),
-            )
-            record = _require(conn, key)
+            for idx, verdict in verdicts.items():
+                if verdict is None:
+                    values: dict[str, Any] = {
+                        "state": FAILED,
+                        "error_code": RESOLVED_ABSENT,
+                        "error_message": (
+                            "reconcile found no such post on the account; it was not published"
+                        ),
+                        "retryable": 1,
+                    }
+                else:
+                    values = {
+                        "state": PUBLISHED,
+                        "post_id": verdict[0],
+                        "url": verdict[1],
+                        "error_code": None,
+                        "error_message": None,
+                        "retryable": None,
+                    }
+                values["updated_at"] = now
+                assignments = ", ".join(f"{name} = ?" for name in values)
+                conn.execute(
+                    f"UPDATE items SET {assignments} WHERE write_id = ? AND idx = ?",
+                    (*values.values(), write_id, idx),
+                )
+            record = _finish(conn, key, now)
         self._emit(record)
         return record
 
@@ -1201,22 +1283,74 @@ def _item(record: PlanRecord, idx: int) -> ItemRecord:
     raise ValueError(f"{record.key!r} has no post {idx} (it has {len(record.items)})")
 
 
+def _finish(conn: sqlite3.Connection, key: str, now: str) -> PlanRecord:
+    """``Ledger.finish`` inside an open transaction; the caller exports."""
+    record = _require(conn, key)
+    if record.state == SKIPPED or not record.items:
+        raise ValueError(f"{key!r} is {record.state} with no posts; nothing to finish")
+    write_id = _write_id(conn, key)
+    conn.execute(
+        "UPDATE items SET state = ?, error_code = ?, error_message = ?, retryable = 0,"
+        " updated_at = ? WHERE write_id = ? AND state = ?",
+        (UNKNOWN, OUTCOME_UNKNOWN, "no outcome was recorded for this post", now,
+         write_id, SUBMITTING),
+    )  # fmt: skip
+    record = _require(conn, key)
+    state = derive_state(record.items)
+    first = record.items[0]
+    culprit = next((i for i in record.items if i.state != PUBLISHED and i.error_code), None)
+    conn.execute(
+        "UPDATE writes SET state = ?, post_id = ?, url = ?, error_code = ?,"
+        " error_message = ?, retryable = ?, updated_at = ? WHERE id = ?",
+        (
+            state,
+            first.post_id,
+            first.url,
+            None if state == PUBLISHED or culprit is None else culprit.error_code,
+            None if state == PUBLISHED or culprit is None else culprit.error_message,
+            None
+            if state == PUBLISHED or culprit is None or culprit.retryable is None
+            else int(culprit.retryable),
+            now,
+            write_id,
+        ),
+    )
+    return _require(conn, key)
+
+
 def _usage(
-    conn: sqlite3.Connection, account_alias: str, *, day_start: datetime, month_start: datetime
+    conn: sqlite3.Connection,
+    account_alias: str,
+    *,
+    day_start: datetime,
+    month_start: datetime,
+    exclude_write_id: int | None = None,
 ) -> Usage:
-    """Committed items (submitting, published, unknown) by their ``submitted_at``:
-    spend over every account, posts for ``account_alias``."""
+    """Spend over every account and posts for ``account_alias``, since each window start.
+
+    Counts committed items (submitting, published, unknown) by their
+    ``submitted_at``, and reserved items (pending, in a row still open) by
+    when they were claimed. ``exclude_write_id`` leaves out the row being
+    re-claimed, whose own items the caller is about to count as planned.
+    """
     day, month = _iso(day_start), _iso(month_start)
-    placeholders = ", ".join("?" for _ in COMMITTED_ITEM_STATES)
+    committed = ", ".join("?" for _ in COMMITTED_ITEM_STATES)
+    open_rows = ", ".join("?" for _ in OPEN_ROW_STATES)
     row = conn.execute(
         "SELECT"
-        " COALESCE(SUM(CASE WHEN i.submitted_at >= ? THEN i.est_cost_usd END), 0),"
-        " COALESCE(SUM(CASE WHEN i.submitted_at >= ? THEN i.est_cost_usd END), 0),"
-        " COUNT(CASE WHEN i.submitted_at >= ? AND w.account_alias = ? THEN 1 END)"
-        " FROM items i JOIN writes w ON w.id = i.write_id"
-        f" WHERE i.state IN ({placeholders}) AND i.submitted_at >= ?",
-        (day, month, day, account_alias, *COMMITTED_ITEM_STATES, min(day, month)),
-    ).fetchone()
+        " COALESCE(SUM(CASE WHEN t >= ? THEN cost END), 0),"
+        " COALESCE(SUM(CASE WHEN t >= ? THEN cost END), 0),"
+        " COUNT(CASE WHEN t >= ? AND alias = ? THEN 1 END)"
+        " FROM (SELECT i.est_cost_usd AS cost, w.account_alias AS alias,"
+        "       CASE WHEN i.state = ? THEN i.updated_at ELSE i.submitted_at END AS t"
+        "       FROM items i JOIN writes w ON w.id = i.write_id"
+        f"      WHERE (i.state IN ({committed})"
+        f"             OR (i.state = ? AND w.state IN ({open_rows})))"
+        "       AND w.id IS NOT ?)"
+        " WHERE t >= ?",
+        (day, month, day, account_alias, PENDING, *COMMITTED_ITEM_STATES, PENDING,
+         *OPEN_ROW_STATES, exclude_write_id, min(day, month)),
+    ).fetchone()  # fmt: skip
     return Usage(
         spent_day_usd=round(float(row[0]), 6),
         spent_month_usd=round(float(row[1]), 6),

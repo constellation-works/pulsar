@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, time, timedelta
@@ -19,12 +20,13 @@ from pulsar.core.adapter import (
     RemotePost,
 )
 from pulsar.core.errors import OutcomeUnknown, PulsarError
-from pulsar.core.ledger import Ledger
+from pulsar.core.ledger import ItemIntent, Ledger
 from pulsar.core.plan import Plan, PostSpec
-from pulsar.core.publisher import RECONCILE_GRACE, Bound, Publisher
+from pulsar.core.publisher import RECONCILE_GRACE, STALE_SUBMITTING, Bound, Publisher
 from pulsar.core.settings import PolicyConfig, Prices, Settings
 
 from .media_samples import PNG
+from .test_ledger import build_v1_ledger
 
 pytestmark = pytest.mark.anyio
 
@@ -154,7 +156,9 @@ def media_root(tmp_path):
 
 def make_publisher(paths, clock, media_root, **policy) -> Publisher:
     settings = Settings(
-        provider_prices=(("fake", Prices(plain_post_usd=0.01, url_post_usd=0.2)),),
+        provider_prices=tuple(
+            (name, Prices(plain_post_usd=0.01, url_post_usd=0.2)) for name in ("fake", "x")
+        ),
         media_roots=(media_root,),
         policy=PolicyConfig(**policy),
     )
@@ -365,3 +369,153 @@ def test_report_is_what_a_human_approves(publisher, bound):
     assert report["estimated_cost_usd"] == 0.21
     assert [p["text"] for p in report["posts"]] == ["one https://x.co", "two"]
     assert report["digest"].startswith("sha256:")
+
+
+# -- review findings: reservations, v1 rows, slow uploads ---------------------------
+
+
+class GatedChannel(FakeChannel):
+    """Holds ``create`` of the texts in ``hold`` (or every upload) until released."""
+
+    def __init__(self, *, clock, hold=(), gate_uploads=False):
+        super().__init__(clock=clock)
+        self.release = asyncio.Event()
+        self.hold = set(hold)
+        self.gate_uploads = gate_uploads
+
+    async def upload(self, media):
+        if self.gate_uploads:
+            await self.release.wait()
+        return await super().upload(media)
+
+    async def create(self, text, **kw):
+        if text in self.hold:
+            await self.release.wait()
+        return await super().create(text, **kw)
+
+
+def bound_to(channel, *, alias="fake:acct", provider="fake", user_id="42", handle="acct"):
+    return Bound(alias=alias, provider=provider, user_id=user_id, handle=handle, channel=channel)
+
+
+async def test_a_thread_in_progress_reserves_its_unsent_posts(paths, clock, media_root):
+    # $0.02 a day at $0.01 a post: thread A (two posts) takes all of it.
+    pub = make_publisher(paths, clock, media_root, daily_budget_usd=0.02)
+    channel = GatedChannel(clock=clock, hold={"a1"})
+    bound = bound_to(channel)
+    a = asyncio.create_task(pub.publish(pub.prepare(thread("a1", "a2"), bound), caller="A"))
+    await asyncio.sleep(0.05)  # A claimed: a1 submitting, a2 pending
+    with pytest.raises(PulsarError) as exc:
+        await pub.publish(pub.prepare(thread("b1"), bound), caller="B")
+    assert exc.value.code == "budget_exceeded"
+    channel.release.set()
+    assert (await a).record.state == "published"
+    assert [c["text"] for c in channel.creates] == ["a1", "a2"]
+
+
+async def test_a_pending_row_reclaimed_is_not_counted_twice(paths, clock, media_root, bound):
+    pub = make_publisher(paths, clock, media_root, daily_budget_usd=0.02)
+    prepared = pub.prepare(thread("a1", "a2"), bound)
+    # Claimed but never sent, as by a sender that died before its first post.
+    pub.ledger.claim_plan(
+        key="p1", tool="publish", digest=prepared.digest, provider="fake", account=bound.ref,
+        caller="dead", items=[ItemIntent("h", fp(t), 0.01) for t in ("a1", "a2")],
+        admit=None, day_start=NOW.replace(hour=0), month_start=NOW.replace(day=1, hour=0),
+    )  # fmt: skip
+    out = await pub.publish(prepared, caller="t", idempotency_key="p1")
+    assert out.record.state == "published"
+
+
+def v1_bound(channel) -> Bound:
+    return bound_to(
+        channel, alias="x:constworks", provider="x", user_id="1234567890", handle="constworks"
+    )
+
+
+def legacy(pub, bound, text, digest):
+    """A ``create_post`` retry of a v1 row: same request digest as the stored row."""
+    return replace(pub.prepare(thread(text), bound), digest=digest)
+
+
+async def test_reconcile_never_finds_a_v1_row_absent(paths, clock, media_root):
+    build_v1_ledger(paths)  # k-unk: "lost", unknown since 2026-09-20 10:00
+    pub = make_publisher(paths, clock, media_root)
+    channel = FakeChannel(clock=clock)
+    bound = v1_bound(channel)
+    posted = datetime(2026, 9, 20, 10, 0, 1, tzinfo=UTC)
+    channel.timeline.append(RemotePost("777", "u/777", posted, fp("lost")))
+    [before] = await pub.reconcile(bound)
+    assert before["state"] == "unknown"
+    assert before["items"][0]["resolved"] is None
+    assert "no fingerprint" in before["items"][0]["reason"]
+
+    # Repeating the request still refuses, but attaches the fingerprint...
+    with pytest.raises(PulsarError) as exc:
+        await pub.publish(
+            legacy(pub, bound, "lost", "d-unk"), idempotency_key="k-unk", caller="t",
+            tool="create_post",
+        )  # fmt: skip
+    assert exc.value.code == "outcome_unknown" and channel.creates == []
+    # ...so reconcile can now find the post that went out.
+    [after] = await pub.reconcile(bound)
+    assert after["state"] == "published" and after["items"][0]["post_id"] == "777"
+
+
+async def test_retrying_a_v1_failed_row_takes_the_new_fingerprint_and_price(
+    paths, clock, media_root
+):
+    build_v1_ledger(paths)  # k-fail: "dup", failed
+    pub = make_publisher(paths, clock, media_root)
+    channel = FakeChannel(clock=clock, fail_on={0: "unknown-posted"})
+    bound = v1_bound(channel)
+    out = await pub.publish(
+        legacy(pub, bound, "dup", "d-fail"), idempotency_key="k-fail", caller="t",
+        tool="create_post",
+    )  # fmt: skip
+    [item] = out.record.items
+    assert item.state == "unknown" and item.fingerprint == fp("dup") and item.est_cost_usd == 0.01
+    clock[0] = NOW + RECONCILE_GRACE + timedelta(minutes=1)
+    reports = {r["idempotency_key"]: r for r in await pub.reconcile(bound)}
+    assert reports["k-fail"]["state"] == "published"
+    assert reports["k-unk"]["state"] == "unknown", "the v1 row without a fingerprint stays"
+    assert len(channel.creates) == 1
+
+
+async def test_reconcile_during_a_slow_upload_cannot_double_post(paths, clock, media_root):
+    pub = make_publisher(paths, clock, media_root)
+    slow = GatedChannel(clock=clock, gate_uploads=True)
+    plan = Plan.from_mapping(
+        {"text": "video", "media": [{"path": str(media_root / "a.png"), "alt": "A"}]}
+    )
+    first = asyncio.create_task(
+        pub.publish(pub.prepare(plan, bound_to(slow)), caller="A", idempotency_key="k")
+    )
+    await asyncio.sleep(0.05)  # item 0 submitting, its upload still running
+    clock[0] = NOW + STALE_SUBMITTING + timedelta(minutes=1)
+    [report] = await pub.reconcile(bound_to(slow))
+    assert report["items"][0]["resolved"] == "absent"  # true: nothing was posted yet
+
+    retry_channel = FakeChannel(clock=clock)
+    retry = await pub.publish(
+        pub.prepare(plan, bound_to(retry_channel)), caller="B", idempotency_key="k"
+    )
+    assert retry.record.state == "published"
+    slow.release.set()
+    out = await first
+    assert out.error is not None and "nothing was posted" in out.error.message
+    assert slow.creates == [] and len(retry_channel.creates) == 1
+    settled = pub.ledger.get_plan("k")
+    assert settled.state == "published" and settled.items[0].post_id == "501"
+
+
+async def test_core_scans_post_text_whatever_the_channel_does(publisher, bound):
+    # FakeChannel.check_post does not scan: the publisher must.
+    token = "ghp_" + "a" * 36
+    with pytest.raises(PulsarError) as exc:
+        publisher.prepare(thread("fine", f"oops {token}"), bound)
+    assert exc.value.code == "secret_detected" and exc.value.detail["post"] == 1
+    prepared = publisher.prepare(thread("fine"), bound)
+    with pytest.raises(PulsarError) as exc:
+        await publisher.publish(prepared, caller=token)
+    assert exc.value.code == "secret_detected"
+    assert publisher.ledger.history() == []

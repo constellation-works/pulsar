@@ -997,21 +997,21 @@ def test_usage_windows(paths, clock):
     ledger.item_unknown("unknown", 0, OutcomeUnknown("ReadTimeout"))
     claim_plan(ledger, "in-flight", account=OTHER, cost=0.1)
     ledger.begin_item("in-flight", 0)
-    claim_plan(ledger, "failed", cost=0.5)  # failed, pending and skipped are free
+    claim_plan(ledger, "failed", n=2, cost=0.5)  # failed, the rest of a closed row, skipped: free
     ledger.begin_item("failed", 0)
     ledger.item_failed("failed", 0, PulsarError("forbidden", "no"))
     ledger.finish("failed")
-    claim_plan(ledger, "pending", n=3, cost=0.7)
+    claim_plan(ledger, "pending", n=3, cost=0.7)  # claimed, not sent yet: reserved
     ledger.skip(key="skipped", provider="x", account=ACCT, caller="t", note=None)
 
     mine = ledger.usage("x:constworks", day_start=DAY, month_start=MONTH)
-    assert mine == Usage(spent_day_usd=0.315, spent_month_usd=0.715, posts_day=1)
+    assert mine == Usage(spent_day_usd=2.415, spent_month_usd=2.815, posts_day=4)
     theirs = ledger.usage("x:someone", day_start=DAY, month_start=MONTH)
-    assert theirs == Usage(spent_day_usd=0.315, spent_month_usd=0.715, posts_day=2)
+    assert theirs == Usage(spent_day_usd=2.415, spent_month_usd=2.815, posts_day=2)
     # Window starts in another zone compare as instants: 12:00+02:00 is 10:00Z,
-    # after this morning's 09:00Z posts.
+    # after this morning's 09:00Z posts and claims.
     later = datetime(2026, 9, 26, 12, 0, tzinfo=timezone(timedelta(hours=2)))
-    assert ledger.usage("x:constworks", day_start=later, month_start=MONTH) == Usage(0.0, 0.715, 0)
+    assert ledger.usage("x:constworks", day_start=later, month_start=MONTH) == Usage(0.0, 2.815, 0)
     # admit sees the same numbers, computed inside the claim's transaction.
     seen: list[Usage] = []
     claim_plan(ledger, "next", admit=seen.append)
@@ -1059,3 +1059,54 @@ def test_failed_export_does_not_fail_finish(paths):
     ledger = Ledger(paths, export=broken)
     claim_plan(ledger)
     assert send_all(ledger, "plan-1", 1).state == PUBLISHED
+
+
+# -- item_sending and settle: a live sender and reconcile never both win -----------
+
+
+def test_item_sending_is_a_compare_and_set_on_the_senders_stamp(paths, clock):
+    ledger = Ledger(paths)
+    claim_plan(ledger, n=1)
+    stamp = ledger.begin_item("plan-1", 0)
+    assert ledger.item_sending("plan-1", 0, "2000-01-01T00:00:00.000+00:00") is None
+    clock[0] += timedelta(minutes=12)  # a long upload
+    fresh = ledger.item_sending("plan-1", 0, stamp)
+    assert fresh is not None and fresh > stamp
+    assert ledger.get_plan("plan-1").items[0].submitted_at == fresh
+    assert ledger.item_sending("plan-1", 0, stamp) is None, "the old stamp is spent"
+    ledger.item_failed("plan-1", 0, PulsarError("forbidden", "no"))
+    assert ledger.item_sending("plan-1", 0, fresh) is None
+
+
+def test_settle_writes_nothing_when_the_row_changed_since_it_was_listed(paths, clock):
+    ledger = Ledger(paths)
+    claim_plan(ledger, n=2)
+    stamp = ledger.begin_item("plan-1", 0)
+    listed = ledger.get_plan("plan-1")
+    seen = {i.idx: (i.state, i.submitted_at) for i in listed.items if i.state == SUBMITTING}
+    clock[0] += timedelta(seconds=1)
+    ledger.item_sending("plan-1", 0, stamp)  # the sender is alive after all
+    assert ledger.settle("plan-1", seen=seen, verdicts={0: None}) is None
+    item = ledger.get_plan("plan-1").items[0]
+    assert item.state == SUBMITTING and item.error_code is None
+
+    now_seen = {0: (SUBMITTING, item.submitted_at)}
+    settled = ledger.settle("plan-1", seen=now_seen, verdicts={0: None})
+    assert settled is not None and settled.state == FAILED
+    assert settled.items[0].error_code == RESOLVED_ABSENT
+    assert settled.items[1].state == PENDING
+
+
+def test_settle_records_a_found_post_and_finishes(paths, clock):
+    ledger = Ledger(paths)
+    claim_plan(ledger, n=1)
+    ledger.begin_item("plan-1", 0)
+    ledger.item_unknown("plan-1", 0, OutcomeUnknown("ReadTimeout"))
+    ledger.finish("plan-1")
+    item = ledger.get_plan("plan-1").items[0]
+    url = "https://x.com/constworks/status/900"
+    done = ledger.settle(
+        "plan-1", seen={0: (UNKNOWN, item.submitted_at)}, verdicts={0: ("900", url)}
+    )
+    assert done is not None and done.state == PUBLISHED and done.post_id == "900"
+    assert ledger.settle("plan-1", seen={}, verdicts={}) is None, "a settled row is not open"

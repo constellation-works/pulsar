@@ -8,7 +8,7 @@ from pulsar.core.adapter import LoadedMedia
 from pulsar.core.errors import PulsarError
 from pulsar.core.plan import MediaRef, PostSpec
 from pulsar.core.settings import Prices
-from pulsar.providers.x.adapter import XChannel, fingerprint
+from pulsar.providers.x.adapter import XChannel, fingerprint, remote_fingerprint
 from pulsar.providers.x.client import XClient
 
 from .media_samples import JPEG, MP4
@@ -52,9 +52,24 @@ def test_fingerprint_survives_x_rewriting():
     as_x_shows_it = (
         "Orbit v0.25 &amp; friends &lt;3 — notes: https://t.co/AbC123 https://t.co/media9"
     )
-    assert fingerprint(local) == fingerprint(as_x_shows_it)
+    assert fingerprint(local) == remote_fingerprint(as_x_shows_it)
     assert fingerprint("Café  two\n\nlines") == fingerprint("Café two lines")
     assert fingerprint("Orbit v0.25") != fingerprint("Orbit v0.26")
+
+
+def test_fingerprint_unescapes_only_what_x_escaped():
+    # A literal "&amp;" in the post comes back from X as "&amp;amp;".
+    local = "Write &amp; in HTML"
+    assert fingerprint(local) == remote_fingerprint("Write &amp;amp; in HTML")
+    assert fingerprint(local) != fingerprint("Write & in HTML")
+
+
+def test_fingerprint_ignores_the_mentions_x_puts_in_front_of_a_reply():
+    assert fingerprint("thanks, merged") == remote_fingerprint("@alice @bob_2 thanks, merged")
+    assert fingerprint("@alice thanks") == remote_fingerprint("@alice @alice thanks")
+    # Only a leading run: a mention inside the text is part of the text.
+    assert fingerprint("thanks @alice") != fingerprint("thanks")
+    assert fingerprint("@alice") == remote_fingerprint("@alice"), "a lone mention is kept"
 
 
 async def test_check_post_uses_x_weighted_length_and_prices(channel):

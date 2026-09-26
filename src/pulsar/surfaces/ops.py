@@ -189,7 +189,7 @@ async def reconcile_report(
         return _error(exc)
     finally:
         await rt.aclose()
-    settled = all(r["state"] not in ("unknown", "submitting") for r in results)
+    settled = all(r["state"] not in ("unknown", "submitting", "changed") for r in results)
     return {"account": alias, "results": results}, 0 if settled else 1
 
 

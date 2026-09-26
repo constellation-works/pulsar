@@ -156,7 +156,8 @@ keys are enforced on every post, from `create_post` and from `pulsar publish`
 alike.
 
 Policy (`pulsar.core.policy`) is checked before any network call, against
-what the ledger has committed (in-flight, published or unknown-outcome posts;
+what the ledger has committed or reserved (in-flight, published or
+unknown-outcome posts, and the unsent posts of a plan still being published;
 failed and skipped ones are free). The first rule that fails is reported:
 
 1. `quiet_hours` — now is inside the window. `[start, end)` on the wall clock
@@ -233,8 +234,15 @@ What `publish` does, in order:
    count, video and GIF alone, alt text length), reply and quote ids, the
    secret scanner over every text and alt text, and media loaded under
    confinement.
-2. Check the policy, and claim the ledger row, in one transaction.
-3. Upload and post item by item; each reply goes to the previous item.
+2. Check the policy, and claim the ledger row, in one transaction. From here
+   until each post is sent or the row settles, the plan's unsent posts count
+   against the budget and daily cap, so a second plan cannot be admitted
+   with what this one was admitted with.
+3. Upload and post item by item; each reply goes to the previous item. A post
+   is marked `submitting` before its media upload and re-stamped, as a
+   compare-and-set, just before the post request leaves: if reconcile settled
+   it meanwhile (a very slow upload looks like a dead sender), the post is not
+   sent and the call reports that nothing was posted.
 
 A definitive failure mid-thread leaves the row `partial`, and publishing
 again resumes after the last published post. A post whose outcome is
@@ -243,10 +251,16 @@ ambiguous leaves the row `unknown` until `pulsar reconcile` settles it.
 Reconcile lists the account's posts since just before the first ambiguous
 send (up to 300; X bills post reads) and matches each ambiguous post by a
 fingerprint of its text. The fingerprint ignores URLs (X rewrites them to
-`t.co` and appends media links), HTML entities and whitespace. A post never
-matches a post id the ledger already holds. A post is marked absent only when
-the listing was complete and five minutes have passed since it was sent;
-otherwise it stays `unknown`.
+`t.co` and appends media links), the `@handles` X puts in front of a reply,
+and whitespace; X's HTML entities are unescaped on X's copy only. A post
+never matches a post id the ledger already holds. A post is marked absent
+only when the listing was complete and five minutes have passed since it was
+sent; otherwise it stays `unknown`. A post recorded before ledger v2 has no
+fingerprint and is never marked absent: repeating the same `create_post`
+(same text and key) answers `outcome_unknown` again but attaches one, and the
+next reconcile can match it. Reconcile writes its verdicts for a row in one
+transaction, and only if no sender touched the row since it was listed
+(`state: changed` otherwise, and the exit code is 1).
 
 ## Run as an MCP server
 
@@ -327,14 +341,15 @@ with the same rules plus three more:
   published post and never re-sends one.
 - **key skipped** (a recorded decision never to publish it, e.g. imported
   from the old routine's `posted.jsonl`) → reported as skipped; nothing is
-  sent.
+  sent. `create_post` with a skipped key is `idempotency_conflict` with
+  `detail.state: skipped`, never a receipt.
 - **key imported as published** from `posted.jsonl` → replays the imported
   receipt whatever the new plan's text, since the old routine kept no request
   to compare with.
 
 Policy (budgets, daily cap) is checked in the same transaction that claims a
 new row or re-arms a failed one, so a refused call leaves no row; a replay is
-never re-checked.
+never re-checked. Re-armed posts take the current price and fingerprint.
 
 #### `outcome_unknown`
 
@@ -515,7 +530,7 @@ A plan row has one `items` row per post of its thread: `idx`, `state`,
 `text_sha256`, `fingerprint` (for reconcile to match the post on the
 provider), `est_cost_usd`, `post_id`/`url`, `media_ids_json`, the error
 columns, and `submitted_at`. Legacy `create_post` rows mirror themselves as one
-item, so every post counts toward usage. States:
+item, so every post counts toward the daily post cap. States:
 
 ```
 legacy tools   submitting ──> published | failed | unknown
@@ -536,17 +551,27 @@ callers holding the same pending row cannot both send a post; a thread's posts
 start strictly in order. Calling again on a `failed` or `partial` row re-arms
 its failed posts and keeps the published ones. Reconcile works on `unknown`
 rows and on `submitting` rows whose newest post was submitted longer ago than
-a staleness window (a sender that died); it settles each ambiguous post as
+a staleness window of ten minutes (a sender that died; `submitted_at` is
+re-stamped just before the post request, so a long media upload does not
+count against it); it settles each ambiguous post as
 published (with the id it found) or absent (`error_code:
 outcome_resolved_absent`, re-sent on the next call), and the row's state is
 derived again from its posts. Inspect it with `sqlite3 ledger.sqlite3 'select
 * from writes'`.
 
 **Usage** for policy: spend is the sum of `est_cost_usd` over posts that are
-`submitting`, `published` or `unknown` (anything that may have cost money),
-across all accounts, since the start of the policy day and month; the daily
-post count is the same posts for one account. Pending, failed and skipped posts
-are free.
+`submitting`, `published` or `unknown` (anything that may have cost money,
+counted from when it was sent) plus the `pending` posts of a row still being
+published (reserved, counted from when they were claimed), across all
+accounts, since the start of the policy day and month; the daily post count
+is the same posts for one account. Failed and skipped posts, and the unsent
+posts of a row that has settled (`partial`, `failed`), are free. A row left
+`pending` by a sender that died before its first post stays reserved until
+the policy day ends or the same key is published again.
+
+Rows from before ledger v2 and imported rows carry `est_cost_usd` 0: v1 kept
+no text to price, so spend from before the upgrade is not counted against the
+day or month budget (their posts do count toward the daily post cap).
 
 **Schema versions.** v1 was the single-request ledger; v2 adds providers,
 account aliases, plans and items. A v1 file migrates in place on first open
