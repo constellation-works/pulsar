@@ -26,3 +26,19 @@
   the README only if the front door changed) in the same commit; keep the README
   minimal.
 - Run `make check` (ruff, basedpyright strict, pytest) before handing off.
+
+<!-- constellation-standards:begin -->
+<!-- Managed by the constellation's operations/scripts/sync-standards.sh; edits inside this block are overwritten. -->
+## Constellation standards
+
+This repository adopts these constellation standards, vendored read-only in `docs/standards/`:
+
+- `STD-01@2` — [docs/standards/STD-01-cli-surface.md](docs/standards/STD-01-cli-surface.md)
+- `STD-02@2` — [docs/standards/STD-02-rust-architecture-and-errors.md](docs/standards/STD-02-rust-architecture-and-errors.md)
+- `STD-03@2` — [docs/standards/STD-03-concurrency-and-process-safety.md](docs/standards/STD-03-concurrency-and-process-safety.md)
+- `STD-04@1` — [docs/standards/STD-04-testing-and-verification.md](docs/standards/STD-04-testing-and-verification.md)
+- `STD-05@1` — [docs/standards/STD-05-security-boundaries.md](docs/standards/STD-05-security-boundaries.md)
+
+Follow them; they are normative. To deviate from a rule, record a decision in `docs/design/<feature>/4_decisions.md` citing `STD-nn@<version> §Rn`; never edit `docs/standards/` (`sh docs/standards/check.sh` enforces this).
+Reviewers check every change against the adopted standards and report violations as `STD-nn §Rn` with file:line evidence.
+<!-- constellation-standards:end -->
