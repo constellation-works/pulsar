@@ -6,8 +6,6 @@ import argparse
 import asyncio
 from pathlib import Path
 
-from pulsar.app import import_report, migrate_report
-
 from .. import views
 from ..context import Context, emit
 from ..parser import ACCOUNT_DEFAULT, Commands
@@ -39,19 +37,11 @@ def register(commands: Commands) -> None:
 
 def _import_posted(args: argparse.Namespace, ctx: Context) -> int:
     return emit(
-        asyncio.run(
-            import_report(
-                ctx.paths,
-                args.source,
-                account=args.account,
-                confirm=args.confirm,
-                transport=ctx.transport,
-            )
-        ),
+        asyncio.run(ctx.app.import_posted(args.source, account=args.account, confirm=args.confirm)),
         ctx,
         views.import_posted,
     )
 
 
 def _migrate(args: argparse.Namespace, ctx: Context) -> int:
-    return emit(migrate_report(ctx.paths, confirm=args.confirm), ctx)
+    return emit(ctx.app.migrate(confirm=args.confirm), ctx)

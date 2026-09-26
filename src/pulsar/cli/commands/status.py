@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import argparse
 
-from pulsar.app import budget_report
-
 from .. import views
 from ..context import Context, emit, notice
 from ..parser import ACCOUNT_HELP, Commands
@@ -22,7 +20,7 @@ def register(commands: Commands) -> None:
 
 
 def _status(args: argparse.Namespace, ctx: Context) -> int:
-    out, code = budget_report(ctx.paths, account=args.account)
+    out, code = ctx.app.status(account=args.account)
     if not out["accounts"]:
         notice("no account is bound; nothing to report")
     return emit((out, code), ctx, views.status)

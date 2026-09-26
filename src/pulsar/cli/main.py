@@ -1,5 +1,6 @@
-"""``pulsar``'s entry point: build the command tree, parse, resolve the output
-mode once, dispatch, and map what a handler raises to an exit code.
+"""The ``pulsar`` command line: build the command tree, parse, resolve the
+output mode once, dispatch to a command with the app the entry point
+(``pulsar.main``) supplied, and map what a handler raises to an exit code.
 
 ``pulsar`` or ``pulsar auth`` alone prints that level's help on stderr and
 exits 2. A closed stdout ends the process quietly with 0. The output and
@@ -14,10 +15,8 @@ import os
 import sys
 from collections.abc import Sequence
 
-import httpx
-
 from pulsar import __version__
-from pulsar.app import INTERNAL, PulsarError, configure_logging, default_paths
+from pulsar.app import INTERNAL, App, PulsarError
 
 from .commands import REGISTER
 from .context import Context, Handler
@@ -62,9 +61,8 @@ def build_parser() -> CommandParser:
     return parser
 
 
-def main(
-    argv: Sequence[str] | None = None, *, transport: httpx.AsyncBaseTransport | None = None
-) -> int:
+def run(argv: Sequence[str] | None, app: App) -> int:
+    """Run one invocation against ``app``; the exit code."""
     raw = list(sys.argv[1:] if argv is None else argv)
     wants_json = json_requested(raw, os.environ)
     try:
@@ -87,8 +85,7 @@ def main(
     except ModeConflict as exc:
         print_error(UsageError(str(exc)), wants_json)
         return EXIT_USAGE
-    configure_logging()
-    ctx = Context(default_paths(), transport, mode, resolve_terminal(sys.stdout, os.environ))
+    ctx = Context(app, mode, resolve_terminal(sys.stdout, os.environ))
     json_mode = mode == "json"
     try:
         return handler(args, ctx)

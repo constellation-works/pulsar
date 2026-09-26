@@ -6,7 +6,7 @@ import argparse
 import asyncio
 from pathlib import Path
 
-from pulsar.app import CLI_CALLER, publish_report, validate_report
+from pulsar.app import CLI_CALLER
 
 from .. import views
 from ..context import Context, emit, notice
@@ -53,7 +53,7 @@ def register(commands: Commands) -> None:
 
 def _validate(args: argparse.Namespace, ctx: Context) -> int:
     return emit(
-        asyncio.run(validate_report(ctx.paths, args.plan, account=args.account)),
+        asyncio.run(ctx.app.validate(args.plan, account=args.account)),
         ctx,
         views.plan_report,
     )
@@ -64,14 +64,12 @@ def _publish(args: argparse.Namespace, ctx: Context) -> int:
         notice("--yes is deprecated; use --confirm")
     return emit(
         asyncio.run(
-            publish_report(
-                ctx.paths,
+            ctx.app.publish(
                 args.plan,
                 account=args.account,
                 idempotency_key=args.idempotency_key,
                 caller=args.caller,
                 confirm=args.confirm or args.yes,
-                transport=ctx.transport,
             )
         ),
         ctx,

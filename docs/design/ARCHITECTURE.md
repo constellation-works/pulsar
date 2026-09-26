@@ -15,9 +15,11 @@ pulsar is one core with three front ends (the surfaces). This page fixes the lay
 ## Layers
 
 ```
+entry        main                            builds the App, supplies it to a front end
+                 │
 front ends   cli ─▶ mcp, orbit_tool          the surfaces: argv, MCP, the Orbit envelope
                  │
-app          ops, health ─▶ runtime          the verbs every front end calls; composition
+app          App ─▶ ops, health ─▶ runtime   the verbs every front end calls; composition
                  │
 providers    x (client, auth, adapter)       one channel each
                  │
@@ -26,7 +28,12 @@ core         plan, publisher, ledger, policy, accounts, store, media, guard, set
 
 An arrow is "may import". A layer imports only the layers below it, never above or
 beside it; the one exception is that `cli` starts the other two front ends (`serve`,
-`orbit-tool`), so it ranks above them and nothing imports `cli`.
+`orbit-tool`), so it ranks above them.
+
+Dependencies are supplied from the top. `main.py` is the one place that constructs: it
+builds `App` (the verbs, bound to one home and one transport) and hands it to the front
+end, which calls it and never builds anything below. Tests hand in an `App` on the fake
+transport the same way.
 
 | Rank | Package | Owns | Also must not import |
 |---|---|---|---|
@@ -35,15 +42,17 @@ beside it; the one exception is that `cli` starts the other two front ends (`ser
 | 2 | `app` | the `Runtime` that joins settings, storage, the ledger and providers; the reports and operator verbs, as functions returning `(report, exit_code)` | `mcp` |
 | 3 | `mcp.py`, `orbit_tool.py` | the MCP server and the Orbit exec backend | |
 | 4 | `cli/` | the one dispatcher: parses argv, prints, maps errors to exit codes | |
+| 5 | `main.py` | the entry point: builds `App` and runs the CLI with it; nothing imports it | |
 
-Inside `app`, `runtime.py` (rank 0) comes before `health.py` and `ops.py` (rank 1).
+Inside `app`, `runtime.py` (rank 0) comes before `health.py` and `ops.py` (rank 1), and
+`facade.py` (`App`, rank 2) sits on them.
 
 A layer is used only through its public API: its package's `__init__.py`. Code outside
 the package imports from the package root (`from pulsar.core import Ledger`), and only the
 names its `__all__` lists; modules inside the package import each other directly. Adding
-to `__all__` is the deliberate act of widening the layer. `core`, `providers/x` and
-`app` are held to it. The front ends go through `app` only: what they need from `core` or
-a provider, `app` re-exports.
+to `__all__` is the deliberate act of widening the layer. `core`, `providers/x`,
+`app` and `cli` are held to it. The front ends and `main` go through `app` only: what they
+need from `core` or a provider, `app` re-exports.
 
 Inside `cli/`, the same rule:
 
@@ -53,7 +62,7 @@ Inside `cli/`, the same rule:
 | 1 | `views.py`, `parser.py` | each payload's human view; the argparse pieces commands declare with |
 | 2 | `context.py` | what a handler gets (`Context`) and how it prints (`emit`, `notice`) |
 | 3 | `commands/` | one module per command (or per help group): its parser and handler |
-| 4 | `main.py` | builds the tree from `commands/`, resolves the mode once, dispatches |
+| 4 | `main.py` | builds the tree from `commands/`, resolves the mode once, dispatches to a command with the supplied `App` (`run`) |
 
 ## Ambient state
 

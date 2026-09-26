@@ -73,8 +73,8 @@ authenticates it.
 ## 2. Operator CLI
 
 [cli/](../../../src/pulsar/cli/), verbs in [ops.py](../../../src/pulsar/app/ops.py),
-health in [health.py](../../../src/pulsar/app/health.py). `cli/main.py` builds the command
-tree and dispatches; each command declares its parser and holds its handler in `cli/commands/`;
+health in [health.py](../../../src/pulsar/app/health.py). The entry point `pulsar/main.py`
+builds the `App` and runs the CLI with it; `cli/main.py` builds the command tree and dispatches; each command declares its parser and holds its handler in `cli/commands/`;
 `cli/context.py` prints a payload and `cli/errors.py` a failure.
 
 - **Help.** `pulsar` or `pulsar auth` alone prints that level's help on stderr and exits 2.

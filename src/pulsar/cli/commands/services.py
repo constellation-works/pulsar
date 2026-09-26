@@ -60,7 +60,6 @@ def _orbit_tool(_args: argparse.Namespace, _ctx: Context) -> int:
 
 
 def _serve(args: argparse.Namespace, ctx: Context) -> int:
-    from pulsar.app import Runtime
     from pulsar.mcp import build_server, loopback_security
 
     if args.transport != "http" and (args.host is not None or args.port is not None):
@@ -69,7 +68,7 @@ def _serve(args: argparse.Namespace, ctx: Context) -> int:
             "--host and --port apply only to --transport http",
             detail={"transport": args.transport},
         )
-    rt = Runtime(ctx.paths)
+    rt = ctx.app.runtime()
     roots = rt.settings.media_roots
     # stderr: stdout is the MCP stream under --transport stdio.
     notice(

@@ -14,27 +14,18 @@ import sys
 from collections.abc import Callable
 from typing import Any
 
-import httpx
-
-from pulsar.app import Paths
+from pulsar.app import App
 
 from . import views
 from .render import Mode, Terminal, View, render
 
 
 class Context:
-    """The home, resolved once per invocation, the output mode and terminal,
-    and the transport (tests pass a fake one)."""
+    """The app the entry point supplied, and the output mode and terminal
+    resolved once per invocation."""
 
-    def __init__(
-        self,
-        paths: Paths,
-        transport: httpx.AsyncBaseTransport | None,
-        mode: Mode = "json",
-        term: Terminal | None = None,
-    ) -> None:
-        self.paths = paths
-        self.transport = transport
+    def __init__(self, app: App, mode: Mode = "json", term: Terminal | None = None) -> None:
+        self.app = app
         self.mode: Mode = mode
         self.term = term or Terminal()
 

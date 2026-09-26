@@ -8,9 +8,11 @@ from pathlib import Path
 
 import pytest
 
-from pulsar.cli import build_parser, main
+from pulsar.app import App, default_paths
+from pulsar.cli import build_parser, run
 from pulsar.core.accounts import AccountRegistry
 from pulsar.core.ledger import SCHEMA_VERSION, Ledger
+from pulsar.main import main as entry_point
 from pulsar.providers.x import auth as x_auth
 
 from .conftest import ALIAS, SECRETS, register
@@ -35,6 +37,16 @@ def _plan(tmp_path, text=THREAD) -> str:
 
 def _verified(paths, bundle, alias=ALIAS, handle="constworks", user_id="1234567890", **row):
     return register(paths, bundle, alias, handle=handle, provider_user_id=user_id, **row)
+
+
+def main(argv, *, transport=None):
+    """``pulsar`` with the app the entry point would build, on the fake X when given."""
+    return run(argv, App(default_paths(), transport=transport))
+
+
+def test_the_entry_point_supplies_the_app(paths, authed, capsys):
+    assert entry_point(["status", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["accounts"][0]["alias"] == ALIAS
 
 
 def _run(capsys, argv, *, json_mode=True, **kwargs):
@@ -93,7 +105,7 @@ def test_an_unexpected_exception_is_internal(paths, monkeypatch, capsys):
     def boom(*_a, **_k):
         raise RuntimeError("secret detail")
 
-    monkeypatch.setattr("pulsar.cli.commands.status.budget_report", boom)
+    monkeypatch.setattr("pulsar.app.facade.ops.budget_report", boom)
     code, out, err = _run(capsys, ["status"])
     assert code == 1 and out == ""
     body = _error(err)

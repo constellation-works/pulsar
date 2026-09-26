@@ -14,7 +14,7 @@ dependencies = [
 ]
 
 [project.scripts]
-pulsar = "pulsar.cli:main"
+pulsar = "pulsar.main:main"
 
 [dependency-groups]
 dev = [

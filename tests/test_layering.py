@@ -61,8 +61,9 @@ def test_layer_imports_stay_inside_their_boundary(layer):
 # The layers, bottom up: a module (or subpackage) imports only lower ranks.
 # core supplies everything; providers plug a channel into it; app joins them
 # into the verbs every front end calls; the front ends sit on top. The CLI
-# starts the other two (`serve`, `orbit-tool`), so it ranks above them and
-# nothing imports it.
+# starts the other two (`serve`, `orbit-tool`), so it ranks above them. main,
+# the entry point, builds the app and supplies it to a front end; nothing
+# imports it.
 PULSAR_RANK = {
     "core": 0,
     "providers": 1,
@@ -70,13 +71,15 @@ PULSAR_RANK = {
     "mcp": 3,
     "orbit_tool": 3,
     "cli": 4,
+    "main": 5,
 }
 
-# Inside app: the runtime first, then the reports built on it.
+# Inside app: the runtime first, then the reports built on it, then App over them.
 APP_RANK = {
     "runtime": 0,
     "health": 1,
     "ops": 1,
+    "facade": 2,
 }
 
 # Inside the CLI: rendering and errors first, then what commands share, then
@@ -134,7 +137,7 @@ def test_imports_point_down(package, member):
 
 # A lower layer's public API is its package's __init__: code outside the
 # package imports from the package root, and only the names __all__ lists.
-FACADES = ("pulsar.core", "pulsar.providers.x", "pulsar.app")
+FACADES = ("pulsar.core", "pulsar.providers.x", "pulsar.app", "pulsar.cli")
 
 
 def _public(package: str) -> set[str]:
@@ -172,8 +175,9 @@ def test_other_layers_use_only_the_public_api(facade):
     assert not offenders, f"{facade} used past its public API:\n" + "\n".join(offenders)
 
 
-# The front ends reach everything below through app: never core or providers.
-FRONT_ENDS = ("cli", "mcp", "orbit_tool")
+# The front ends and the entry point reach everything below through app:
+# never core or providers.
+FRONT_ENDS = ("cli", "mcp", "orbit_tool", "main")
 BELOW_APP = ("pulsar.core", "pulsar.providers")
 
 

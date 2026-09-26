@@ -19,8 +19,8 @@ import yaml
 from pulsar import orbit_tool
 from pulsar.app import ops
 from pulsar.app.ops import publish_report
-from pulsar.cli import main as cli_main
 from pulsar.core.paths import Paths
+from pulsar.main import main as pulsar_main
 
 from .conftest import ALIAS, SECRETS, register
 from .media_samples import PNG
@@ -198,7 +198,7 @@ def test_the_home_is_the_plugin_state_not_pulsar_home(state, home, workspace):
 def test_cli_orbit_tool_reads_stdin(paths, monkeypatch, capsys):
     monkeypatch.delenv("ORBIT_PLUGIN_STATE", raising=False)
     monkeypatch.setattr("sys.stdin", io.StringIO('{"schema_version": 1, "tool": "pulsar.history"}'))
-    assert cli_main(["orbit-tool"]) == 0
+    assert pulsar_main(["orbit-tool"]) == 0
     assert json.loads(capsys.readouterr().out) == {
         "ok": True,
         "output": {"rows": [], "total": 0, "truncated": False},

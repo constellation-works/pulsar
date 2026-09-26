@@ -5,20 +5,9 @@ from __future__ import annotations
 import argparse
 import asyncio
 
-from pulsar.app import (
-    AccountRegistry,
-    PulsarError,
-    Settings,
-    attention,
-    auth_report,
-    load_client_id,
-    load_settings,
-    login,
-)
-
 from .. import views
 from ..context import Context, emit, notice
-from ..errors import EXIT_FAILED, EXIT_OK, UsageError
+from ..errors import UsageError
 from ..parser import ACCOUNT_DEFAULT, ACCOUNT_HELP, Commands
 
 
@@ -99,58 +88,34 @@ def register(commands: Commands) -> None:
     p_migrate.set_defaults(func=_migrate)
 
 
-def _migrate_quietly(registry: AccountRegistry, settings: Settings) -> None:
-    """First-use migration of a phase 1 home before a write; a problem there
-    must not block a login or logout."""
-    try:
-        result = registry.migrate_legacy(settings)
-    except PulsarError as exc:
-        notice(f"legacy credentials not migrated [{exc.code}]: {exc.message}")
-        return
-    if result.state == "migrated":
-        notice(f"migrated the legacy credentials to {result.alias}")
+def _migrate_quietly(ctx: Context) -> None:
+    """First-use migration of a phase 1 home before a login or logout."""
+    message = ctx.app.migrate_legacy_quietly()
+    if message:
+        notice(message)
 
 
 def _login(args: argparse.Namespace, ctx: Context) -> int:
-    paths = ctx.paths
-    settings = load_settings(paths)
-    alias = args.account or settings.default_account
+    alias = args.account or ctx.app.default_account()
     if not alias:
         raise UsageError("--account is required: the account to bind, e.g. --account x:<handle>")
-    client_id = args.client_id or load_client_id(paths)
+    client_id = args.client_id or ctx.app.remembered_client_id()
     if not client_id:
         raise UsageError("--client-id is required the first time: the X app's OAuth 2.0 client id")
-    _migrate_quietly(AccountRegistry(paths), settings)
-    account = login(paths, settings, alias, client_id, open_browser=not args.no_browser)
-    # login() asked X with the new token before storing it, so this is live proof.
-    return emit(
-        (
-            {
-                "alias": account.alias,
-                "account": {"user_id": account.provider_user_id, "username": account.handle},
-                "account_source": "live",
-                "verified": True,
-                "scope": " ".join(account.scopes) or None,
-                "home": str(paths.home),
-            },
-            EXIT_OK,
-        ),
-        ctx,
-    )
+    _migrate_quietly(ctx)
+    return emit(ctx.app.login(alias, client_id, open_browser=not args.no_browser), ctx)
 
 
 def _status(args: argparse.Namespace, ctx: Context) -> int:
     if args.offline:
         notice("--offline is deprecated and has no effect: the default makes no network call")
-    out, code = asyncio.run(
-        auth_report(ctx.paths, account=args.account, live=args.live, transport=ctx.transport)
-    )
+    out, code = asyncio.run(ctx.app.auth_status(account=args.account, live=args.live))
     if not out["accounts"]:
         notice("no account is bound; a human runs `pulsar auth login --account x:<handle>`")
     if out["legacy"] is not None and out["legacy"]["message"]:
         notice(out["legacy"]["message"])
     for entry in out["accounts"]:
-        remedy = attention(entry, ctx.paths.home)
+        remedy = ctx.app.attention(entry)
         if remedy is not None:
             notice(remedy)
     return emit((out, code), ctx, views.auth_status)
@@ -165,47 +130,10 @@ def _logout(args: argparse.Namespace, ctx: Context) -> int:
             "needs a human to log in again; pass --confirm to proceed",
             detail={"account": args.account},
         )
-    paths = ctx.paths
-    settings = load_settings(paths)
-    registry = AccountRegistry(paths)
-    _migrate_quietly(registry, settings)
-    account = registry.resolve(args.account, settings)
-    had_tokens = registry.store(account.alias).exists()
-    registry.logout(account.alias)
-    return emit(
-        (
-            {
-                "alias": account.alias,
-                "home": str(paths.home),
-                "tokens_removed": had_tokens,
-                "status": "revoked",
-            },
-            EXIT_OK,
-        ),
-        ctx,
-    )
+    _migrate_quietly(ctx)
+    return emit(ctx.app.logout(args.account), ctx)
 
 
 def _migrate(args: argparse.Namespace, ctx: Context) -> int:
     """Report what the move would do; ``--confirm`` makes it (STD-01 §R5)."""
-    paths = ctx.paths
-    registry, settings = AccountRegistry(paths), load_settings(paths)
-    if args.confirm:
-        result = registry.migrate_legacy(settings, args.account)
-    else:
-        result = registry.legacy_status(settings, args.account)
-    out = {
-        "applied": args.confirm,
-        "state": result.state,
-        "alias": result.alias,
-        "adopted": list(result.adopted),
-        "message": result.message
-        or {
-            "migrated": f"legacy credentials are now {result.alias}; run "
-            f"`pulsar auth status --live --account {result.alias}` to prove the binding",
-            "none": "no legacy credentials to migrate",
-        }.get(result.state),
-        "home": str(paths.home),
-    }
-    done = ("migrated", "none") if args.confirm else ("pending", "none")
-    return emit((out, EXIT_OK if result.state in done else EXIT_FAILED), ctx)
+    return emit(ctx.app.auth_migrate(account=args.account, confirm=args.confirm), ctx)

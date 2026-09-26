@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 
-from pulsar.app import HISTORY_LIMIT_DEFAULT, HISTORY_LIMIT_MAX, history_report
+from pulsar.app import HISTORY_LIMIT_DEFAULT, HISTORY_LIMIT_MAX
 
 from .. import views
 from ..context import Context, emit, notice
@@ -34,7 +34,7 @@ def _limit(value: str) -> int:
 
 
 def _history(args: argparse.Namespace, ctx: Context) -> int:
-    out, code = history_report(ctx.paths, account=args.account, limit=args.limit)
+    out, code = ctx.app.history(account=args.account, limit=args.limit)
     if not out["writes"]:
         notice("no ledger rows" + (f" for {args.account}" if args.account else ""))
     elif out["truncated"]:
