@@ -19,12 +19,14 @@ FORBIDDEN = {
 }
 
 
-def _imports(path: Path) -> set[str]:
+def _statements(path: Path):
+    """Each import in ``path``: (absolute module, imported names or None for a
+    plain ``import``, line)."""
     package = ".".join(path.relative_to(SRC.parent).with_suffix("").parts[:-1])
-    found: set[str] = set()
     for node in ast.walk(ast.parse(path.read_text())):
         if isinstance(node, ast.Import):
-            found.update(alias.name for alias in node.names)
+            for alias in node.names:
+                yield alias.name, None, node.lineno
         elif isinstance(node, ast.ImportFrom):
             if node.level:
                 base = package.split(".")
@@ -32,8 +34,14 @@ def _imports(path: Path) -> set[str]:
                 module = ".".join(base + ([node.module] if node.module else []))
             else:
                 module = node.module or ""
-            found.add(module)
-            found.update(f"{module}.{alias.name}" for alias in node.names)
+            yield module, [alias.name for alias in node.names], node.lineno
+
+
+def _imports(path: Path) -> set[str]:
+    found: set[str] = set()
+    for module, names, _ in _statements(path):
+        found.add(module)
+        found.update(f"{module}.{name}" for name in names or ())
     return found
 
 
@@ -122,6 +130,46 @@ def test_imports_point_down(package, member):
             if target != member and target in ranks and ranks[target] >= ranks[member]:
                 offenders.append(f"{path.relative_to(SRC)} imports {package}.{target}")
     assert not offenders, "imports point upward or sideways:\n" + "\n".join(sorted(set(offenders)))
+
+
+# A lower layer's public API is its package's __init__: code outside the
+# package imports from the package root, and only the names __all__ lists.
+FACADES = ("pulsar.core",)
+
+
+def _public(package: str) -> set[str]:
+    tree = ast.parse((_package_dir(package) / "__init__.py").read_text())
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(t, ast.Name) and t.id == "__all__" for t in node.targets
+        ):
+            return set(ast.literal_eval(node.value))
+    return set()
+
+
+@pytest.mark.parametrize("facade", FACADES)
+def test_other_layers_use_only_the_public_api(facade):
+    public = _public(facade)
+    assert public, f"{facade}/__init__.py declares no __all__"
+    parent, _, leaf = facade.rpartition(".")
+    inside = _package_dir(facade)
+    offenders = []
+    for path in sorted(SRC.rglob("*.py")):
+        if path.is_relative_to(inside):
+            continue
+        for module, names, line in _statements(path):
+            where = f"{path.relative_to(SRC)}:{line}"
+            if module.startswith(facade + "."):
+                offenders.append(f"{where} reaches into {module}")
+            elif module == facade and names is None:
+                offenders.append(f"{where} imports {facade} as a module; import names from it")
+            elif module == facade:
+                hidden = sorted(set(names) - public)
+                if hidden:
+                    offenders.append(f"{where} imports {hidden}, not in {facade}.__all__")
+            elif module == parent and names and leaf in names:
+                offenders.append(f"{where} imports {facade} as a module; import names from it")
+    assert not offenders, f"{facade} used past its public API:\n" + "\n".join(offenders)
 
 
 # core takes the environment, the cwd and the home as arguments (STD-02 §R3).

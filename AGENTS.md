@@ -16,8 +16,9 @@
 - Layout, bottom up: `src/pulsar/core` (provider-neutral, no HTTP),
   `providers/<name>` (one channel adapter each), `app` (the runtime and the
   verbs every front end calls), then the front ends `mcp.py`, `orbit_tool.py`
-  (Orbit exec backend) and `cli/`. A layer imports only layers below it; keep
-  `core` free of provider and transport imports. `tests/test_layering.py`
+  (Orbit exec backend) and `cli/`. A layer imports only layers below it, and
+  only through their package root and its `__all__` (`from pulsar.core import
+  X`); keep `core` free of provider and transport imports. `tests/test_layering.py`
   enforces it.
 - The Orbit plugin is `plugin.yaml` + `bin/pulsar` + `schemas/` +
   `skills/publish/` + `tests/conformance/`. A tool change updates its schema

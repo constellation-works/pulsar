@@ -18,7 +18,7 @@ import httpx
 
 from pulsar import __version__
 from pulsar.app.runtime import configure_logging, default_paths
-from pulsar.core.errors import INTERNAL, PulsarError
+from pulsar.core import INTERNAL, PulsarError
 
 from .commands import REGISTER
 from .context import Context, Handler

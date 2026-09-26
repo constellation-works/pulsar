@@ -25,7 +25,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal, TextIO
 
-from pulsar.core.jsonx import as_object
+from pulsar.core import as_object
 
 FORMAT_ENV = "PULSAR_FORMAT"
 FORMATS = ("auto", "table", "json")

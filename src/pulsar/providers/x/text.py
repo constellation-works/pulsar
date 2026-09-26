@@ -6,9 +6,8 @@ import re
 import unicodedata
 from dataclasses import dataclass
 
-from ...core.errors import INVALID_TEXT, SECRET_DETECTED, PulsarError
-from ...core.guard import scan_for_secrets
-from ...core.settings import Prices
+from pulsar.core import INVALID_TEXT, SECRET_DETECTED, Prices, PulsarError, scan_for_secrets
+
 from .config import MAX_POST_WEIGHTED_LENGTH
 
 # Close enough to twitter-text's URL extraction for length/cost purposes.
