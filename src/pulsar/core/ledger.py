@@ -231,6 +231,11 @@ def _now() -> str:
     return _iso(datetime.now(UTC))
 
 
+def parse_ts(value: str) -> datetime:
+    """A stored ledger timestamp as an aware UTC datetime."""
+    return datetime.fromisoformat(value).astimezone(UTC)
+
+
 def request_digest(tool: str, **fields: Any) -> str:
     """SHA-256 of the canonical JSON of what the caller asked for.
 
@@ -505,11 +510,16 @@ class Ledger:
         *,
         export: Export | None = None,
         busy_timeout_ms: int = BUSY_TIMEOUT_MS,
+        clock: Callable[[], datetime] | None = None,
     ) -> None:
         self.paths = paths
         self._export = export
         self._busy_timeout_ms = busy_timeout_ms
+        self._clock = clock
         self._ready = False
+
+    def _stamp(self) -> str:
+        return _iso(self._clock()) if self._clock is not None else _now()
 
     # -- connection ---------------------------------------------------------
 
@@ -573,6 +583,20 @@ class Ledger:
         with self._connect() as conn:
             return _load(conn, key)
 
+    def known_post_ids(self, post_ids: Sequence[str]) -> set[str]:
+        """Which of ``post_ids`` the ledger already records; reconcile must not reuse them."""
+        wanted = [p for p in post_ids if p]
+        if not wanted:
+            return set()
+        marks = ", ".join("?" for _ in wanted)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"SELECT post_id FROM items WHERE post_id IN ({marks})"
+                f" UNION SELECT post_id FROM writes WHERE post_id IN ({marks})",
+                (*wanted, *wanted),
+            ).fetchall()
+        return {str(r["post_id"]) for r in rows}
+
     def history(self, *, limit: int = 20, account_alias: str | None = None) -> list[PlanRecord]:
         """The newest rows first (by ``created_at``), optionally for one account."""
         with self._connect() as conn:
@@ -630,7 +654,7 @@ class Ledger:
         ``outcome_unknown`` when an earlier attempt is in flight or ended
         ambiguously. A ``failed`` row is re-claimed: nothing reached X.
         """
-        now = _now()
+        now = self._stamp()
         user_id, handle = account.get("user_id"), account.get("username")
         alias = f"{LEGACY_PROVIDER}:{handle.lower()}" if handle else None
         meta_json = json.dumps(meta or {}, sort_keys=True)
@@ -722,7 +746,7 @@ class Ledger:
             if "retryable" in values:
                 values["retryable"] = int(values["retryable"])
             values.update(state=state, meta_json=json.dumps(merged, sort_keys=True))
-            values["updated_at"] = _now()
+            values["updated_at"] = self._stamp()
             assignments = ", ".join(f"{name} = ?" for name in values)
             conn.execute(
                 f"UPDATE writes SET {assignments} WHERE idempotency_key = ?",
@@ -780,7 +804,7 @@ class Ledger:
             raise ValueError("a plan has at least one item")
         if provider != account.provider:
             raise ValueError(f"provider {provider!r} is not the account's {account.provider!r}")
-        now = _now()
+        now = self._stamp()
         with self._connect() as conn, _immediate(conn):
             existing = _load(conn, key)
             if existing is None:
@@ -850,7 +874,7 @@ class Ledger:
         """Compare-and-set item ``idx`` from ``pending`` to ``submitting``, committed
         before its request leaves. Raises ``outcome_unknown`` when the item is
         not pending (another caller started it) or the row is no longer open."""
-        now = _now()
+        now = self._stamp()
         with self._connect() as conn, _immediate(conn):
             record = _require(conn, key)
             item = _item(record, idx)
@@ -958,7 +982,7 @@ class Ledger:
     def _set_item(
         self, key: str, idx: int, state: str, *, allowed_from: tuple[str, ...], **columns: Any
     ) -> None:
-        now = _now()
+        now = self._stamp()
         with self._connect() as conn, _immediate(conn):
             record = _require(conn, key)
             item = _item(record, idx)
@@ -982,7 +1006,7 @@ class Ledger:
         some published and the rest failed or pending -> partial; none
         published -> failed. The row carries item 0's post id and url.
         """
-        now = _now()
+        now = self._stamp()
         with self._connect() as conn, _immediate(conn):
             record = _require(conn, key)
             if record.state == SKIPPED or not record.items:
@@ -1038,7 +1062,7 @@ class Ledger:
         check_note(note)
         if provider != account.provider:
             raise ValueError(f"provider {provider!r} is not the account's {account.provider!r}")
-        now = _now()
+        now = self._stamp()
         with self._connect() as conn, _immediate(conn):
             existing = _load(conn, key)
             if existing is None:
@@ -1092,7 +1116,7 @@ class Ledger:
         """
         check_note(note)
         when = _iso(created_at)
-        now = _now()
+        now = self._stamp()
         state = SKIPPED if post_id is None else PUBLISHED
         with self._connect() as conn, _immediate(conn):
             existing = _load(conn, key)

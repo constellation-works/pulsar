@@ -32,6 +32,7 @@ UNSUPPORTED = "unsupported"
 BUDGET_EXCEEDED = "budget_exceeded"
 DAILY_CAP = "daily_cap"
 QUIET_HOURS = "quiet_hours"
+NOT_DUE = "not_due"
 # Phase 4 (drafts and approvals); declared now so the code list is stable.
 APPROVAL_REQUIRED = "approval_required"
 APPROVAL_STALE = "approval_stale"
@@ -39,7 +40,9 @@ APPROVAL_STALE = "approval_stale"
 # Codes where repeating the identical call later can succeed. The policy
 # codes are retryable because the window moves: the day or month rolls over,
 # quiet hours end (``detail.retry_after`` says when).
-RETRYABLE_CODES = frozenset({RATE_LIMITED, API_ERROR, BUDGET_EXCEEDED, DAILY_CAP, QUIET_HOURS})
+RETRYABLE_CODES = frozenset(
+    {RATE_LIMITED, API_ERROR, BUDGET_EXCEEDED, DAILY_CAP, QUIET_HOURS, NOT_DUE}
+)
 
 
 class PulsarError(Exception):

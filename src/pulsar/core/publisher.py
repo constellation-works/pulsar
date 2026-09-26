@@ -1,0 +1,410 @@
+"""Publishing a plan: validate, admit, claim, then one recorded step at a time.
+
+The order is the safety argument:
+
+1. **Validate offline**: capabilities, provider text rules, reply/quote ids,
+   the secret scanner over every post and every alt text, and media loaded
+   under confinement and checked against the provider's rules. Nothing is
+   written and nothing is sent until all of it passes.
+2. **Digest** the plan, with the loaded media bytes' hashes, so the key and
+   (in phase 4) the approval are bound to exactly what goes out.
+3. **Claim** the ledger row. Policy (budget, daily cap, quiet hours) runs
+   inside the claim's write transaction, so two concurrent callers cannot
+   both spend the last dollar.
+4. **Publish item by item**. Each post is marked ``submitting`` before its
+   request leaves and settled after. A thread replies to the previous item's
+   id, and a resumed thread continues from the last published item.
+   A definitive failure after at least one post leaves the row ``partial``;
+   an ambiguous one leaves it ``unknown`` for ``reconcile``.
+
+Media are uploaded per item, just before the item is posted, so no media id
+has to outlive the call.
+"""
+
+from __future__ import annotations
+
+import hashlib
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import Any
+
+from .adapter import Channel, LoadedMedia, PostCheck
+from .errors import (
+    INVALID_MEDIA,
+    NOT_DUE,
+    SECRET_DETECTED,
+    UNSUPPORTED,
+    OutcomeUnknown,
+    PulsarError,
+)
+from .guard import scan_for_secrets
+from .ledger import (
+    PUBLISHED,
+    SKIPPED,
+    AccountRef,
+    ItemIntent,
+    Ledger,
+    PlanRecord,
+    check_key,
+    default_key,
+    parse_ts,
+)
+from .media import load_ref
+from .plan import MediaRef, Plan, PostSpec
+from .policy import Policy, day_window, month_window
+from .settings import Settings
+
+# Reconcile waits this long after a post was sent before treating "not on the
+# timeline" as "not posted": X's timeline can lag a fresh post.
+RECONCILE_GRACE = timedelta(minutes=5)
+# Rows stuck in `submitting` this long belong to a sender that died mid-call.
+STALE_SUBMITTING = timedelta(minutes=10)
+# Look this far before the first submit when listing the account's posts.
+CLOCK_SKEW = timedelta(minutes=2)
+
+
+@dataclass(frozen=True)
+class Bound:
+    """One account, resolved and checked by the surface, with its open channel."""
+
+    alias: str
+    provider: str
+    user_id: str
+    handle: str
+    channel: Channel
+
+    @property
+    def ref(self) -> AccountRef:
+        return AccountRef(
+            alias=self.alias, provider=self.provider, user_id=self.user_id, handle=self.handle
+        )
+
+
+@dataclass(frozen=True)
+class PreparedPost:
+    spec: PostSpec
+    check: PostCheck
+    media: tuple[LoadedMedia, ...]
+
+
+@dataclass(frozen=True)
+class Prepared:
+    """A plan validated for one account: what would be published, and its cost."""
+
+    plan: Plan
+    bound: Bound
+    digest: str
+    posts: tuple[PreparedPost, ...]
+
+    @property
+    def estimated_cost_usd(self) -> float:
+        return round(sum(p.check.estimated_cost_usd for p in self.posts), 6)
+
+    def report(self) -> dict[str, Any]:
+        return {
+            "account": self.bound.alias,
+            "provider": self.bound.provider,
+            "digest": self.digest,
+            "estimated_cost_usd": self.estimated_cost_usd,
+            "reply_to": self.plan.reply_to,
+            "quote": self.plan.quote,
+            "not_before": self.plan.not_before.isoformat() if self.plan.not_before else None,
+            "posts": [
+                {
+                    "text": p.check.text,
+                    "length": p.check.length,
+                    "max_length": self.bound.channel.capabilities.max_length,
+                    "has_url": p.check.has_url,
+                    "estimated_cost_usd": p.check.estimated_cost_usd,
+                    "media": [
+                        {"mime": m.mime, "bytes": len(m.data), "sha256": m.sha256, "alt": m.alt}
+                        for m in p.media
+                    ],
+                }
+                for p in self.posts
+            ],
+            "pricing_note": "from the configured price table; verify on the provider's portal",
+        }
+
+
+@dataclass
+class Outcome:
+    """What a publish call did. ``error`` is set unless every post is live."""
+
+    record: PlanRecord
+    replayed: bool = False
+    error: PulsarError | None = None
+    posted_now: list[int] = field(default_factory=list)
+
+    def receipt(self) -> dict[str, Any]:
+        items = [
+            {"idx": i.idx, "state": i.state, "post_id": i.post_id, "url": i.url}
+            for i in self.record.items
+        ]
+        return {
+            "idempotency_key": self.record.key,
+            "state": self.record.state,
+            "account": self.record.account_alias,
+            "digest": self.record.digest,
+            "replayed": self.replayed,
+            "items": items,
+            "note": self.record.note,
+        }
+
+
+class Publisher:
+    def __init__(
+        self,
+        *,
+        ledger: Ledger,
+        settings: Settings,
+        deny: Sequence[Path] = (),
+        now: Callable[[], datetime] = lambda: datetime.now(UTC),
+    ) -> None:
+        self.ledger = ledger
+        self.settings = settings
+        self.policy = Policy(settings.policy)
+        self.deny = tuple(deny)
+        self._now = now
+
+    # -- validate -------------------------------------------------------------
+
+    def prepare(self, plan: Plan, bound: Bound) -> Prepared:
+        """Everything that can be checked without the network. Raises on the first problem."""
+        channel = bound.channel
+        caps = channel.capabilities
+        posts = plan.posts_for(bound.provider)
+        if len(posts) > 1 and not caps.threads:
+            raise PulsarError(UNSUPPORTED, f"{caps.provider} does not support threads")
+        if plan.reply_to is not None and not caps.reply:
+            raise PulsarError(UNSUPPORTED, f"{caps.provider} does not support replies")
+        if plan.quote is not None and not caps.quote:
+            raise PulsarError(UNSUPPORTED, f"{caps.provider} does not support quotes")
+        channel.check_target(reply_to=plan.reply_to, quote=plan.quote)
+        prices = self.settings.prices_for(bound.provider)
+        loaded: dict[MediaRef, LoadedMedia] = {}
+        prepared: list[PreparedPost] = []
+        for idx, spec in enumerate(posts):
+            try:
+                check = channel.check_post(spec, prices)
+            except PulsarError as exc:
+                exc.detail = {**(exc.detail or {}), "post": idx}
+                raise
+            media = tuple(self._load(ref, idx, loaded) for ref in spec.media)
+            for m in media:
+                if m.mime not in caps.media.mime_types:
+                    raise PulsarError(
+                        INVALID_MEDIA,
+                        f"{caps.provider} does not accept {m.mime}",
+                        detail={"post": idx},
+                    )
+                if len(m.data) > caps.media.limit_for(m.mime):
+                    raise PulsarError(
+                        INVALID_MEDIA,
+                        f"media is {len(m.data)} bytes; {caps.provider} allows "
+                        f"{caps.media.limit_for(m.mime)} for {m.mime}",
+                        detail={"post": idx},
+                    )
+            channel.check_media(media)
+            prepared.append(PreparedPost(spec=spec, check=check, media=media))
+        # The digest covers every variant's media, including ones this provider
+        # does not post, so one digest identifies the plan for every account.
+        for ref in plan.media_refs():
+            self._load(ref, None, loaded)
+        digest = plan.digest(lambda ref: loaded[ref].sha256)
+        return Prepared(plan=plan, bound=bound, digest=digest, posts=tuple(prepared))
+
+    def _load(
+        self, ref: MediaRef, idx: int | None, cache: dict[MediaRef, LoadedMedia]
+    ) -> LoadedMedia:
+        if ref in cache:
+            return cache[ref]
+        hits = scan_for_secrets(ref.alt)
+        if hits:
+            raise PulsarError(
+                SECRET_DETECTED,
+                "alt text contains something that looks like a credential",
+                detail={"matched": hits, "post": idx},
+            )
+        media = load_ref(ref.path, ref.alt, roots=self.settings.media_roots, deny=self.deny)
+        cache[ref] = media
+        return media
+
+    # -- publish --------------------------------------------------------------
+
+    async def publish(
+        self,
+        prepared: Prepared,
+        *,
+        idempotency_key: str | None = None,
+        caller: str,
+        tool: str = "publish",
+    ) -> Outcome:
+        now = self._now()
+        plan, bound = prepared.plan, prepared.bound
+        if plan.not_before is not None and now < plan.not_before:
+            raise PulsarError(
+                NOT_DUE,
+                f"not before {plan.not_before.isoformat()}",
+                detail={"retry_after": plan.not_before.isoformat()},
+            )
+        key = check_key(idempotency_key) or default_key(prepared.digest, bound.user_id)
+        channel = bound.channel
+        intents = [
+            ItemIntent(
+                text_sha256=hashlib.sha256(p.check.text.encode("utf-8")).hexdigest(),
+                fingerprint=channel.fingerprint(p.check.text),
+                est_cost_usd=p.check.estimated_cost_usd,
+            )
+            for p in prepared.posts
+        ]
+        tz = self.settings.policy.tz
+        day_start, _ = day_window(now, tz)
+        month_start, _ = month_window(now, tz)
+        already = self.ledger.get_plan(key)
+        done = {i.idx for i in already.items if i.state == PUBLISHED} if already else set[int]()
+        remaining = [intent for idx, intent in enumerate(intents) if idx not in done]
+
+        def admit(usage: Any) -> None:
+            self.policy.check(
+                usage=usage,
+                planned_cost_usd=round(sum(i.est_cost_usd for i in remaining), 6),
+                planned_posts=len(remaining),
+                now=now,
+            )
+
+        record = self.ledger.claim_plan(
+            key=key,
+            tool=tool,
+            digest=prepared.digest,
+            provider=bound.provider,
+            account=bound.ref,
+            caller=caller,
+            items=intents,
+            admit=admit,
+            day_start=day_start,
+            month_start=month_start,
+        )
+        if record.state in (PUBLISHED, SKIPPED):
+            return Outcome(record=record, replayed=True)
+        return await self._run(prepared, key, record)
+
+    async def _run(self, prepared: Prepared, key: str, record: PlanRecord) -> Outcome:
+        plan, channel = prepared.plan, prepared.bound.channel
+        post_ids = {i.idx: i.post_id for i in record.items if i.state == PUBLISHED}
+        error: PulsarError | None = None
+        posted: list[int] = []
+        for idx, post in enumerate(prepared.posts):
+            if idx in post_ids:
+                continue
+            reply_to = post_ids.get(idx - 1) if idx else plan.reply_to
+            self.ledger.begin_item(key, idx)
+            media_ids: list[str] = []
+            try:
+                for m in post.media:
+                    media_ids.append(await channel.upload(m))
+            except PulsarError as exc:
+                # An upload publishes nothing: the item definitively did not post.
+                self.ledger.item_failed(key, idx, exc)
+                error = exc
+                break
+            except BaseException as exc:
+                self.ledger.item_failed(key, idx, _unexpected(exc))
+                self.ledger.finish(key)
+                raise
+            try:
+                published = await channel.create(
+                    post.check.text,
+                    reply_to=reply_to,
+                    quote=plan.quote if idx == 0 else None,
+                    media_ids=tuple(media_ids),
+                )
+            except OutcomeUnknown as exc:
+                self.ledger.item_unknown(key, idx, exc)
+                error = exc
+                break
+            except PulsarError as exc:
+                self.ledger.item_failed(key, idx, exc)
+                error = exc
+                break
+            except BaseException as exc:
+                # A bug or a cancellation with the request possibly in flight.
+                self.ledger.item_unknown(
+                    key, idx, OutcomeUnknown(f"{exc.__class__.__name__} while posting")
+                )
+                self.ledger.finish(key)
+                raise
+            self.ledger.item_published(
+                key, idx, post_id=published.post_id, url=published.url, media_ids=tuple(media_ids)
+            )
+            post_ids[idx] = published.post_id
+            posted.append(idx)
+        final = self.ledger.finish(key)
+        if error is not None:
+            error.detail = {
+                **(error.detail or {}),
+                "idempotency_key": key,
+                "state": final.state,
+                "published": sorted(post_ids),
+            }
+        return Outcome(record=final, error=error, posted_now=posted)
+
+    # -- reconcile ------------------------------------------------------------
+
+    async def reconcile(self, bound: Bound) -> list[dict[str, Any]]:
+        """Settle this account's unknown (and abandoned submitting) rows from its timeline.
+
+        An item is published if a post with its fingerprint appeared after it
+        was sent and is not already another item's post; failed if the
+        provider's listing is complete, the grace period has passed and no
+        such post exists; otherwise it stays unknown.
+        """
+        now = self._now()
+        results: list[dict[str, Any]] = []
+        for record in self.ledger.unresolved(stale_after=STALE_SUBMITTING, now=now):
+            if record.account_alias != bound.alias:
+                continue
+            open_items = [i for i in record.items if i.state in ("unknown", "submitting")]
+            created = parse_ts(record.created_at)
+            sent = [parse_ts(i.submitted_at) for i in open_items if i.submitted_at is not None]
+            since = (min(sent) if sent else created) - CLOCK_SKEW
+            recent = await bound.channel.recent_posts(since)
+            taken = self.ledger.known_post_ids([p.post_id for p in recent.posts])
+            verdicts: list[dict[str, Any]] = []
+            for item in open_items:
+                sent_at = parse_ts(item.submitted_at) if item.submitted_at else created
+                match = next(
+                    (
+                        p
+                        for p in reversed(recent.posts)  # oldest first
+                        if p.fingerprint == item.fingerprint
+                        and p.created_at >= sent_at - CLOCK_SKEW
+                        and p.post_id not in taken
+                    ),
+                    None,
+                )
+                if match is not None:
+                    self.ledger.resolve_item(
+                        record.key, item.idx, post_id=match.post_id, url=match.url
+                    )
+                    taken.add(match.post_id)
+                    verdicts.append(
+                        {"idx": item.idx, "resolved": "published", "post_id": match.post_id}
+                    )
+                elif recent.complete and now - sent_at >= RECONCILE_GRACE:
+                    self.ledger.resolve_item(record.key, item.idx, post_id=None, url=None)
+                    verdicts.append({"idx": item.idx, "resolved": "absent"})
+                else:
+                    reason = "listing incomplete" if not recent.complete else "within grace period"
+                    verdicts.append({"idx": item.idx, "resolved": None, "reason": reason})
+            final = self.ledger.finish(record.key)
+            results.append({"idempotency_key": record.key, "state": final.state, "items": verdicts})
+        return results
+
+
+def _unexpected(exc: BaseException) -> PulsarError:
+    from .errors import API_ERROR
+
+    return PulsarError(API_ERROR, f"unexpected {exc.__class__.__name__}", retryable=True)
