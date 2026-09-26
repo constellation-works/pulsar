@@ -25,9 +25,21 @@ INVALID_CONFIG = "invalid_config"
 INSECURE_STORAGE = "insecure_storage"
 IDEMPOTENCY_CONFLICT = "idempotency_conflict"
 OUTCOME_UNKNOWN = "outcome_unknown"
+INVALID_PLAN = "invalid_plan"
+ACCOUNT_MISMATCH = "account_mismatch"
+UNKNOWN_ACCOUNT = "unknown_account"
+UNSUPPORTED = "unsupported"
+BUDGET_EXCEEDED = "budget_exceeded"
+DAILY_CAP = "daily_cap"
+QUIET_HOURS = "quiet_hours"
+# Phase 4 (drafts and approvals); declared now so the code list is stable.
+APPROVAL_REQUIRED = "approval_required"
+APPROVAL_STALE = "approval_stale"
 
-# Codes where repeating the identical call later can succeed.
-RETRYABLE_CODES = frozenset({RATE_LIMITED, API_ERROR})
+# Codes where repeating the identical call later can succeed. The policy
+# codes are retryable because the window moves: the day or month rolls over,
+# quiet hours end (``detail.retry_after`` says when).
+RETRYABLE_CODES = frozenset({RATE_LIMITED, API_ERROR, BUDGET_EXCEEDED, DAILY_CAP, QUIET_HOURS})
 
 
 class PulsarError(Exception):
@@ -39,6 +51,20 @@ class PulsarError(Exception):
         self.message = message
         self.detail = detail
         self.retryable = code in RETRYABLE_CODES if retryable is None else retryable
+
+    def to_envelope(self) -> dict[str, Any]:
+        """Orbit's error envelope: ``{ok: false, error: {code, message, retryable, detail?}}``.
+
+        The legacy MCP tools keep the flat ``to_result`` shape; new surfaces use this.
+        """
+        error: dict[str, Any] = {
+            "code": self.code,
+            "message": self.message,
+            "retryable": self.retryable,
+        }
+        if self.detail is not None:
+            error["detail"] = self.detail
+        return {"ok": False, "error": error}
 
     def to_result(self) -> dict[str, Any]:
         out: dict[str, Any] = {

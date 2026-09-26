@@ -73,13 +73,31 @@ unknown key or bad value fails with `invalid_config` rather than silently
 falling back:
 
 ```toml
-[prices]                 # USD per post, used for estimated_cost_usd
-plain_post_usd = 0.015   # X changes its price list; verify on the developer portal
-url_post_usd = 0.20
+default_account = "x:constworks"     # used when a call names no account
+
+[accounts."x:constworks"]
+expected_handle = "constworks"       # bound handle must match, else account_mismatch
+
+[prices.x]                           # USD per post, used for estimated_cost_usd and budgets
+plain_post_usd = 0.015               # X changes its price list; verify on the developer portal
+url_post_usd = 0.20                  # (flat plain_post_usd/url_post_usd under [prices] = X)
+
+[policy]                             # checked before any network call
+daily_budget_usd = 1.0               # all accounts; 0 stops all paid publishing
+monthly_budget_usd = 10.0
+max_posts_per_day = 5                # per account; every post of a thread counts
+quiet_hours = "23:00-07:00"          # optional; default none
+timezone = "UTC"                     # IANA zone for the day/month boundary and quiet hours
 
 [media]
 roots = ["~/workspace/constellation/marketing"]   # default: none (path uploads off)
 ```
+
+Account aliases are `provider:handle` and case-insensitive (`X:@ConstWorks`
+is `x:constworks`). A provider with no `[prices.<provider>]` table is priced
+at zero. The `[accounts]`, `[policy]` and `default_account` keys are parsed
+and validated now; the plan publisher that enforces them is landing in
+phase 2 (ORB-13028), and this section will say so when it does.
 
 `media.roots` are the only directories `upload_media` will read a `path` from
 (see [Media confinement](#media-confinement)). With none set, a `path` upload
