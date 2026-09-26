@@ -57,13 +57,14 @@ from .ops import (
     budget_report,
     check_limit,
 )
-from .runtime import Runtime, configure_logging, default_paths
+from .runtime import PLUGIN_STATE_ENV, Runtime, configure_logging, default_paths
 
 __all__ = [
     # the verbs, bound to a home: what the entry point supplies
     "App",
     # runtime
     "configure_logging",
+    "PLUGIN_STATE_ENV",
     "default_paths",
     "Runtime",
     # ops: the operator verbs

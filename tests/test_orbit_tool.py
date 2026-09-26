@@ -17,12 +17,11 @@ import pytest
 import yaml
 
 from pulsar import orbit_tool
-from pulsar.app import ops
-from pulsar.app.ops import publish_report
+from pulsar.app import App, default_paths, ops
 from pulsar.core.paths import Paths
 from pulsar.main import main as pulsar_main
 
-from .conftest import ALIAS, SECRETS, register
+from .conftest import ALIAS, SECRETS, make_app, register
 from .media_samples import PNG
 from .test_server import SECRET_PARAM
 
@@ -30,6 +29,11 @@ ROOT = Path(__file__).resolve().parent.parent
 MANIFEST = yaml.safe_load((ROOT / "plugin.yaml").read_text())
 GOLDENS = yaml.safe_load((ROOT / "tests" / "conformance" / "pulsar.yaml").read_text())["tests"]
 assert GOLDENS, "tests/conformance/pulsar.yaml has no cases"
+
+
+def plugin_app(environ: dict[str, str]) -> App:
+    """The app ``pulsar.main`` builds for ``pulsar orbit-tool`` under ``environ``."""
+    return App(default_paths(environ, Path.home()), environ=environ, cwd=Path.cwd())
 
 
 @pytest.fixture
@@ -68,7 +72,7 @@ def run(
     request.update(envelope)
     out = io.StringIO()
     code = orbit_tool.main(
-        io.StringIO(json.dumps(request)), out, {"ORBIT_PLUGIN_STATE": str(state)}
+        plugin_app({"ORBIT_PLUGIN_STATE": str(state)}), io.StringIO(json.dumps(request)), out
     )
     assert code == 0
     lines = out.getvalue().splitlines()
@@ -127,8 +131,8 @@ def test_no_request_schema_takes_a_credential():
 def test_launcher_and_skill_ship_in_the_tree():
     launcher = ROOT / MANIFEST["spec"]["backend"]["command"]
     assert launcher.is_file() and os.access(launcher, os.X_OK)
-    assert "pulsar.orbit_tool" in launcher.read_text(), (
-        "the manifest's backend command must exec the Orbit backend module"
+    assert "-m pulsar orbit-tool" in launcher.read_text(), (
+        "the manifest's backend command must exec the Orbit backend through the entry point"
     )
     for skill in MANIFEST["spec"]["skills"]:
         text = (ROOT / skill / "SKILL.md").read_text()
@@ -144,7 +148,7 @@ def test_launcher_and_skill_ship_in_the_tree():
 
 def _raw(text: str) -> dict[str, Any]:
     out = io.StringIO()
-    orbit_tool.main(io.StringIO(text), out, {"ORBIT_PLUGIN_STATE": "/nonexistent"})
+    orbit_tool.main(plugin_app({"ORBIT_PLUGIN_STATE": "/nonexistent"}), io.StringIO(text), out)
     return json.loads(out.getvalue())
 
 
@@ -177,7 +181,7 @@ def test_plugin_config_keys_are_refused(state, workspace):
 
 
 def test_an_unexpected_failure_is_still_one_envelope(state, workspace, monkeypatch):
-    async def boom(paths, call):
+    async def boom(app, call):
         raise RuntimeError("secret detail that must not leak")
 
     monkeypatch.setitem(orbit_tool.TOOLS, "status", boom)
@@ -208,7 +212,9 @@ def test_cli_orbit_tool_reads_stdin(paths, monkeypatch, capsys):
 def test_a_different_pulsar_home_under_orbit_is_refused_before_any_work(state):
     elsewhere = state.parent / "elsewhere"
     environ = {"ORBIT_PLUGIN_STATE": str(state), "PULSAR_HOME": str(elsewhere)}
-    response = orbit_tool.handle({"schema_version": 1, "tool": "pulsar.history"}, environ)
+    response = orbit_tool.handle(
+        {"schema_version": 1, "tool": "pulsar.history"}, plugin_app(environ)
+    )
     assert response["ok"] is False and response["error"]["code"] == "invalid_config"
     assert response["error"]["detail"] == {
         "pulsar_home": str(elsewhere),
@@ -219,7 +225,9 @@ def test_a_different_pulsar_home_under_orbit_is_refused_before_any_work(state):
 
 def test_pulsar_home_naming_the_plugin_home_is_accepted(state):
     environ = {"ORBIT_PLUGIN_STATE": str(state), "PULSAR_HOME": str(state / "home")}
-    response = orbit_tool.handle({"schema_version": 1, "tool": "pulsar.history"}, environ)
+    response = orbit_tool.handle(
+        {"schema_version": 1, "tool": "pulsar.history"}, plugin_app(environ)
+    )
     assert response["ok"] is True
 
 
@@ -285,7 +293,7 @@ def test_history_and_status_see_what_was_published(
     plan = tmp_path / "plan.yaml"
     plan.write_text('account: x:constworks\nposts: [{text: "one"}, {text: "two"}]\n')
     receipt, code = asyncio.run(
-        publish_report(home, plan, confirm=True, transport=fake_x.transport())
+        make_app(home, transport=fake_x.transport()).publish(plan, confirm=True)
     )
     assert code == 0
     requests = len(fake_x.requests)

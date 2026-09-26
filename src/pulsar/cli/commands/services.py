@@ -51,10 +51,10 @@ def _port(value: str) -> int:
     return port
 
 
-def _orbit_tool(_args: argparse.Namespace, _ctx: toolkit.Context) -> int:
+def _orbit_tool(_args: argparse.Namespace, ctx: toolkit.Context) -> int:
     from pulsar.orbit_tool import main as orbit_tool_main
 
-    return orbit_tool_main()
+    return orbit_tool_main(ctx.app)
 
 
 def _serve(args: argparse.Namespace, ctx: toolkit.Context) -> int:

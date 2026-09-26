@@ -22,8 +22,6 @@ import time
 from pathlib import Path
 from typing import Any, Literal, assert_never
 
-import httpx
-
 from pulsar.core import (
     ACTIVE,
     AUTH_EXPIRED,
@@ -31,13 +29,11 @@ from pulsar.core import (
     REVOKED,
     Account,
     AccountRegistry,
-    Paths,
     PulsarError,
     Settings,
     check_handle,
     expected_handles,
     home_command,
-    load_settings,
     login_command,
 )
 from pulsar.providers.x import REFRESH_AHEAD_SECONDS, load_client_id
@@ -77,17 +73,11 @@ def attention(entry: dict[str, Any], home: Path) -> str | None:
             assert_never(health)
 
 
-async def auth_report(
-    paths: Paths,
-    *,
-    account: str | None = None,
-    live: bool = False,
-    settings: Settings | None = None,
-    transport: httpx.AsyncBaseTransport | None = None,
-) -> Report:
+async def auth_report(rt: Runtime, *, account: str | None = None, live: bool = False) -> Report:
     """Every registered account (or just ``account``) and its health; exit 0
     only when every reported account is ``healthy``. Raises ``PulsarError``
-    when the home itself cannot be read."""
+    when the home itself cannot be read. Only ``live`` uses ``rt``'s clients."""
+    paths, settings, registry = rt.paths, rt.settings, rt.registry
     out: dict[str, Any] = {
         "home": str(paths.home),
         "client_id": None,
@@ -96,8 +86,6 @@ async def auth_report(
         "accounts": [],
     }
     out["client_id"] = load_client_id(paths)
-    settings = settings or load_settings(paths)
-    registry = AccountRegistry(paths)
     legacy = registry.legacy_status(settings)
     if legacy.state != "none":
         out["legacy"] = {"state": legacy.state, "alias": legacy.alias, "message": legacy.message}
@@ -107,13 +95,8 @@ async def auth_report(
     else:
         rows = registry.accounts()
         targets = [rows[alias] for alias in sorted(rows)]
-    rt = Runtime(paths, settings=settings, transport=transport) if live else None
-    try:
-        for target in targets:
-            out["accounts"].append(await _account(registry, settings, target, rt))
-    finally:
-        if rt is not None:
-            await rt.aclose()
+    for target in targets:
+        out["accounts"].append(await _account(registry, settings, target, rt if live else None))
     ok = bool(targets) and all(entry["health"] == "healthy" for entry in out["accounts"])
     return out, 0 if ok else 1
 

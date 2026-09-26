@@ -1,4 +1,4 @@
-# Advisory monitoring for every third-party dependency (STD-05 §R24): the
+# Advisory monitoring for every third-party dependency: the
 # uv lockfile at the root pins them all (pyproject.toml + uv.lock).
 version: 2
 updates:

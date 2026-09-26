@@ -9,11 +9,14 @@ and reads exactly one JSON object from stdout: ``{"ok": true, "output": ...}``
 or ``{"ok": false, "error": {"code", "message", "retryable", "detail"?}}``.
 Nothing else may reach stdout; diagnostics go to stderr.
 
-The pulsar home is ``$ORBIT_PLUGIN_STATE/home``: the plugin sandbox can
-write only ``{{plugin_state}}``, and the CLI and standalone MCP server reach
-the same home (so the same ledger) with ``PULSAR_HOME``. Outside Orbit (no
-``ORBIT_PLUGIN_STATE``) the usual ``PULSAR_HOME`` / ``~/.config/pulsar``
-applies, which is what ``pulsar orbit-tool`` uses for local debugging.
+Orbit runs it as ``pulsar orbit-tool`` (``bin/pulsar``), so the entry point
+(``pulsar.main``) builds the ``App`` it answers with. Its home is
+``$ORBIT_PLUGIN_STATE/home`` (``pulsar.app.default_paths``): the plugin
+sandbox can write only ``{{plugin_state}}``, and the CLI and standalone MCP
+server reach the same home (so the same ledger) with ``PULSAR_HOME``. Outside
+Orbit (no ``ORBIT_PLUGIN_STATE``) the usual ``PULSAR_HOME`` /
+``~/.config/pulsar`` applies, which is what ``pulsar orbit-tool`` uses for
+local debugging.
 
 Settings come from the home's ``config.toml``, as for every other surface:
 policy is enforced against one ledger, so it must have one source. The
@@ -46,10 +49,11 @@ from pulsar.app import (
     INVALID_MEDIA,
     INVALID_PLAN,
     INVALID_TEXT,
+    PLUGIN_STATE_ENV,
     PUBLISHED,
     SECRET_DETECTED,
     UNSUPPORTED,
-    Paths,
+    App,
     Plan,
     PlanRecord,
     PulsarError,
@@ -59,7 +63,6 @@ from pulsar.app import (
     auth_report,
     budget_report,
     check_limit,
-    configure_logging,
     home_command,
     load_settings,
     open_beneath,
@@ -104,34 +107,31 @@ class Call:
         return value.strip()
 
 
-def plugin_paths(environ: Mapping[str, str]) -> Paths:
-    """``$ORBIT_PLUGIN_STATE/home`` under Orbit, else the usual home.
+def check_plugin_home(app: App) -> None:
+    """Under Orbit, refuse a ``PULSAR_HOME`` that names another home than the plugin's.
 
-    Under Orbit the sandbox can write only the plugin state, so a
-    ``PULSAR_HOME`` naming any other home cannot be honoured; it is refused
-    before any work rather than ignored, which would give this
-    call a different ledger from the CLI's and defeat its duplicate guard.
+    The sandbox can write only the plugin state, so that home cannot be
+    honoured; it is refused before any work rather than ignored, which would
+    give this call a different ledger from the CLI's and defeat its duplicate
+    guard.
     """
-    home_env = environ.get("HOME")
-    user_home = Path(home_env) if home_env else Path.home()
-    state = environ.get("ORBIT_PLUGIN_STATE")
-    if not state:
-        return Paths.from_environ(environ, user_home)
-    home = Path(state) / "home"
-    other = environ.get("PULSAR_HOME")
-    if other and resolve_home(environ, user_home) != home:
+    other = app.environ.get("PULSAR_HOME")
+    if not app.environ.get(PLUGIN_STATE_ENV) or not other:
+        return
+    user_home = app.paths.user_home
+    named = resolve_home(app.environ, user_home) if user_home is not None else Path(other)
+    if named != app.paths.home:
         raise PulsarError(
             INVALID_CONFIG,
-            f"PULSAR_HOME={other} names a different home from this plugin's ({home}); under "
+            f"PULSAR_HOME={other} names a different home from this plugin's ({app.home}); under "
             "Orbit pulsar can use only its plugin state. Unset PULSAR_HOME for the Orbit "
-            f"host, or set it to {home}",
-            detail={"pulsar_home": other, "plugin_home": str(home)},
+            f"host, or set it to {app.home}",
+            detail={"pulsar_home": other, "plugin_home": str(app.home)},
         )
-    return Paths(home=home, user_home=user_home)
 
 
-def _settings(paths: Paths, call: Call) -> Settings:
-    settings = load_settings(paths)
+def _settings(app: App, call: Call) -> Settings:
+    settings = load_settings(app.paths)
     # The sandbox can read only the workspace; configured roots elsewhere
     # would be unreadable, so plugin calls confine media to the workspace.
     roots = (call.workspace,) if call.workspace is not None else ()
@@ -141,18 +141,17 @@ def _settings(paths: Paths, call: Call) -> Settings:
 # -- tools ----------------------------------------------------------------------------
 
 
-async def status(paths: Paths, call: Call) -> Output:
+async def status(app: App, call: Call) -> Output:
     """Accounts, token health, budget use, unresolved writes, last publication.
 
     Offline and read-only: token health from local state (``unverified``
     when that cannot settle it), nothing migrated or written.
     """
     account = call.string("account")
-    auth, _ = await auth_report(paths, account=account)
-    budget, _ = budget_report(paths, account=account)
-    usage = {entry["alias"]: entry for entry in budget["accounts"]}
-    rt = Runtime(paths, read_only=True)
-    try:
+    async with app.runtime(read_only=True) as rt:
+        auth, _ = await auth_report(rt, account=account)
+        budget, _ = budget_report(rt, account=account)
+        usage = {entry["alias"]: entry for entry in budget["accounts"]}
         accounts: list[dict[str, Any]] = []
         attention: list[str] = []
         for entry in auth["accounts"]:
@@ -177,23 +176,21 @@ async def status(paths: Paths, call: Call) -> Output:
                 "last_published": _last_published(rt, alias),
             }
             accounts.append(row)
-            if (note := health_attention(entry, paths.home)) is not None:
+            if (note := health_attention(entry, app.home)) is not None:
                 attention.append(note)
             if row["unresolved"]:
                 attention.append(
                     f"{alias}: {len(row['unresolved'])} write(s) with an unknown outcome "
-                    f"(`{home_command(paths.home, f'reconcile --account {alias}')}`)"
+                    f"(`{home_command(app.home, f'reconcile --account {alias}')}`)"
                 )
         if not accounts:
             # No home here: this is a conformance golden and the sandbox's home varies.
             attention.append("no account is bound (`pulsar auth login --account x:<handle>`)")
         if auth["legacy"] is not None:
             remedy = auth["legacy"]["message"] or (
-                f"run `{home_command(paths.home, 'migrate --confirm')}`"
+                f"run `{home_command(app.home, 'migrate --confirm')}`"
             )
             attention.append(f"legacy credentials: {remedy}")
-    finally:
-        await rt.aclose()
     return {
         "default_account": auth["default_account"],
         "healthy": not attention,
@@ -209,7 +206,7 @@ def _last_published(rt: Runtime, alias: str) -> dict[str, Any] | None:
     return {"key": record.key, "url": record.url, "at": record.updated_at}
 
 
-async def validate(paths: Paths, call: Call) -> Output:
+async def validate(app: App, call: Call) -> Output:
     """What publishing a plan would send, per account. Offline; claims and sends nothing.
 
     A plan that fails validation is a result (``valid: false``), not a tool
@@ -226,20 +223,19 @@ async def validate(paths: Paths, call: Call) -> Output:
     text = _read_source(call, source) if source is not None else None
     account = call.string("account")
     # Relative media paths start at the workspace, never at this process's cwd.
-    rt = Runtime(paths, settings=_settings(paths, call), media_base=call.workspace, read_only=True)
-    try:
-        if text is not None:
-            plan = Plan.from_yaml(text)
-        else:
-            plan = Plan.from_mapping(plan_input or {})
-        plan, targets = rt.plan_targets(plan, account)
-        reports = [rt.publisher.prepare(plan, rt.offline_bound(a)).report() for a in targets]
-    except PulsarError as exc:
-        if exc.code not in PLAN_VERDICTS:
-            raise  # the account, the home or the storage: a tool error, not a verdict
-        return {"valid": False, "error": exc.to_envelope()["error"]}
-    finally:
-        await rt.aclose()
+    rt = app.runtime(read_only=True, settings=_settings(app, call), media_base=call.workspace)
+    async with rt:
+        try:
+            if text is not None:
+                plan = Plan.from_yaml(text)
+            else:
+                plan = Plan.from_mapping(plan_input or {})
+            plan, targets = rt.plan_targets(plan, account)
+            reports = [rt.publisher.prepare(plan, rt.offline_bound(a)).report() for a in targets]
+        except PulsarError as exc:
+            if exc.code not in PLAN_VERDICTS:
+                raise  # the account, the home or the storage: a tool error, not a verdict
+            return {"valid": False, "error": exc.to_envelope()["error"]}
     return {"valid": True, "accounts": reports}
 
 
@@ -299,20 +295,17 @@ def _reason(exc: BaseException) -> str:
     return exc.strerror if isinstance(exc, OSError) and exc.strerror else type(exc).__name__
 
 
-async def history(paths: Paths, call: Call) -> Output:
+async def history(app: App, call: Call) -> Output:
     """The newest ledger rows, flattened for a table, and how many there are. Offline."""
     account = call.string("account")
     limit = call.input.get("limit", HISTORY_LIMIT_DEFAULT)
     if not isinstance(limit, int):
         raise PulsarError(INVALID_ARGUMENT, f"`limit` must be an integer 1..{HISTORY_LIMIT_MAX}")
     limit = check_limit(limit)
-    rt = Runtime(paths, read_only=True)
-    try:
+    async with app.runtime(read_only=True) as rt:
         alias = rt.account(account).alias if account is not None else None
         rows = [_row(r) for r in rt.ledger.history(limit=limit, account_alias=alias)]
         total = rt.ledger.count(account_alias=alias)
-    finally:
-        await rt.aclose()
     return {"rows": rows, "total": total, "truncated": total > len(rows)}
 
 
@@ -333,7 +326,7 @@ def _row(record: PlanRecord) -> dict[str, Any]:
     }
 
 
-Handler = Callable[[Paths, Call], Coroutine[Any, Any, Output]]
+Handler = Callable[[App, Call], Coroutine[Any, Any, Output]]
 
 TOOLS: dict[str, Handler] = {"status": status, "validate": validate, "history": history}
 
@@ -345,12 +338,13 @@ def _failure(exc: PulsarError) -> dict[str, Any]:
     return exc.to_envelope()
 
 
-def handle(envelope: object, environ: Mapping[str, str]) -> dict[str, Any]:
+def handle(envelope: object, app: App) -> dict[str, Any]:
     """One envelope in, one response out. Never raises."""
     try:
-        request = _parse(envelope, environ)
+        request = _parse(envelope, app.environ)
         handler = TOOLS[request.tool]
-        output = asyncio.run(handler(plugin_paths(environ), request))
+        check_plugin_home(app)
+        output = asyncio.run(handler(app, request))
     except PulsarError as exc:
         return _failure(exc)
     except Exception as exc:
@@ -404,28 +398,18 @@ def _parse(envelope: object, environ: Mapping[str, str]) -> Call:
     return Call(verb, input_, context)
 
 
-def main(
-    stdin: IO[str] | None = None,
-    stdout: IO[str] | None = None,
-    environ: Mapping[str, str] | None = None,
-) -> int:
+def main(app: App, stdin: IO[str] | None = None, stdout: IO[str] | None = None) -> int:
     """Read one envelope, write one response. The exit code is 0 whenever a
     response was written: the envelope's ``ok`` carries the outcome."""
     source = stdin or sys.stdin
     sink = stdout or sys.stdout
-    environ = os.environ if environ is None else environ
     raw = source.read()
     try:
         envelope: object = json.loads(raw)
     except ValueError:
         response = _failure(PulsarError(INVALID_ARGUMENT, "the request envelope is not JSON"))
     else:
-        response = handle(envelope, environ)
+        response = handle(envelope, app)
     sink.write(json.dumps(response, ensure_ascii=False, separators=(",", ":")) + "\n")
     sink.flush()
     return 0
-
-
-if __name__ == "__main__":
-    configure_logging()
-    raise SystemExit(main())

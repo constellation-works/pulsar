@@ -1,19 +1,22 @@
 """``App``: pulsar's verbs, bound to one home and one transport.
 
-The entry point (``pulsar.main``) builds one and hands it to a front end; the
-front end calls it and never constructs anything below. Each verb returns a
+The entry point (``pulsar.main``) builds one from what it read of the process
+(the environment, the cwd, the home) and hands it to a front end; the front
+end calls it and never constructs anything below. Each verb builds the
+``Runtime`` it needs and hands it to ``ops`` or ``health``. Each verb returns a
 report ``(payload, exit_code)``: 0 settled and healthy, 1 not. Checks on how a
 verb was invoked (a missing flag, a missing ``--confirm``) are the front end's.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 import httpx
 
-from pulsar.core import AccountRegistry, Paths, PulsarError, load_settings
+from pulsar.core import AccountRegistry, Paths, PulsarError, Settings, load_settings
 from pulsar.providers.x import load_client_id, login
 
 from . import health, ops
@@ -23,19 +26,46 @@ Report = tuple[dict[str, Any], int]
 
 
 class App:
-    """The verbs over ``paths``; ``transport`` replaces the network in tests."""
+    """The verbs over ``paths``.
 
-    def __init__(self, paths: Paths, *, transport: httpx.AsyncBaseTransport | None = None) -> None:
+    ``environ`` is the process environment (``PULSAR_CALLER``, Orbit's), ``cwd``
+    where relative media paths start; ``transport`` replaces the network in tests.
+    """
+
+    def __init__(
+        self,
+        paths: Paths,
+        *,
+        environ: Mapping[str, str],
+        cwd: Path,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
         self.paths = paths
+        self.environ = environ
+        self.cwd = cwd
         self.transport = transport
 
     @property
     def home(self) -> Path:
         return self.paths.home
 
-    def runtime(self) -> Runtime:
-        """A runtime over this home, for a long-running server."""
-        return Runtime(self.paths)
+    def runtime(
+        self,
+        *,
+        read_only: bool = False,
+        settings: Settings | None = None,
+        media_base: Path | None = None,
+    ) -> Runtime:
+        """A runtime over this home: the home's settings unless ``settings``,
+        media paths from ``media_base`` else the cwd."""
+        return Runtime(
+            self.paths,
+            load_settings(self.paths) if settings is None else settings,
+            environ=self.environ,
+            media_base=self.cwd if media_base is None else media_base,
+            transport=self.transport,
+            read_only=read_only,
+        )
 
     # -- accounts ---------------------------------------------------------------------
 
@@ -74,16 +104,16 @@ class App:
             "home": str(self.home),
         }, 0
 
-    async def auth_status(self, *, account: str | None, live: bool) -> Report:
-        return await health.auth_report(
-            self.paths, account=account, live=live, transport=self.transport
-        )
+    async def auth_status(self, *, account: str | None = None, live: bool = False) -> Report:
+        # Only ``live`` may migrate, refresh and record; the offline report changes nothing.
+        async with self.runtime(read_only=not live) as rt:
+            return await health.auth_report(rt, account=account, live=live)
 
     def attention(self, entry: dict[str, Any]) -> str | None:
         """The remedy to show for one ``auth_status`` entry, if it needs one."""
         return health.attention(entry, self.home)
 
-    def logout(self, account: str | None) -> Report:
+    def logout(self, account: str | None = None) -> Report:
         """Delete the account's tokens; the account is kept as revoked."""
         registry = AccountRegistry(self.paths)
         bound = registry.resolve(account, load_settings(self.paths))
@@ -96,7 +126,7 @@ class App:
             "status": "revoked",
         }, 0
 
-    def auth_migrate(self, *, account: str | None, confirm: bool) -> Report:
+    def auth_migrate(self, *, account: str | None = None, confirm: bool = False) -> Report:
         """Report what moving phase 1 credentials would do; ``confirm`` makes it."""
         registry, settings = AccountRegistry(self.paths), load_settings(self.paths)
         if confirm:
@@ -121,41 +151,47 @@ class App:
 
     # -- operator verbs ---------------------------------------------------------------
 
-    def status(self, *, account: str | None) -> Report:
-        return ops.budget_report(self.paths, account=account)
+    def status(self, *, account: str | None = None) -> Report:
+        return ops.budget_report(self.runtime(read_only=True), account=account)
 
-    def history(self, *, account: str | None, limit: int) -> Report:
-        return ops.history_report(self.paths, account=account, limit=limit)
+    def history(
+        self, *, account: str | None = None, limit: int = ops.HISTORY_LIMIT_DEFAULT
+    ) -> Report:
+        return ops.history_report(self.runtime(read_only=True), account=account, limit=limit)
 
-    async def validate(self, plan: Path, *, account: str | None) -> Report:
-        return await ops.validate_report(self.paths, plan, account=account)
+    async def validate(self, plan: Path, *, account: str | None = None) -> Report:
+        async with self.runtime(read_only=True) as rt:
+            return await ops.validate_report(rt, plan, account=account)
 
     async def publish(
         self,
         plan: Path,
         *,
-        account: str | None,
-        idempotency_key: str | None,
-        caller: str | None,
-        confirm: bool,
+        account: str | None = None,
+        idempotency_key: str | None = None,
+        caller: str | None = None,
+        confirm: bool = False,
     ) -> Report:
-        return await ops.publish_report(
-            self.paths,
-            plan,
-            account=account,
-            idempotency_key=idempotency_key,
-            caller=caller,
-            confirm=confirm,
-            transport=self.transport,
-        )
+        # Without ``confirm`` it only validates: read-only, nothing written.
+        async with self.runtime(read_only=not confirm) as rt:
+            return await ops.publish_report(
+                rt,
+                plan,
+                account=account,
+                idempotency_key=idempotency_key,
+                caller=caller,
+                confirm=confirm,
+            )
 
-    async def reconcile(self, *, account: str | None) -> Report:
-        return await ops.reconcile_report(self.paths, account=account, transport=self.transport)
+    async def reconcile(self, *, account: str | None = None) -> Report:
+        async with self.runtime() as rt:
+            return await ops.reconcile_report(rt, account=account)
 
-    async def import_posted(self, source: Path, *, account: str | None, confirm: bool) -> Report:
-        return await ops.import_report(
-            self.paths, source, account=account, confirm=confirm, transport=self.transport
-        )
+    async def import_posted(
+        self, source: Path, *, account: str | None = None, confirm: bool = False
+    ) -> Report:
+        async with self.runtime(read_only=not confirm) as rt:
+            return await ops.import_report(rt, source, account=account, confirm=confirm)
 
-    def migrate(self, *, confirm: bool) -> Report:
-        return ops.migrate_report(self.paths, confirm=confirm)
+    def migrate(self, *, confirm: bool = False) -> Report:
+        return ops.migrate_report(self.runtime(read_only=not confirm), confirm=confirm)

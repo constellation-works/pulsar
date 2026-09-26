@@ -14,10 +14,9 @@ from pulsar.core.fsutil import hold_lock, write_private_atomic
 from pulsar.core.paths import Paths
 from pulsar.core.store import CredentialConflict, FernetFileStore, TokenBundle
 from pulsar.core.writelog import WriteLog
-from pulsar.mcp import Runtime
 from pulsar.providers.x.auth import load_client_id, save_client_id
 
-from .conftest import register
+from .conftest import make_runtime, register
 from .lock_probe import blocked_on_lock
 
 
@@ -246,7 +245,7 @@ async def test_every_file_pulsar_creates_is_0600_under_a_loose_umask(
 ):
     register(paths, bundle)  # key, accounts/x--constworks/tokens.enc, accounts.json/.lock
     save_client_id(paths, "client-xyz")  # client.json
-    rt = Runtime(paths, transport=fake_x.transport())
+    rt = make_runtime(paths, transport=fake_x.transport())
     try:
         await rt.whoami()  # the identity lands in accounts.json
     finally:

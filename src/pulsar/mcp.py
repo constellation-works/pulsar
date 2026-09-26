@@ -264,8 +264,7 @@ def _validate(
     }
 
 
-def build_server(runtime: Runtime | None = None) -> MCPServer:
-    rt = runtime or Runtime()
+def build_server(rt: Runtime) -> MCPServer:
 
     @_guarded
     async def whoami(account: AccountArg = None) -> dict[str, Any]:

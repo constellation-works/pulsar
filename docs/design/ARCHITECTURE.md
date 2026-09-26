@@ -39,20 +39,22 @@ CLI. Tests hand in an `App` on the fake transport the same way.
 | `app` | `App`, over the `Runtime` that joins settings, storage, the ledger and providers (`runtime.py`), the operator verbs (`ops.py`) and account health (`health.py`), each returning `(report, exit_code)` |
 | `mcp.py`, `orbit_tool.py` | the MCP server and the Orbit exec backend |
 | `cli/` | the dispatcher: `main.py` (`run`) parses argv and dispatches to `commands/` (one module per command, each declaring itself in `register`), which print and fail through `toolkit/` (`parser`, `context`, `render`, `views`, `errors`) |
-| `main.py` | the entry point: builds `App` and runs the CLI with it |
+| `main.py` | the entry point: reads the environment, cwd and `$HOME`, builds `App` and runs the CLI with it |
 
 ## Ambient state
 
 `core` takes the environment, the working directory and the home as arguments.
-The front ends and `app` resolve them once, at the edge:
+The entry point (`pulsar.main`) reads them once and builds the `App` with them; everything
+below receives them from there:
 
 - **Home.** `PULSAR_HOME`, else `~/.config/pulsar`; under Orbit, `$ORBIT_PLUGIN_STATE/home`
-  (`orbit_tool.plugin_paths`). `app.runtime.default_paths` is where a front end turns the
-  environment into `Paths`; no core module reads the environment, the cwd or `$HOME`.
-- **Relative media paths** start from the `media_base` a surface passes to `Runtime`: the
+  (`app.default_paths`). The Orbit backend refuses a `PULSAR_HOME` that names another home
+  (`orbit_tool.check_plugin_home`). Orbit runs the backend as `pulsar orbit-tool`, so it gets
+  the same `App`.
+- **Relative media paths** start from the `media_base` `App.runtime` passes to `Runtime`: the
   process cwd for the CLI and MCP server, the workspace root for the Orbit backend. Core
   refuses a relative path with no base.
-- **Caller label.** `Runtime.caller` reads `PULSAR_CALLER` from the environment it was given.
+- **Caller label.** `Runtime.caller` reads `PULSAR_CALLER` from the environment `App` was given.
 
 ## Errors
 

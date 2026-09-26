@@ -27,11 +27,11 @@ from pulsar.core.errors import PulsarError
 from pulsar.core.paths import account_slug, alias_from_slug
 from pulsar.core.settings import AccountConfig, Settings
 from pulsar.core.store import FernetFileStore, TokenBundle
-from pulsar.mcp import Runtime, build_server
+from pulsar.mcp import build_server
 from pulsar.providers.x.auth import complete_login
 from pulsar.providers.x.client import XClient
 
-from .conftest import ALIAS, REFRESH, ROTATED_ACCESS, SECRETS, register
+from .conftest import ALIAS, REFRESH, ROTATED_ACCESS, SECRETS, make_runtime, register
 from .lock_probe import blocked_on_lock
 from .media_samples import PNG
 
@@ -185,7 +185,9 @@ async def _call(rt, tool, args):
 async def test_a_wrong_token_under_the_right_name_cannot_post(paths, authed, fake_x):
     """2026-09-16: the stored token was another account's. Now it never posts."""
     fake_x.username = "impostor"
-    rt = Runtime(paths, settings=_settings(**{ALIAS: "constworks"}), transport=fake_x.transport())
+    rt = make_runtime(
+        paths, settings=_settings(**{ALIAS: "constworks"}), transport=fake_x.transport()
+    )
     try:
         out = await _call(rt, "create_post", {"text": "hello"})
         assert out["code"] == "account_mismatch"
@@ -315,7 +317,7 @@ async def test_the_account_argument_picks_who_posts(paths, bundle):
     register(paths, _bundle(bundle, access_token="access-other"), OTHER)
     posts: list[tuple[str, str]] = []
     users = {bundle.access_token: ("1", "constworks"), "access-other": ("2", "other")}
-    rt = Runtime(paths, settings=Settings(), transport=_users_x(users, posts))
+    rt = make_runtime(paths, settings=Settings(), transport=_users_x(users, posts))
     try:
         several = await _call(rt, "create_post", {"text": "who am i"})
         assert several["code"] == "invalid_argument"
@@ -336,7 +338,7 @@ async def test_the_account_argument_picks_who_posts(paths, bundle):
 async def test_a_failed_refresh_marks_the_account_reauth_required(paths, authed, fake_x):
     fake_x.fail_auth_once = True
     fake_x.refresh_status = 401
-    rt = Runtime(paths, settings=Settings(), transport=fake_x.transport())
+    rt = make_runtime(paths, settings=Settings(), transport=fake_x.transport())
     try:
         assert (await _call(rt, "create_post", {"text": "hello"}))["code"] == "auth_expired"
     finally:
@@ -360,7 +362,7 @@ async def test_logout_revokes_under_the_lock_and_keeps_history(paths, bundle, fa
     thread.join(5)
     row = registry.get(ALIAS)
     assert store.load() is None and row.status == "revoked" and row.handle == "constworks"
-    rt = Runtime(paths, settings=Settings(), transport=fake_x.transport())
+    rt = make_runtime(paths, settings=Settings(), transport=fake_x.transport())
     try:
         out = await _call(rt, "whoami", {"account": ALIAS})
     finally:
@@ -408,7 +410,7 @@ def _migrated(paths, stored, *, handle="constworks"):
 
 async def test_first_use_migrates_via_a_matching_whoami(paths, bundle, legacy_store, fake_x):
     stored = _legacy(paths, legacy_store, bundle)
-    rt = Runtime(paths, settings=Settings(), transport=fake_x.transport())
+    rt = make_runtime(paths, settings=Settings(), transport=fake_x.transport())
     try:
         assert (await rt.whoami())["username"] == "constworks"
     finally:
@@ -422,7 +424,7 @@ async def test_first_use_migrates_via_default_account(paths, bundle, legacy_stor
     result = AccountRegistry(paths).migrate_legacy(_settings(default=ALIAS))
     assert (result.state, result.alias) == ("migrated", ALIAS)
     _migrated(paths, stored, handle=None)
-    rt = Runtime(paths, settings=_settings(default=ALIAS), transport=fake_x.transport())
+    rt = make_runtime(paths, settings=_settings(default=ALIAS), transport=fake_x.transport())
     try:
         assert (await _call(rt, "create_post", {"text": "hi"}))["ok"] is True
     finally:

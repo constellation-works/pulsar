@@ -8,12 +8,12 @@ import logging
 
 import pytest
 
-from pulsar.app.runtime import CALLER_ENV, RedactingFilter, Runtime, configure_logging
+from pulsar.app.runtime import CALLER_ENV, RedactingFilter, configure_logging
 from pulsar.core.errors import AuthExpired, PulsarError
 from pulsar.core.settings import Settings
 from pulsar.core.store import FernetFileStore
 
-from .conftest import ALIAS, register
+from .conftest import ALIAS, make_runtime, register
 
 LEAKED_VALUE = "abcdefghijklmnopqrstuvwxyz0123456789"
 LEAKED = f"Authorization: Bearer {LEAKED_VALUE}"
@@ -66,7 +66,7 @@ def test_configure_logging_installs_one_redacting_stderr_handler(monkeypatch, ca
 
 
 def test_the_caller_label_prefers_the_argument_then_the_environment(paths, monkeypatch):
-    runtime = Runtime(paths)
+    runtime = make_runtime(paths)
     assert runtime.caller(None) == "unknown"
     monkeypatch.setenv(CALLER_ENV, "nightly-routine")  # read live, after construction
     assert runtime.caller(None) == "nightly-routine"
@@ -75,7 +75,7 @@ def test_the_caller_label_prefers_the_argument_then_the_environment(paths, monke
 
 def test_a_credential_shaped_caller_is_refused(paths):
     with pytest.raises(PulsarError) as exc:
-        Runtime(paths).caller(f"bot {LEAKED}")
+        make_runtime(paths).caller(f"bot {LEAKED}")
     assert exc.value.code == "secret_detected"
     assert LEAKED_VALUE not in str(exc.value)
 
@@ -98,7 +98,7 @@ def _off_the_loop(calls: list[str], name: str, fn):
 async def test_account_and_credential_io_runs_off_the_event_loop(
     paths, authed, fake_x, monkeypatch
 ):
-    rt = Runtime(paths, settings=Settings(), transport=fake_x.transport())
+    rt = make_runtime(paths, settings=Settings(), transport=fake_x.transport())
     calls: list[str] = []
     monkeypatch.setattr(rt, "account", _off_the_loop(calls, "account", rt.account))
     registry = rt.registry
@@ -124,7 +124,7 @@ async def test_a_missing_login_names_the_home_to_log_in_to(paths, status):
     """Under Orbit the home is the plugin's, so a bare ``pulsar auth login``
     would bind the operator's default home instead."""
     register(paths, None, status=status)
-    rt = Runtime(paths, settings=Settings())
+    rt = make_runtime(paths, settings=Settings())
     try:
         with pytest.raises(AuthExpired) as exc:
             await rt.identity(ALIAS)

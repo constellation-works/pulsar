@@ -36,7 +36,7 @@ from pulsar.core.ledger import (
 from pulsar.core.ledger.schema import SCHEMA_V1
 from pulsar.mcp import Runtime, build_server
 
-from .conftest import SECRETS
+from .conftest import SECRETS, make_runtime
 from .media_samples import MP4
 
 pytestmark = pytest.mark.anyio
@@ -55,7 +55,7 @@ async def open_session(rt: Runtime):
 
 @pytest.fixture
 async def rt(paths, flaky_x):
-    runtime = Runtime(paths, transport=flaky_x.transport())
+    runtime = make_runtime(paths, transport=flaky_x.transport())
     yield runtime
     await runtime.aclose()
 
@@ -238,7 +238,7 @@ async def test_crash_mid_post_leaves_a_submitting_row(paths, authed, flaky_x):
         "create_post", text="lost", reply_to_post_id=None, quote_post_id=None, media_ids=[]
     )
     ledger.claim(key="k-crash", tool="create_post", digest=digest, account=ME, caller="a")
-    rt = Runtime(paths, transport=flaky_x.transport())
+    rt = make_runtime(paths, transport=flaky_x.transport())
     try:
         async with open_session(rt) as s:
             out = await call(s, "create_post", {"text": "lost", "idempotency_key": "k-crash"})
@@ -274,7 +274,7 @@ async def test_ledger_file_is_private_wal_and_versioned(session, authed, paths):
 async def test_ledger_survives_a_new_runtime(paths, authed, flaky_x):
     args = {"text": "persist me", "idempotency_key": "k-persist"}
     for expected_replay in (False, True):
-        rt = Runtime(paths, transport=flaky_x.transport())
+        rt = make_runtime(paths, transport=flaky_x.transport())
         try:
             async with open_session(rt) as s:
                 out = await call(s, "create_post", args)
@@ -295,8 +295,8 @@ async def test_two_runtimes_on_one_home_cannot_both_post(paths, authed, flaky_x)
         return await handle(request)
 
     flaky_x.handle_async = spy  # before the transports bind it
-    rt1 = Runtime(paths, transport=flaky_x.transport())
-    rt2 = Runtime(paths, transport=flaky_x.transport())
+    rt1 = make_runtime(paths, transport=flaky_x.transport())
+    rt2 = make_runtime(paths, transport=flaky_x.transport())
     args = {"text": "only once", "idempotency_key": "k-race"}
     results: dict[str, dict] = {}
     try:

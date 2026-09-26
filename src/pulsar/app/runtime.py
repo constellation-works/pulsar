@@ -1,10 +1,9 @@
 """Composition: the one place that joins configuration, storage and the core.
 
-Every surface (the MCP server, the CLI's operator verbs, the Orbit backend)
-builds a ``Runtime`` from resolved inputs — the home, the settings, the
-process environment, the directory relative media paths start from — and
-calls the core through it; nothing below it reads the environment, the cwd
-or ``$HOME`` itself.
+A ``Runtime`` is built from resolved inputs (the home, the settings, the
+process environment, the directory relative media paths start from) that
+the entry point (``pulsar.main``) read once and ``App`` hands down; nothing
+here or below reads the environment, the cwd or ``$HOME`` itself.
 """
 
 from __future__ import annotations
@@ -12,7 +11,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-import os
 import sys
 from collections.abc import AsyncGenerator, Mapping
 from dataclasses import replace
@@ -42,7 +40,6 @@ from pulsar.core import (
     Settings,
     WriteLog,
     alias_provider,
-    load_settings,
     login_command,
     redact,
     require_expected,
@@ -52,6 +49,8 @@ from pulsar.providers.x import XChannel, XClient
 
 # The operator's default audit label for writes a caller does not label.
 CALLER_ENV = "PULSAR_CALLER"
+# Set by Orbit for a plugin backend: the only directory the sandbox can write.
+PLUGIN_STATE_ENV = "ORBIT_PLUGIN_STATE"
 
 log = logging.getLogger(__name__)
 
@@ -88,17 +87,21 @@ class _PulsarHandler(logging.StreamHandler):  # type: ignore[type-arg]
     """Marks the handler ``configure_logging`` installed, so it is installed once."""
 
 
-def default_paths(environ: Mapping[str, str] | None = None) -> Paths:
-    """The home layout for this process: ``PULSAR_HOME``, else ``~/.config/pulsar``.
+def default_paths(environ: Mapping[str, str], user_home: Path) -> Paths:
+    """The home layout for this process, from the environment the entry point read.
 
-    The one place a surface turns the process environment and ``$HOME`` into
-    ``Paths``; core only ever receives the result.
+    Under Orbit (``ORBIT_PLUGIN_STATE`` set) the home is
+    ``$ORBIT_PLUGIN_STATE/home``: the plugin sandbox can write only its state.
+    Otherwise ``PULSAR_HOME``, else ``<user_home>/.config/pulsar``.
     """
-    return Paths.from_environ(os.environ if environ is None else environ, Path.home())
+    state = environ.get(PLUGIN_STATE_ENV)
+    if state:
+        return Paths(home=Path(state) / "home", user_home=user_home)
+    return Paths.from_environ(environ, user_home)
 
 
 class Runtime:
-    """Everything the tools need, built once per process (or per test).
+    """Everything the verbs and tools need: ``App.runtime`` builds one per server or call.
 
     Accounts are resolved per call, not at start-up: a login, logout or
     migration while the server runs takes effect on the next call. Each
@@ -111,20 +114,19 @@ class Runtime:
 
     def __init__(
         self,
-        paths: Paths | None = None,
+        paths: Paths,
+        settings: Settings,
         *,
-        settings: Settings | None = None,
+        environ: Mapping[str, str],
+        media_base: Path,
         transport: httpx.AsyncBaseTransport | None = None,
-        environ: Mapping[str, str] | None = None,
-        media_base: Path | None = None,
         read_only: bool = False,
         **client_kwargs: Any,
     ) -> None:
         self.read_only = read_only
-        # The live process environment unless one is given (tests pass their own).
-        self.environ: Mapping[str, str] = os.environ if environ is None else environ
-        self.paths = paths or default_paths()
-        self.settings = settings or load_settings(self.paths)
+        self.environ = environ
+        self.paths = paths
+        self.settings = settings
         self.registry = AccountRegistry(self.paths)
         self.log = WriteLog(self.paths)
         self.ledger = Ledger(self.paths, export=self.log.export, read_only=read_only)
@@ -132,14 +134,20 @@ class Runtime:
             ledger=self.ledger,
             settings=self.settings,
             deny=(self.paths.home,),
-            # Relative media paths are the caller's: the CLI's and the MCP
-            # server's cwd, or the Orbit workspace (orbit_tool passes it).
-            media_base=Path.cwd() if media_base is None else media_base,
+            # Relative media paths are the caller's: the process's cwd, or
+            # the Orbit workspace.
+            media_base=media_base,
         )
         self._transport = transport
         self._client_kwargs = client_kwargs
         self._clients: dict[str, XClient] = {}
         self._migrated = False
+
+    async def __aenter__(self) -> Runtime:
+        return self
+
+    async def __aexit__(self, *_exc: object) -> None:
+        await self.aclose()
 
     def caller(self, explicit: str | None, default: str = "unknown") -> str:
         """The audit label for a write: the argument, else ``PULSAR_CALLER``, else ``default``.

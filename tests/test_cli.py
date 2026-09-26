@@ -41,7 +41,11 @@ def _verified(paths, bundle, alias=ALIAS, handle="constworks", user_id="12345678
 
 def main(argv, *, transport=None):
     """``pulsar`` with the app the entry point would build, on the fake X when given."""
-    return run(argv, App(default_paths(), transport=transport))
+    environ = os.environ
+    app = App(
+        default_paths(environ, Path.home()), environ=environ, cwd=Path.cwd(), transport=transport
+    )
+    return run(argv, app)
 
 
 def test_the_entry_point_supplies_the_app(paths, authed, capsys):

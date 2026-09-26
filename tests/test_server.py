@@ -11,7 +11,6 @@ import pytest
 from mcp.client._memory import InMemoryTransport
 from mcp.client.session import ClientSession
 
-from pulsar.app.runtime import Runtime
 from pulsar.core.accounts import AccountRegistry
 from pulsar.core.adapter import Identity
 from pulsar.core.media import MAX_IMAGE_BYTES, MAX_VIDEO_BYTES
@@ -19,7 +18,7 @@ from pulsar.core.settings import Settings
 from pulsar.core.store import TokenBundle
 from pulsar.mcp import TOOL_NAMES, build_server, loopback_security
 
-from .conftest import ALIAS, SECRETS, register
+from .conftest import ALIAS, SECRETS, make_runtime, register
 from .media_samples import JPEG, MP4, PEM_KEY
 from .media_samples import PNG as PNG_1PX
 
@@ -30,7 +29,7 @@ pytestmark = pytest.mark.anyio
 
 @pytest.fixture
 async def session(paths, fake_x, tmp_path):
-    rt = Runtime(
+    rt = make_runtime(
         paths,
         settings=Settings(media_roots=(tmp_path / "media",)),
         transport=fake_x.transport(),
@@ -416,7 +415,9 @@ async def test_upload_media_refuses_pulsar_home_even_under_a_root(
     authed, store, fake_x, paths, tmp_path
 ):
     token_file = store.token_file
-    rt = Runtime(paths, settings=Settings(media_roots=(tmp_path,)), transport=fake_x.transport())
+    rt = make_runtime(
+        paths, settings=Settings(media_roots=(tmp_path,)), transport=fake_x.transport()
+    )
     async with InMemoryTransport(build_server(rt)) as (read, write):
         async with ClientSession(read, write) as s:
             await s.initialize()
@@ -432,7 +433,7 @@ async def test_upload_by_path_is_off_without_configured_roots(
     """With no [media] roots the server's cwd (maybe / or $HOME) is not a default root."""
     (tmp_path / "pic.png").write_bytes(PNG_1PX)
     monkeypatch.chdir(tmp_path)
-    rt = Runtime(paths, settings=Settings(), transport=fake_x.transport())
+    rt = make_runtime(paths, settings=Settings(), transport=fake_x.transport())
     async with InMemoryTransport(build_server(rt)) as (read, write):
         async with ClientSession(read, write) as s:
             await s.initialize()
@@ -479,7 +480,7 @@ async def test_upload_media_honours_configured_roots(paths, fake_x, authed, tmp_
     root = tmp_path / "marketing"
     root.mkdir()
     (root / "pic.png").write_bytes(PNG_1PX)
-    rt = Runtime(paths, settings=Settings(media_roots=(root,)), transport=fake_x.transport())
+    rt = make_runtime(paths, settings=Settings(media_roots=(root,)), transport=fake_x.transport())
     async with InMemoryTransport(build_server(rt)) as (read, write):
         async with ClientSession(read, write) as s:
             await s.initialize()
@@ -568,7 +569,7 @@ async def test_unreadable_refresh_is_a_failed_write_not_outcome_unknown(
             return token_response()
         return fake_x.handle(request)
 
-    rt = Runtime(paths, settings=Settings(), transport=httpx.MockTransport(handle))
+    rt = make_runtime(paths, settings=Settings(), transport=httpx.MockTransport(handle))
     async with InMemoryTransport(build_server(rt)) as (read, write):
         async with ClientSession(read, write) as s:
             await s.initialize()
@@ -586,7 +587,7 @@ async def test_post_that_went_live_stays_ok_when_bookkeeping_fails(
 ):
     from pulsar.core.errors import INSECURE_STORAGE, PulsarError
 
-    rt = Runtime(paths, settings=Settings(), transport=fake_x.transport())
+    rt = make_runtime(paths, settings=Settings(), transport=fake_x.transport())
 
     def broken_publish(*_a, **_k):
         raise PulsarError(INSECURE_STORAGE, "home went wide mid-flight")
@@ -604,7 +605,7 @@ async def test_post_that_went_live_stays_ok_when_bookkeeping_fails(
 async def test_unexpected_exceptions_become_results_not_tracebacks(
     paths, authed, fake_x, monkeypatch
 ):
-    rt = Runtime(paths, settings=Settings(), transport=fake_x.transport())
+    rt = make_runtime(paths, settings=Settings(), transport=fake_x.transport())
 
     async def broken_me():
         raise KeyError("data")
@@ -645,7 +646,7 @@ async def test_identity_looked_up_before_a_relogin_is_not_trusted_after_it(
     registry = AccountRegistry(paths)
     register(paths)
     old = store.rebind(bundle)
-    rt = Runtime(paths, settings=Settings(), transport=fake_x.transport())
+    rt = make_runtime(paths, settings=Settings(), transport=fake_x.transport())
     stale = Identity(provider_user_id="1", handle="old-account")
     registry.mark_verified(ALIAS, stale, old.binding_id)
     assert (await rt.whoami())["username"] == "old-account"
@@ -679,7 +680,7 @@ async def test_create_post_on_a_skipped_key_is_a_conflict_not_a_receipt(
 
 @pytest.fixture
 async def http_client(paths):
-    rt = Runtime(paths, settings=Settings())
+    rt = make_runtime(paths, settings=Settings())
     app = build_server(rt).streamable_http_app(
         transport_security=loopback_security("127.0.0.1", 8977), host="127.0.0.1"
     )

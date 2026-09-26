@@ -1,7 +1,9 @@
 """The operator verbs behind ``pulsar status | history | validate | publish |
 reconcile | import-posted | migrate``.
 
-Each returns ``(report, exit_code)`` so tests drive them without a shell, and
+Each takes the ``Runtime`` it runs against (``App`` builds it: read-only for
+the reports and the previews) and returns ``(report, exit_code)`` so tests
+drive them without a shell, and
 raises ``PulsarError`` when the command could not run at all; the CLI prints
 the report on stdout and the error on stderr. Only ``publish --confirm``,
 ``reconcile`` (when something is unresolved) and ``import-posted --confirm``
@@ -17,8 +19,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-import httpx
-
 from pulsar.core import (
     INVALID_ARGUMENT,
     PUBLISHED,
@@ -27,7 +27,6 @@ from pulsar.core import (
     UNSUPPORTED,
     AccountRef,
     MigrationResult,
-    Paths,
     Plan,
     Policy,
     Prepared,
@@ -74,10 +73,9 @@ def check_limit(limit: int) -> int:
 
 
 def budget_report(
-    paths: Paths, *, account: str | None = None, now: datetime | None = None
+    rt: Runtime, *, account: str | None = None, now: datetime | None = None
 ) -> Report:
     """Budgets, today's posts, quiet hours and unresolved writes per account. Offline."""
-    rt = Runtime(paths, read_only=True)
     now = now or datetime.now(UTC)
     aliases = [rt.account(account).alias] if account is not None else sorted(rt.registry.accounts())
     policy = Policy(rt.settings.policy)
@@ -95,7 +93,7 @@ def budget_report(
             }
         )
     out = {
-        "home": str(paths.home),
+        "home": str(rt.paths.home),
         "default_account": rt.settings.default_account,
         "note": "day and month spend is across every account; posts are per account",
         "accounts": entries,
@@ -104,11 +102,10 @@ def budget_report(
 
 
 def history_report(
-    paths: Paths, *, account: str | None = None, limit: int = HISTORY_LIMIT_DEFAULT
+    rt: Runtime, *, account: str | None = None, limit: int = HISTORY_LIMIT_DEFAULT
 ) -> Report:
     """The newest ledger rows, with how many matched in all."""
     limit = check_limit(limit)
-    rt = Runtime(paths, read_only=True)
     alias = rt.account(account).alias if account is not None else None
     rows = rt.ledger.history(limit=limit, account_alias=alias)
     total = rt.ledger.count(account_alias=alias)
@@ -119,83 +116,74 @@ def history_report(
     }, 0
 
 
-async def validate_report(paths: Paths, plan_path: Path, *, account: str | None = None) -> Report:
+async def validate_report(rt: Runtime, plan_path: Path, *, account: str | None = None) -> Report:
     """What ``publish`` would send, per account, with digests and cost. Offline."""
-    rt = Runtime(paths, read_only=True)
-    try:
-        plan, targets = rt.plan_targets(read_plan(plan_path), account)
-        reports = [rt.publisher.prepare(plan, rt.offline_bound(a)).report() for a in targets]
-    finally:
-        await rt.aclose()
+    plan, targets = rt.plan_targets(read_plan(plan_path), account)
+    reports = [rt.publisher.prepare(plan, rt.offline_bound(a)).report() for a in targets]
     return {"valid": True, "published": False, "accounts": reports}, 0
 
 
 async def publish_report(
-    paths: Paths,
+    rt: Runtime,
     plan_path: Path,
     *,
     account: str | None = None,
     idempotency_key: str | None = None,
     caller: str | None = None,
     confirm: bool = False,
-    transport: httpx.AsyncBaseTransport | None = None,
 ) -> Report:
     """Publish a plan to each of its accounts. Without ``confirm`` it only validates.
 
     Every account's plan is prepared (bound, identity checked, validated,
     media loaded) before the first one is published, so a problem found
     offline in a later account's variant stops the command before anything
-    is sent.
+    is sent. ``rt`` is read-only for a preview.
     """
     if not confirm:
-        return await _publish_preview(paths, plan_path, account, idempotency_key, caller)
-    rt = Runtime(paths, transport=transport)
+        return _publish_preview(rt, plan_path, account, idempotency_key, caller)
     results: list[dict[str, Any]] = []
     code = 0
-    try:
-        who = rt.caller(caller, default=CLI_CALLER)
-        key = check_key(idempotency_key)
-        # Registry reads and media hashing go to a thread.
-        plan, targets = await asyncio.to_thread(rt.plan_targets, read_plan(plan_path), account)
-        _one_account_per_key(key, targets)
-        prepared: list[Prepared] = []
-        for alias in targets:
-            bound = await rt.bound(alias)
-            prepared.append(await asyncio.to_thread(rt.publisher.prepare, plan, bound))
-        for ready in prepared:
-            alias = ready.bound.alias
-            try:
-                async with rt.watch_expiry(alias):
-                    outcome = await rt.publisher.publish(ready, idempotency_key=key, caller=who)
-            except PulsarError as exc:
-                # The same keys as a receipt, so every entry has one shape.
-                results.append(
-                    {
-                        "ok": False,
-                        "idempotency_key": key,
-                        "state": None,
-                        "account": alias,
-                        "digest": ready.digest,
-                        "replayed": False,
-                        "items": [],
-                        "note": None,
-                        "error": exc.to_result(),
-                    }
-                )
-                code = 1
-                continue
-            entry: dict[str, Any] = {"ok": outcome.error is None, **outcome.receipt()}
-            entry["error"] = outcome.error.to_result() if outcome.error is not None else None
-            if outcome.error is not None or outcome.record.state not in (PUBLISHED, SKIPPED):
-                code = 1
-            results.append(entry)
-    finally:
-        await rt.aclose()
-    return {"published": True, "home": str(paths.home), "results": results}, code
+    who = rt.caller(caller, default=CLI_CALLER)
+    key = check_key(idempotency_key)
+    # Registry reads and media hashing go to a thread.
+    plan, targets = await asyncio.to_thread(rt.plan_targets, read_plan(plan_path), account)
+    _one_account_per_key(key, targets)
+    prepared: list[Prepared] = []
+    for alias in targets:
+        bound = await rt.bound(alias)
+        prepared.append(await asyncio.to_thread(rt.publisher.prepare, plan, bound))
+    for ready in prepared:
+        alias = ready.bound.alias
+        try:
+            async with rt.watch_expiry(alias):
+                outcome = await rt.publisher.publish(ready, idempotency_key=key, caller=who)
+        except PulsarError as exc:
+            # The same keys as a receipt, so every entry has one shape.
+            results.append(
+                {
+                    "ok": False,
+                    "idempotency_key": key,
+                    "state": None,
+                    "account": alias,
+                    "digest": ready.digest,
+                    "replayed": False,
+                    "items": [],
+                    "note": None,
+                    "error": exc.to_result(),
+                }
+            )
+            code = 1
+            continue
+        entry: dict[str, Any] = {"ok": outcome.error is None, **outcome.receipt()}
+        entry["error"] = outcome.error.to_result() if outcome.error is not None else None
+        if outcome.error is not None or outcome.record.state not in (PUBLISHED, SKIPPED):
+            code = 1
+        results.append(entry)
+    return {"published": True, "home": str(rt.paths.home), "results": results}, code
 
 
-async def _publish_preview(
-    paths: Paths,
+def _publish_preview(
+    rt: Runtime,
     plan_path: Path,
     account: str | None,
     idempotency_key: str | None,
@@ -204,19 +192,15 @@ async def _publish_preview(
     """``publish`` without ``--confirm``: every offline check the live run
     makes, in its order (the caller label, the key, the plan, the schedule
     and the policy), and nothing written."""
-    rt = Runtime(paths, read_only=True)
-    try:
-        rt.caller(caller, default=CLI_CALLER)
-        key = check_key(idempotency_key)
-        plan, targets = rt.plan_targets(read_plan(plan_path), account)
-        _one_account_per_key(key, targets)
-        reports: list[dict[str, Any]] = []
-        for alias in targets:
-            ready = rt.publisher.prepare(plan, rt.offline_bound(alias))
-            rt.publisher.preflight(ready, idempotency_key=key)
-            reports.append(ready.report())
-    finally:
-        await rt.aclose()
+    rt.caller(caller, default=CLI_CALLER)
+    key = check_key(idempotency_key)
+    plan, targets = rt.plan_targets(read_plan(plan_path), account)
+    _one_account_per_key(key, targets)
+    reports: list[dict[str, Any]] = []
+    for alias in targets:
+        ready = rt.publisher.prepare(plan, rt.offline_bound(alias))
+        rt.publisher.preflight(ready, idempotency_key=key)
+        reports.append(ready.report())
     return {
         "valid": True,
         "published": False,
@@ -235,11 +219,7 @@ def _one_account_per_key(key: str | None, targets: list[str]) -> None:
 
 
 async def reconcile_report(
-    paths: Paths,
-    *,
-    account: str | None = None,
-    transport: httpx.AsyncBaseTransport | None = None,
-    now: datetime | None = None,
+    rt: Runtime, *, account: str | None = None, now: datetime | None = None
 ) -> Report:
     """Settle an account's unknown writes from its timeline.
 
@@ -247,109 +227,93 @@ async def reconcile_report(
     timeline read is billed per post returned. Exit 0 only when every row
     it looked at is settled.
     """
-    rt = Runtime(paths, transport=transport)
-    try:
-        alias = (await asyncio.to_thread(rt.account, account)).alias
-        pending = [
-            r.key
-            for r in rt.ledger.unresolved(
-                stale_after=STALE_SUBMITTING, now=now or datetime.now(UTC)
-            )
-            if r.account_alias == alias
-        ]
-        if not pending:
-            return {"account": alias, "home": str(paths.home), "results": []}, 0
-        bound = await rt.bound(alias)
-        async with rt.watch_expiry(alias):
-            results = await rt.publisher.reconcile(bound)
-    finally:
-        await rt.aclose()
+    home = str(rt.paths.home)
+    alias = (await asyncio.to_thread(rt.account, account)).alias
+    pending = [
+        r.key
+        for r in rt.ledger.unresolved(stale_after=STALE_SUBMITTING, now=now or datetime.now(UTC))
+        if r.account_alias == alias
+    ]
+    if not pending:
+        return {"account": alias, "home": home, "results": []}, 0
+    bound = await rt.bound(alias)
+    async with rt.watch_expiry(alias):
+        results = await rt.publisher.reconcile(bound)
     # ``changed``: a live sender touched the row meanwhile; reconcile left it alone.
     settled = all(
         r["error"] is None and r["state"] != "changed" and is_settled(State(r["state"]))
         for r in results
     )
-    return {"account": alias, "home": str(paths.home), "results": results}, 0 if settled else 1
+    return {"account": alias, "home": home, "results": results}, 0 if settled else 1
 
 
 async def import_report(
-    paths: Paths,
-    source: Path,
-    *,
-    account: str | None = None,
-    confirm: bool = False,
-    transport: httpx.AsyncBaseTransport | None = None,
+    rt: Runtime, source: Path, *, account: str | None = None, confirm: bool = False
 ) -> Report:
     """Import a retired routine's ``posted.jsonl`` as the account's rows. Idempotent.
 
-    Without ``confirm`` it reports what the import would do and writes nothing.
+    Without ``confirm`` it reports what the import would do and writes nothing
+    (``rt`` is read-only then).
     """
-    rt = Runtime(paths, read_only=not confirm, transport=transport)
+    found = await rt.identity(account) if confirm else await asyncio.to_thread(rt.account, account)
+    if confirm:
+        require_expected(found, rt.settings)
+    if alias_provider(found.alias) != "x":
+        raise PulsarError(UNSUPPORTED, "posted.jsonl import is for X accounts")
+    handle = found.handle or found.alias.partition(":")[2]
+    ref = AccountRef(
+        alias=found.alias,
+        provider="x",
+        user_id=found.provider_user_id or "",
+        handle=handle,
+    )
     try:
-        found = (
-            await rt.identity(account) if confirm else await asyncio.to_thread(rt.account, account)
+        report = import_posted(
+            rt.ledger,
+            source,
+            account=ref,
+            url_for=lambda post_id: post_url(handle, post_id),
+            apply=confirm,
         )
-        if confirm:
-            require_expected(found, rt.settings)
-        if alias_provider(found.alias) != "x":
-            raise PulsarError(UNSUPPORTED, "posted.jsonl import is for X accounts")
-        handle = found.handle or found.alias.partition(":")[2]
-        ref = AccountRef(
-            alias=found.alias,
-            provider="x",
-            user_id=found.provider_user_id or "",
-            handle=handle,
-        )
-        try:
-            report = import_posted(
-                rt.ledger,
-                source,
-                account=ref,
-                url_for=lambda post_id: post_url(handle, post_id),
-                apply=confirm,
-            )
-        except OSError as exc:
-            raise PulsarError(
-                INVALID_ARGUMENT,
-                f"cannot read {source}: {exc.strerror}",
-                detail={"source": str(source)},
-            ) from exc
-    finally:
-        await rt.aclose()
+    except OSError as exc:
+        raise PulsarError(
+            INVALID_ARGUMENT,
+            f"cannot read {source}: {exc.strerror}",
+            detail={"source": str(source)},
+        ) from exc
     out = {
         "account": ref.alias,
         "source": str(source),
-        "home": str(paths.home),
+        "home": str(rt.paths.home),
         **report.to_dict(),
         "note": None if confirm else "report only; re-run with --confirm to import",
     }
     return out, 0 if not report.conflicts and not report.errors else 1
 
 
-def migrate_report(paths: Paths, *, confirm: bool = False) -> Report:
+def migrate_report(rt: Runtime, *, confirm: bool = False) -> Report:
     """Bring the home up to date in place: the ledger schema, then the
-    phase 1 credential layout. Without ``confirm`` it reports what it would
-    do and changes nothing: an upgraded ledger is refused by an
-    older pulsar, and moved credentials do not move back."""
+    phase 1 credential layout. Without ``confirm`` (``rt`` read-only) it
+    reports what it would do and changes nothing: an upgraded ledger is
+    refused by an older pulsar, and moved credentials do not move back."""
+    home = str(rt.paths.home)
     if not confirm:
-        rt = Runtime(paths, read_only=True)
         current, target = rt.ledger.schema_versions()
         legacy = rt.registry.legacy_status(rt.settings)
         pending = current < target or legacy.state == "pending"
         out = {
             "applied": False,
-            "home": str(paths.home),
+            "home": home,
             "ledger": {"from_version": current, "to_version": target},
             "credentials": _migration(legacy),
             "note": "pass --confirm to apply" if pending else "nothing to migrate",
         }
         return out, 0 if legacy.state in ("pending", "none") else 1
-    rt = Runtime(paths)
     from_version, to_version = rt.ledger.migrate()
     legacy = rt.registry.migrate_legacy(rt.settings)
     out = {
         "applied": True,
-        "home": str(paths.home),
+        "home": home,
         "ledger": {"from_version": from_version, "to_version": to_version},
         "credentials": _migration(legacy),
         "note": None,

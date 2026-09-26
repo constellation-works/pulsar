@@ -17,9 +17,11 @@ from urllib.parse import parse_qs
 import httpx
 import pytest
 
+from pulsar.app import App, Runtime
 from pulsar.core import guard
 from pulsar.core.accounts import Account, AccountRegistry
 from pulsar.core.paths import Paths
+from pulsar.core.settings import Settings, load_settings
 from pulsar.core.store import FernetFileStore, TokenBundle
 
 ACCESS = "access-token-AAAA1111"
@@ -77,6 +79,30 @@ def register(
         row.setdefault("scopes", tuple(bundle.scope.split()))
     AccountRegistry(paths).put(Account(alias=alias, provider=alias.partition(":")[0], **row))
     return store
+
+
+def make_runtime(
+    paths: Paths,
+    settings: Settings | None = None,
+    *,
+    environ: Any = None,
+    media_base: Path | None = None,
+    **kwargs: Any,
+) -> Runtime:
+    """A runtime as ``App.runtime`` builds one: the home's settings, this
+    process's environment and cwd, unless a test gives its own."""
+    return Runtime(
+        paths,
+        load_settings(paths) if settings is None else settings,
+        environ=os.environ if environ is None else environ,
+        media_base=Path.cwd() if media_base is None else media_base,
+        **kwargs,
+    )
+
+
+def make_app(paths: Paths, *, transport: httpx.AsyncBaseTransport | None = None) -> App:
+    """The app the entry point would build over ``paths``, on ``transport`` when given."""
+    return App(paths, environ=os.environ, cwd=Path.cwd(), transport=transport)
 
 
 @pytest.fixture(autouse=True)

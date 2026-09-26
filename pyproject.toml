@@ -42,9 +42,9 @@ select = ["E", "F", "I", "B", "UP"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# A parametrized test with no cases is an error, not a silent skip (STD-04 §R10).
+# A parametrized test with no cases is an error, not a silent skip.
 empty_parameter_set_mark = "fail_at_collect"
-# Print why each skipped test skipped (STD-04 §R8).
+# Print why each skipped test skipped.
 addopts = "-rs"
 
 [tool.basedpyright]

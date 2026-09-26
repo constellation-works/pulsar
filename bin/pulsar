@@ -9,7 +9,7 @@
 set -eu
 
 # Everything this launcher and its children create (the venv, uv's cache and
-# interpreters, bytecode, TMPDIR, the lock stamp) is owner-only (STD-05 §R8).
+# interpreters, bytecode, TMPDIR, the lock stamp) is owner-only.
 umask 077
 
 fail() {
@@ -52,7 +52,7 @@ mkdir -p "$TMPDIR"
 lock=$(cksum <"$ORBIT_PLUGIN_ROOT/uv.lock")
 stamp="$venv/.pulsar-lock"
 if [ ! -x "$venv/bin/python" ] || [ "$(cat "$stamp" 2>/dev/null || true)" != "$lock" ]; then
-    # Bound the sync (STD-03 §R22): TERM at 600s, KILL 10s later (§R12).
+    # Bound the sync: TERM at 600s, KILL 10s later.
     # Probe rather than trust `command -v`, as for uv above. Without a
     # runnable timeout(1) (stock macOS has none) the host's per-call timeout
     # is the only bound: a recorded deviation (surfaces/4_decisions.md).
@@ -68,4 +68,4 @@ if [ ! -x "$venv/bin/python" ] || [ "$(cat "$stamp" 2>/dev/null || true)" != "$l
     mv -f "$stamp.tmp.$$" "$stamp"
 fi
 
-exec "$venv/bin/python" -m pulsar.orbit_tool
+exec "$venv/bin/python" -m pulsar orbit-tool

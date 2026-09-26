@@ -7,12 +7,12 @@ import time
 
 import pytest
 
-from pulsar.app.health import attention, auth_report
+from pulsar.app.health import attention
 from pulsar.core.accounts import AccountRegistry
 from pulsar.core.errors import PulsarError
 from pulsar.core.store import TokenBundle
 
-from .conftest import ALIAS, ROTATED_ACCESS, SECRETS, register
+from .conftest import ALIAS, ROTATED_ACCESS, SECRETS, make_app, register
 
 pytestmark = pytest.mark.anyio
 
@@ -46,7 +46,7 @@ def _snapshot(root):
 
 async def test_a_valid_cached_binding_is_healthy_without_asking_x(paths, bundle, fake_x):
     _verified(paths, bundle)
-    out, code = await auth_report(paths, transport=fake_x.transport())
+    out, code = await make_app(paths, transport=fake_x.transport()).auth_status()
     assert fake_x.requests == [], "the default report never touches X"
     [entry] = out["accounts"]
     assert entry["health"] == "healthy" and entry["healthy"] is True and entry["reason"] is None
@@ -60,7 +60,7 @@ async def test_an_expired_token_whose_refresh_is_unproven_is_unverified(paths, f
         access_token="old", refresh_token="r", expires_at=time.time() - 60, scope="s", client_id="c"
     )
     _verified(paths, expired)
-    out, code = await auth_report(paths, transport=fake_x.transport())
+    out, code = await make_app(paths, transport=fake_x.transport()).auth_status()
     assert fake_x.requests == []
     [entry] = out["accounts"]
     assert entry["token_state"] == "expired"
@@ -72,7 +72,7 @@ async def test_an_expired_token_whose_refresh_is_unproven_is_unverified(paths, f
 
 
 async def test_a_binding_with_no_cached_identity_is_unverified(paths, authed, fake_x):
-    out, code = await auth_report(paths, transport=fake_x.transport())
+    out, code = await make_app(paths, transport=fake_x.transport()).auth_status()
     [entry] = out["accounts"]
     assert entry["health"] == "unverified" and entry["mismatch"] is None and code == 1
     assert fake_x.requests == []
@@ -81,7 +81,7 @@ async def test_a_binding_with_no_cached_identity_is_unverified(paths, authed, fa
 async def test_every_entry_has_every_key(paths, bundle, fake_x):
     _verified(paths, bundle)
     register(paths, None, "x:unbound")
-    out, _ = await auth_report(paths)
+    out, _ = await make_app(paths).auth_status()
     keys = [set(e) for e in out["accounts"]]
     assert keys[0] == keys[1], "absent values are null, never missing keys"
     assert set(out) == {"home", "client_id", "default_account", "legacy", "accounts"}
@@ -90,14 +90,14 @@ async def test_every_entry_has_every_key(paths, bundle, fake_x):
 async def test_the_default_report_writes_nothing(paths, bundle):
     _verified(paths, bundle, status="reauth_required")
     before = _snapshot(paths.home)
-    out, code = await auth_report(paths)
+    out, code = await make_app(paths).auth_status()
     assert code == 1 and out["accounts"][0]["health"] == "unhealthy"
     assert _snapshot(paths.home) == before
 
 
 async def test_live_forces_a_refresh_and_bypasses_a_stale_cache(paths, bundle, store, fake_x):
     _verified(paths, bundle, handle="someone-else")
-    out, code = await auth_report(paths, live=True, transport=fake_x.transport())
+    out, code = await make_app(paths, transport=fake_x.transport()).auth_status(live=True)
     assert code == 0
     [entry] = out["accounts"]
     assert entry["refreshed"] is True and entry["verified"] is True
@@ -111,7 +111,7 @@ async def test_live_forces_a_refresh_and_bypasses_a_stale_cache(paths, bundle, s
 
 async def test_live_reports_a_dead_refresh_token_as_reauth(paths, authed, fake_x):
     fake_x.refresh_status = 400
-    out, code = await auth_report(paths, live=True, transport=fake_x.transport())
+    out, code = await make_app(paths, transport=fake_x.transport()).auth_status(live=True)
     assert code == 1
     [entry] = out["accounts"]
     assert entry["reauth_required"] is True and entry["verified"] is False
@@ -122,7 +122,7 @@ async def test_live_reports_a_dead_refresh_token_as_reauth(paths, authed, fake_x
 async def test_a_live_check_that_could_not_run_is_unverified_not_unhealthy(paths, bundle, fake_x):
     _verified(paths, bundle, user_id="1234567890")
     fake_x.refresh_status = 503  # X is down: nothing is learned about the binding
-    out, code = await auth_report(paths, live=True, transport=fake_x.transport())
+    out, code = await make_app(paths, transport=fake_x.transport()).auth_status(live=True)
     [entry] = out["accounts"]
     assert entry["error"]["retryable"] is True
     assert entry["health"] == "unverified" and "could not run" in entry["reason"]
@@ -131,15 +131,15 @@ async def test_a_live_check_that_could_not_run_is_unverified_not_unhealthy(paths
 
 async def test_live_lifts_reauth_required_once_the_refresh_works(paths, bundle, fake_x):
     _verified(paths, bundle, status="reauth_required")
-    out, code = await auth_report(paths)
+    out, code = await make_app(paths).auth_status()
     assert code == 1 and out["accounts"][0]["reauth_required"] is True
-    out, code = await auth_report(paths, live=True, transport=fake_x.transport())
+    out, code = await make_app(paths, transport=fake_x.transport()).auth_status(live=True)
     assert code == 0 and out["accounts"][0]["status"] == "active"
     assert AccountRegistry(paths).get(ALIAS).status == "active"
 
 
 async def test_an_empty_home_is_not_healthy(paths, fake_x):
-    out, code = await auth_report(paths, transport=fake_x.transport())
+    out, code = await make_app(paths, transport=fake_x.transport()).auth_status()
     assert out["accounts"] == [] and code == 1
     assert fake_x.requests == []
 
@@ -147,7 +147,7 @@ async def test_an_empty_home_is_not_healthy(paths, fake_x):
 async def test_two_accounts_one_needing_reauth_exits_1(paths, bundle):
     _verified(paths, bundle)
     _verified(paths, _other_bundle(bundle), "x:other", "other", "2", status="reauth_required")
-    out, code = await auth_report(paths)
+    out, code = await make_app(paths).auth_status()
     assert code == 1
     by_alias = {e["alias"]: e for e in out["accounts"]}
     assert list(by_alias) == ["x:constworks", "x:other"]
@@ -159,14 +159,14 @@ async def test_two_accounts_one_needing_reauth_exits_1(paths, bundle):
         other, paths.home
     ), "the remedy names the home it applies to"
 
-    out, code = await auth_report(paths, account="X:@ConstWorks")
+    out, code = await make_app(paths).auth_status(account="X:@ConstWorks")
     assert code == 0 and [e["alias"] for e in out["accounts"]] == ["x:constworks"]
 
 
 async def test_a_bound_handle_that_is_not_the_expected_one_is_unhealthy(paths, bundle):
     _config(paths, '[accounts."x:constworks"]\nexpected_handle = "constworks"\n')
     _verified(paths, bundle, handle="impostor")
-    out, code = await auth_report(paths)
+    out, code = await make_app(paths).auth_status()
     [entry] = out["accounts"]
     assert entry["account"]["username"] == "impostor"
     assert entry["mismatch"] is True and entry["health"] == "unhealthy"
@@ -176,7 +176,7 @@ async def test_a_bound_handle_that_is_not_the_expected_one_is_unhealthy(paths, b
 async def test_an_unknown_account_is_an_error(paths, bundle):
     _verified(paths, bundle)
     with pytest.raises(PulsarError) as exc:
-        await auth_report(paths, account="x:nobody")
+        await make_app(paths).auth_status(account="x:nobody")
     assert exc.value.code == "unknown_account"
     assert "x:constworks" in exc.value.message
 
@@ -184,14 +184,14 @@ async def test_an_unknown_account_is_an_error(paths, bundle):
 async def test_a_revoked_account_is_unhealthy(paths, bundle):
     _verified(paths, bundle)
     AccountRegistry(paths).logout(ALIAS)
-    out, code = await auth_report(paths)
+    out, code = await make_app(paths).auth_status()
     [entry] = out["accounts"]
     assert code == 1 and entry["status"] == "revoked" and entry["health"] == "unhealthy"
 
 
 async def test_legacy_credentials_are_reported_not_migrated(paths, bundle, legacy_store):
     legacy_store.save(bundle)
-    out, code = await auth_report(paths)
+    out, code = await make_app(paths).auth_status()
     assert code == 1 and out["legacy"] is not None and out["legacy"]["state"] != "none"
     assert paths.token_file.exists(), "a report never migrates"
     assert AccountRegistry(paths).accounts() == {}
