@@ -8,6 +8,10 @@
 # calls reuse them. pulsar itself runs from the plugin root's src/.
 set -eu
 
+# Everything this launcher and its children create (the venv, uv's cache and
+# interpreters, bytecode, TMPDIR, the lock stamp) is owner-only (STD-05 §R8).
+umask 077
+
 fail() {
     # Drain the request so Orbit reads our envelope rather than EPIPE.
     cat >/dev/null 2>&1 || true
@@ -48,10 +52,19 @@ mkdir -p "$TMPDIR"
 lock=$(cksum <"$ORBIT_PLUGIN_ROOT/uv.lock")
 stamp="$venv/.pulsar-lock"
 if [ ! -x "$venv/bin/python" ] || [ "$(cat "$stamp" 2>/dev/null || true)" != "$lock" ]; then
-    "$uv_bin" sync --frozen --no-dev --no-install-project --quiet \
+    # Bound the sync (STD-03 §R22). Probe rather than trust `command -v`, as
+    # for uv above. Without a runnable timeout(1) (stock macOS has none) the
+    # sync runs unbounded and the host's per-call timeout is the only bound.
+    bound=""
+    if timeout 5 true >/dev/null 2>&1; then bound="timeout 600"; fi
+    # $bound is deliberately unquoted: empty, or the command and its argument.
+    $bound "$uv_bin" sync --frozen --no-dev --no-install-project --quiet \
         --project "$ORBIT_PLUGIN_ROOT" </dev/null >&2 \
-        || fail dependency_sync "uv sync failed (the first call needs network to fetch dependencies); see stderr"
-    printf '%s\n' "$lock" >"$stamp"
+        || fail dependency_sync "uv sync failed or ran over 600s (the first call needs network to fetch dependencies); see stderr"
+    # Publish the stamp atomically: a crash mid-write must not leave a stamp
+    # that matches no lock file, or one that matches before the sync finished.
+    printf '%s\n' "$lock" >"$stamp.tmp.$$"
+    mv -f "$stamp.tmp.$$" "$stamp"
 fi
 
 exec "$venv/bin/python" -m pulsar.surfaces.orbit_tool

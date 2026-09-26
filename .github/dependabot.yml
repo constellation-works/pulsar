@@ -1,0 +1,9 @@
+# Advisory monitoring for every third-party dependency (STD-05 §R24): the
+# uv lockfile at the root pins them all (pyproject.toml + uv.lock).
+version: 2
+updates:
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
