@@ -5,13 +5,13 @@ from __future__ import annotations
 
 import argparse
 
-from pulsar.cli.toolkit import EXIT_OK, Commands, Context, UsageError, notice
+from pulsar.cli import toolkit
 
 LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
 DEFAULT_PORT = 8977
 
 
-def register(commands: Commands) -> None:
+def register(commands: toolkit.Commands) -> None:
     serve = commands.add("serve", help="run the MCP server", group="Services")
     serve.add_argument(
         "--transport",
@@ -51,25 +51,25 @@ def _port(value: str) -> int:
     return port
 
 
-def _orbit_tool(_args: argparse.Namespace, _ctx: Context) -> int:
+def _orbit_tool(_args: argparse.Namespace, _ctx: toolkit.Context) -> int:
     from pulsar.orbit_tool import main as orbit_tool_main
 
     return orbit_tool_main()
 
 
-def _serve(args: argparse.Namespace, ctx: Context) -> int:
+def _serve(args: argparse.Namespace, ctx: toolkit.Context) -> int:
     from pulsar.mcp import build_server, loopback_security
 
     if args.transport != "http" and (args.host is not None or args.port is not None):
         # stdio has no address: a --host or --port here would be silently unused (STD-01 §R28).
-        raise UsageError(
+        raise toolkit.UsageError(
             "--host and --port apply only to --transport http",
             detail={"transport": args.transport},
         )
     rt = ctx.app.runtime()
     roots = rt.settings.media_roots
     # stderr: stdout is the MCP stream under --transport stdio.
-    notice(
+    toolkit.notice(
         "media path uploads "
         + (f"confined to {', '.join(map(str, roots))}" if roots else "off (no [media] roots)")
     )
@@ -85,4 +85,4 @@ def _serve(args: argparse.Namespace, ctx: Context) -> int:
             port=port,
             transport_security=loopback_security(host, port),
         )
-    return EXIT_OK
+    return toolkit.EXIT_OK

@@ -19,22 +19,24 @@ FORBIDDEN = {
 }
 
 
+def _from_module(path: Path, node: ast.ImportFrom) -> str:
+    """The absolute module a ``from ... import`` in ``path`` names."""
+    if not node.level:
+        return node.module or ""
+    base = path.relative_to(SRC.parent).with_suffix("").parts[:-1]
+    base = list(base[: len(base) - node.level + 1])
+    return ".".join(base + ([node.module] if node.module else []))
+
+
 def _statements(path: Path):
     """Each import in ``path``: (absolute module, imported names or None for a
     plain ``import``, line)."""
-    package = ".".join(path.relative_to(SRC.parent).with_suffix("").parts[:-1])
     for node in ast.walk(ast.parse(path.read_text())):
         if isinstance(node, ast.Import):
             for alias in node.names:
                 yield alias.name, None, node.lineno
         elif isinstance(node, ast.ImportFrom):
-            if node.level:
-                base = package.split(".")
-                base = base[: len(base) - node.level + 1]
-                module = ".".join(base + ([node.module] if node.module else []))
-            else:
-                module = node.module or ""
-            yield module, [alias.name for alias in node.names], node.lineno
+            yield _from_module(path, node), [alias.name for alias in node.names], node.lineno
 
 
 def _imports(path: Path) -> set[str]:
@@ -180,6 +182,28 @@ def _public(package: str) -> set[str]:
     return set()
 
 
+def _namespace_misuse(path: Path, facade: str, public: set[str]) -> list[str]:
+    """A facade imported whole (``from pulsar.cli import toolkit``) is used only
+    through the names its ``__all__`` lists (``toolkit.notice``)."""
+    parent, _, leaf = facade.rpartition(".")
+    tree = ast.parse(path.read_text())
+    bound = {
+        alias.asname or alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and _from_module(path, node) == parent
+        for alias in node.names
+        if alias.name == leaf
+    }
+    return [
+        f"{path.relative_to(SRC)}:{node.lineno} uses {leaf}.{node.attr}, not in {facade}.__all__"
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and node.value.id in bound
+        and node.attr not in public
+    ]
+
+
 @pytest.mark.parametrize("facade", FACADES)
 def test_other_layers_use_only_the_public_api(facade):
     public = _public(facade)
@@ -200,8 +224,7 @@ def test_other_layers_use_only_the_public_api(facade):
                 hidden = sorted(set(names) - public)
                 if hidden:
                     offenders.append(f"{where} imports {hidden}, not in {facade}.__all__")
-            elif module == parent and names and leaf in names:
-                offenders.append(f"{where} imports {facade} as a module; import names from it")
+        offenders += _namespace_misuse(path, facade, public)
     assert not offenders, f"{facade} used past its public API:\n" + "\n".join(offenders)
 
 

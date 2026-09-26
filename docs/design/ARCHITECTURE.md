@@ -67,8 +67,8 @@ has three members, bottom up:
 | 1 | `commands/` | the commands only, one module each (or one per help group), each declaring itself in `register`: `auth`, `status`, `history`, `publish`, `reconcile`, `maintenance`, `services`; none imports another |
 | 2 | `main.py` | `run`: parses and dispatches to `commands.REGISTER`, reporting through the toolkit |
 
-`commands` and `main.py` reach the toolkit through its root (`from pulsar.cli.toolkit
-import Context`), as `app` reaches `core`.
+`commands` and `main.py` import the toolkit whole (`from pulsar.cli import toolkit`) and
+call it by name: `toolkit.notice`, `toolkit.views.status`, `toolkit.Context`.
 
 ## Ambient state
 

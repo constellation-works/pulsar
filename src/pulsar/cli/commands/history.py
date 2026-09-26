@@ -5,12 +5,14 @@ from __future__ import annotations
 import argparse
 
 from pulsar.app import HISTORY_LIMIT_DEFAULT, HISTORY_LIMIT_MAX
-from pulsar.cli.toolkit import ACCOUNT_HELP, Commands, Context, emit, notice, views
+from pulsar.cli import toolkit
 
 
-def register(commands: Commands) -> None:
+def register(commands: toolkit.Commands) -> None:
     p = commands.add("history", help="the newest ledger rows (offline)", group="Observe")
-    p.add_argument("--account", help=f"only this account's rows ({ACCOUNT_HELP}); default: all")
+    p.add_argument(
+        "--account", help=f"only this account's rows ({toolkit.ACCOUNT_HELP}); default: all"
+    )
     p.add_argument(
         "--limit",
         type=_limit,
@@ -30,10 +32,12 @@ def _limit(value: str) -> int:
     return limit
 
 
-def _history(args: argparse.Namespace, ctx: Context) -> int:
+def _history(args: argparse.Namespace, ctx: toolkit.Context) -> int:
     out, code = ctx.app.history(account=args.account, limit=args.limit)
     if not out["writes"]:
-        notice("no ledger rows" + (f" for {args.account}" if args.account else ""))
+        toolkit.notice("no ledger rows" + (f" for {args.account}" if args.account else ""))
     elif out["truncated"]:
-        notice(f"showing {len(out['writes'])} of {out['total']} rows; raise --limit for more")
-    return emit((out, code), ctx, views.history)
+        toolkit.notice(
+            f"showing {len(out['writes'])} of {out['total']} rows; raise --limit for more"
+        )
+    return toolkit.emit((out, code), ctx, toolkit.views.history)

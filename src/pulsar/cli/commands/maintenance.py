@@ -6,10 +6,10 @@ import argparse
 import asyncio
 from pathlib import Path
 
-from pulsar.cli.toolkit import ACCOUNT_DEFAULT, Commands, Context, emit, views
+from pulsar.cli import toolkit
 
 
-def register(commands: Commands) -> None:
+def register(commands: toolkit.Commands) -> None:
     p_imp = commands.add(
         "import-posted",
         group="Maintenance",
@@ -17,7 +17,9 @@ def register(commands: Commands) -> None:
         "reports only without --confirm",
     )
     p_imp.add_argument("source", type=Path, help="path to posted.jsonl")
-    p_imp.add_argument("--account", help=f"the account those posts were made as; {ACCOUNT_DEFAULT}")
+    p_imp.add_argument(
+        "--account", help=f"the account those posts were made as; {toolkit.ACCOUNT_DEFAULT}"
+    )
     p_imp.add_argument("--confirm", action="store_true", help="actually write the rows")
     p_imp.set_defaults(func=_import_posted)
 
@@ -33,13 +35,13 @@ def register(commands: Commands) -> None:
     p_mig.set_defaults(func=_migrate)
 
 
-def _import_posted(args: argparse.Namespace, ctx: Context) -> int:
-    return emit(
+def _import_posted(args: argparse.Namespace, ctx: toolkit.Context) -> int:
+    return toolkit.emit(
         asyncio.run(ctx.app.import_posted(args.source, account=args.account, confirm=args.confirm)),
         ctx,
-        views.import_posted,
+        toolkit.views.import_posted,
     )
 
 
-def _migrate(args: argparse.Namespace, ctx: Context) -> int:
-    return emit(ctx.app.migrate(confirm=args.confirm), ctx)
+def _migrate(args: argparse.Namespace, ctx: toolkit.Context) -> int:
+    return toolkit.emit(ctx.app.migrate(confirm=args.confirm), ctx)

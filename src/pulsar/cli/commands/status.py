@@ -4,21 +4,23 @@ from __future__ import annotations
 
 import argparse
 
-from pulsar.cli.toolkit import ACCOUNT_HELP, Commands, Context, emit, notice, views
+from pulsar.cli import toolkit
 
 
-def register(commands: Commands) -> None:
+def register(commands: toolkit.Commands) -> None:
     p = commands.add(
         "status",
         help="budgets, today's posts, quiet hours and unresolved writes (offline)",
         group="Observe",
     )
-    p.add_argument("--account", help=f"report only this account ({ACCOUNT_HELP}); default: all")
+    p.add_argument(
+        "--account", help=f"report only this account ({toolkit.ACCOUNT_HELP}); default: all"
+    )
     p.set_defaults(func=_status)
 
 
-def _status(args: argparse.Namespace, ctx: Context) -> int:
+def _status(args: argparse.Namespace, ctx: toolkit.Context) -> int:
     out, code = ctx.app.status(account=args.account)
     if not out["accounts"]:
-        notice("no account is bound; nothing to report")
-    return emit((out, code), ctx, views.status)
+        toolkit.notice("no account is bound; nothing to report")
+    return toolkit.emit((out, code), ctx, toolkit.views.status)
