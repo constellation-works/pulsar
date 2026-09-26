@@ -134,7 +134,7 @@ def test_imports_point_down(package, member):
 
 # A lower layer's public API is its package's __init__: code outside the
 # package imports from the package root, and only the names __all__ lists.
-FACADES = ("pulsar.core",)
+FACADES = ("pulsar.core", "pulsar.providers.x")
 
 
 def _public(package: str) -> set[str]:

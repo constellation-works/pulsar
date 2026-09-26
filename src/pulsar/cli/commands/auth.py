@@ -7,7 +7,7 @@ import asyncio
 
 from pulsar.app.health import attention, auth_report
 from pulsar.core import AccountRegistry, PulsarError, Settings, load_settings
-from pulsar.providers.x.auth import load_client_id, login
+from pulsar.providers.x import load_client_id, login
 
 from .. import views
 from ..context import Context, emit, notice

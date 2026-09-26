@@ -40,8 +40,7 @@ from pulsar.core import (
     load_settings,
     login_command,
 )
-from pulsar.providers.x.auth import load_client_id
-from pulsar.providers.x.client import REFRESH_AHEAD_SECONDS
+from pulsar.providers.x import REFRESH_AHEAD_SECONDS, load_client_id
 
 from .runtime import Runtime
 

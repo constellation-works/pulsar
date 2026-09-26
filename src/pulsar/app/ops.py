@@ -41,7 +41,7 @@ from pulsar.core import (
     month_window,
     require_expected,
 )
-from pulsar.providers.x.adapter import post_url
+from pulsar.providers.x import post_url
 
 from .runtime import Runtime
 

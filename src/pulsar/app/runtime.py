@@ -48,8 +48,7 @@ from pulsar.core import (
     require_expected,
     scan_for_secrets,
 )
-from pulsar.providers.x.adapter import XChannel
-from pulsar.providers.x.client import XClient
+from pulsar.providers.x import XChannel, XClient
 
 # The operator's default audit label for writes a caller does not label.
 CALLER_ENV = "PULSAR_CALLER"

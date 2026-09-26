@@ -66,8 +66,7 @@ from pulsar.core import (
     load_media,
     request_digest,
 )
-from pulsar.providers.x.client import MediaProcessingError, check_x_id
-from pulsar.providers.x.text import validate_text
+from pulsar.providers.x import MediaProcessingError, check_x_id, validate_text
 
 log = logging.getLogger(__name__)
 
