@@ -1,7 +1,7 @@
 import pytest
 
 from pulsar.core.errors import INVALID_TEXT, SECRET_DETECTED, PulsarError
-from pulsar.core.guard import scan_for_secrets
+from pulsar.core.guard import SECRET_PATTERNS, looks_generated, redact, scan_for_secrets
 from pulsar.core.settings import DEFAULT_PLAIN_POST_USD, DEFAULT_URL_POST_USD, Prices
 from pulsar.providers.x.text import validate_text, weighted_length
 
@@ -47,7 +47,7 @@ def test_control_characters_are_invalid():
         "AKIAIOSFODNN7EXAMPLE",
         "-----BEGIN RSA PRIVATE KEY-----",
         "Authorization: Bearer abcdefghijklmnopqrstuvwxyz0123456789",
-        "api_key=abcdefghijklmnop1234567890",
+        'api_key = "a8f3K2p9Qx7LmN4vB6tR1sZ0"',
     ],
 )
 def test_secret_like_text_is_rejected(text):
@@ -59,6 +59,84 @@ def test_secret_like_text_is_rejected(text):
 
 def test_ordinary_text_has_no_secret_hits():
     assert scan_for_secrets("Shipping pulsar today. Posts now flow through an MCP bridge.") == []
+
+
+# One positive example per pattern, keyed by label: each is caught and redacted.
+POSITIVE = {
+    "anthropic key": "sk-ant-api03-Zx8Kq2Lm9Pw4Rt7Yv1Bn6Hc3",
+    "openai-style key": "sk-proj-4fT9xQ2mL8vB1nR6kW3zY7",
+    "github token": "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef1234",
+    "github fine-grained pat": "github_pat_11ABCDEFG0abcdefghijklmnopqrstuvwxyz",
+    "slack token": "xoxb-1234567890-abcdefghij",
+    "aws access key": "AKIAIOSFODNN7EXAMPLE",
+    "google api key": "AIza" + "Sy8x3Kq9Lm2Pw7Rt4Yv6Bn1Hc5Jd0Fg-Ab_",
+    "stripe key": "sk_live_4eC39HqLyjWDarjtT1zdp7dc",
+    "x/twitter bearer": "AAAAAAAAAAAAAAAAAAAAAMLheAAAAAAA0%2BuSeid%2BULvsea4JtiGRiSDSJSI",
+    "pem block": "-----BEGIN RSA PRIVATE KEY-----\nMIIEow\n-----END RSA PRIVATE KEY-----",
+    "bearer header": "Bearer abcdefghijklmnopqrstuvwxyz0123456789",
+    "jwt": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N",
+    "generic secret assignment": 'client_secret = "a8f3K2p9Qx7LmN4vB6tR1sZ0"',
+}
+
+
+def test_every_pattern_has_a_positive_example():
+    assert set(POSITIVE) == {p.label for p in SECRET_PATTERNS}
+
+
+@pytest.mark.parametrize(("label", "secret"), sorted(POSITIVE.items()))
+def test_each_pattern_is_caught_and_redacted(label, secret):
+    text = f"before {secret} after"
+    assert label in scan_for_secrets(text)
+    masked = redact(text)
+    assert masked.startswith("before ") and masked.endswith(" after")
+    assert f"[redacted:{label}]" in masked
+    assert scan_for_secrets(masked) == [], masked
+
+
+def test_redaction_keeps_the_words_around_the_value():
+    assert redact("Authorization: Bearer abcdefghijklmnopqrstuvwxyz0123456789") == (
+        "Authorization: Bearer [redacted:bearer header]"
+    )
+    assert redact('api_key = "a8f3K2p9Qx7LmN4vB6tR1sZ0" ok') == (
+        'api_key = "[redacted:generic secret assignment]" ok'
+    )
+    assert redact("key sk-ant-abcdefghijklmnopqrstu") == "key [redacted:anthropic key]"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Our new secret: remembering_to_hydrate_daily is key",
+        "password: correct-horse-battery-staple",
+        "token: v2-release-candidate-2026-09 ships today",
+        "the bearer of good news",
+        "Tracking task-sk-learning-pipeline-v2 and my-ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZab in orbit",
+        "build-AKIAIOSFODNN7EXAMPLE-cache and x-sk_live_4eC39HqLyjWDarjtT1zdp7dc",
+        "Read https://constellation-works.com/orbit/blog/2026-09-26-launch-notes?ref=x-sk-abc",
+        "#buildinpublic #task-sk-learning-pipeline-v2 #secretsauce",
+        "api_key and secret and token are words; password: hunter2",
+    ],
+)
+def test_ordinary_words_identifiers_urls_and_hashtags_survive(text):
+    assert scan_for_secrets(text) == []
+    assert redact(text) == text
+
+
+@pytest.mark.parametrize(
+    ("value", "generated"),
+    [
+        ("a8f3K2p9Qx7LmN4vB6tR1sZ0", True),
+        ("3f9a1c0e7b2d4f6a8c0e1b3d5f7a9c2e", True),
+        ("remembering_to_hydrate_daily", False),
+        ("correct-horse-battery-staple", False),
+        ("v2-release-candidate-2026-09", False),
+        ("hunter2hunter2hunter2hunter2", False),
+        ("short1a", False),
+        ("abcdefghijklmnopqrstu", True),
+    ],
+)
+def test_looks_generated(value, generated):
+    assert looks_generated(value) is generated
 
 
 def test_cost_estimate_depends_on_url():

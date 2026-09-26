@@ -1,30 +1,131 @@
-"""The secret scanner: runs over every post, alt text and media before any write."""
+"""The secret scanner: runs over every post, alt text and media before any write.
+
+It matches credential *shapes* (provider key prefixes, bearer headers, PEM
+blocks, JWTs) and machine-generated values assigned to a secret-named key,
+never vocabulary (STD-05 §R14). A key prefix must start a token, so
+``task-sk-learning-pipeline-v2`` is an identifier, not a key; and
+``password: correct-horse-battery-staple`` is prose, because the value does
+not look generated. ``redact`` masks the same shapes for text that is about
+to be persisted.
+"""
 
 from __future__ import annotations
 
+import math
 import re
+from collections import Counter
+from dataclasses import dataclass
 
-SECRET_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
-    ("openai-style key", re.compile(r"\bsk-[A-Za-z0-9_-]{16,}")),
-    ("anthropic key", re.compile(r"\bsk-ant-[A-Za-z0-9_-]{16,}")),
-    ("github token", re.compile(r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}")),
-    ("github fine-grained pat", re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}")),
-    ("slack token", re.compile(r"\bxox[abprs]-[A-Za-z0-9-]{10,}")),
-    ("aws access key", re.compile(r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b")),
-    ("google api key", re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b")),
-    ("stripe key", re.compile(r"\b[sr]k_(?:live|test)_[A-Za-z0-9]{16,}")),
-    ("x/twitter bearer", re.compile(r"\bAAAAAAAAAAAAAAAAAAAAA[A-Za-z0-9%]{20,}")),
-    ("pem block", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")),
-    ("bearer header", re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{20,}")),
-    ("jwt", re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}")),
-    (
+# A key prefix only counts at the start of a token: not after a letter, digit,
+# underscore or hyphen, so it never matches inside a hyphenated identifier.
+_START = r"(?<![\w-])"
+# Where a secret-named key's value counts as a credential: long, varied, and
+# not words joined by separators.
+GENERATED_MIN_LENGTH = 20
+GENERATED_MIN_ENTROPY_BITS = 3.5
+_SEPARATORS = re.compile(r"[-_.~+/=]+")
+
+
+@dataclass(frozen=True)
+class SecretPattern:
+    label: str
+    regex: re.Pattern[str]
+    # The ``value`` group must look machine-generated (``looks_generated``);
+    # for the other patterns the prefix alone is high-confidence.
+    generated_only: bool = False
+
+    def matches(self, text: str) -> list[re.Match[str]]:
+        return [m for m in self.regex.finditer(text) if self._counts(m)]
+
+    def _counts(self, match: re.Match[str]) -> bool:
+        return not self.generated_only or looks_generated(match.group("value"))
+
+
+def _is_phrase(value: str) -> bool:
+    """Words joined by separators: every part all letters, all digits, or tiny (``v2``)."""
+    parts = [p for p in _SEPARATORS.split(value) if p]
+    return len(parts) >= 2 and all(p.isalpha() or p.isdigit() or len(p) <= 3 for p in parts)
+
+
+def looks_generated(value: str) -> bool:
+    """True for a value shaped like a generated key or token, not a phrase.
+
+    At least ``GENERATED_MIN_LENGTH`` characters, an empirical entropy of at
+    least ``GENERATED_MIN_ENTROPY_BITS`` bits per character (so no
+    ``hunter2hunter2...``), and not words joined by ``-``, ``_``, ``.`` and the
+    like (``correct-horse-battery-staple``, ``v2-release-candidate-2026-09``).
+    """
+    if len(value) < GENERATED_MIN_LENGTH or _is_phrase(value):
+        return False
+    counts = Counter(value)
+    entropy = -sum(n / len(value) * math.log2(n / len(value)) for n in counts.values())
+    return entropy >= GENERATED_MIN_ENTROPY_BITS
+
+
+# Ordered most specific first, so ``redact`` labels an Anthropic key as one
+# before the generic ``sk-`` shape can claim it.
+SECRET_PATTERNS: tuple[SecretPattern, ...] = (
+    SecretPattern("anthropic key", re.compile(_START + r"sk-ant-[A-Za-z0-9_-]{16,}")),
+    SecretPattern("openai-style key", re.compile(_START + r"sk-[A-Za-z0-9_-]{16,}")),
+    SecretPattern("github token", re.compile(_START + r"(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}")),
+    SecretPattern("github fine-grained pat", re.compile(_START + r"github_pat_[A-Za-z0-9_]{20,}")),
+    SecretPattern("slack token", re.compile(_START + r"xox[abprs]-[A-Za-z0-9-]{10,}")),
+    SecretPattern("aws access key", re.compile(_START + r"(?:AKIA|ASIA)[A-Z0-9]{16}\b")),
+    SecretPattern("google api key", re.compile(_START + r"AIza[0-9A-Za-z_-]{35}(?![\w-])")),
+    SecretPattern("stripe key", re.compile(_START + r"[sr]k_(?:live|test)_[A-Za-z0-9]{16,}")),
+    SecretPattern(
+        "x/twitter bearer", re.compile(_START + r"AAAAAAAAAAAAAAAAAAAAA[A-Za-z0-9%]{20,}")
+    ),
+    SecretPattern(
+        "pem block",
+        re.compile(
+            r"-----BEGIN [A-Z ]*PRIVATE KEY-----"
+            r"(?:[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----)?"
+        ),
+    ),
+    SecretPattern(
+        "bearer header", re.compile(r"(?i)\bbearer\s+(?P<value>[A-Za-z0-9._~+/=-]{20,})")
+    ),
+    SecretPattern(
+        "jwt",
+        re.compile(_START + r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"),
+    ),
+    SecretPattern(
         "generic secret assignment",
         re.compile(
-            r"(?i)\b(?:api[_-]?key|secret|token|password|passwd)\s*[=:]\s*['\"]?[A-Za-z0-9._~+/=-]{16,}"
+            r"(?i)" + _START + r"(?:[a-z0-9]+[_-])*(?:api[_-]?key|secret|token|password|passwd)"
+            r"\s*[=:]\s*['\"]?(?P<value>[A-Za-z0-9._~+/=-]+)"
         ),
+        generated_only=True,
     ),
 )
 
 
 def scan_for_secrets(text: str) -> list[str]:
-    return [label for label, pat in SECRET_PATTERNS if pat.search(text)]
+    """The labels of every credential shape found in ``text``, in pattern order."""
+    return [p.label for p in SECRET_PATTERNS if p.matches(text)]
+
+
+def redact(text: str) -> str:
+    """``text`` with every credential shape ``scan_for_secrets`` knows masked.
+
+    The secret (a pattern's ``value`` group, else the whole match) becomes
+    ``[redacted:<label>]``; the words around it, such as ``Bearer`` or
+    ``api_key =``, stay so the record still reads.
+    """
+    for pattern in SECRET_PATTERNS:
+        text = _mask(pattern, text)
+    return text
+
+
+def _mask(pattern: SecretPattern, text: str) -> str:
+    out: list[str] = []
+    last = 0
+    for match in pattern.matches(text):
+        group = "value" if "value" in pattern.regex.groupindex else 0
+        start, end = match.span(group)
+        out.append(text[last:start])
+        out.append(f"[redacted:{pattern.label}]")
+        last = end
+    out.append(text[last:])
+    return "".join(out)
