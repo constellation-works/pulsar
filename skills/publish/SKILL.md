@@ -33,9 +33,9 @@ pulsar's job.
 2. Write the plan. One post is `text:` (plus optional `media:`); a thread is
    `posts:`, a list of those. Every media item needs `alt`, and its `path` must lie
    inside the workspace. `reply_to` or `quote`, never both. `account` (for example
-   `x:constworks`) or `accounts:`; omitted means the default account.
+   `x:<handle>`) or `accounts:`; omitted means the default account.
    ```yaml
-   account: x:constworks
+   account: x:<handle>
    posts:
      - text: "Orbit v0.26 is out"
        media: [{path: releases/v0.26/banner.png, alt: "The v0.26 banner"}]
@@ -47,7 +47,7 @@ pulsar's job.
    A post with a URL costs about $0.20, a plain one about $0.015.
 4. Report the posts, the estimated cost and the `digest` to whoever will publish.
    Publishing is not a plugin tool yet: an operator runs
-   `pulsar publish PLAN.yaml --yes` on the posting host.
+   `pulsar publish PLAN.yaml --confirm` on the posting host.
 
 ## Error codes
 

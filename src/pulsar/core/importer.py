@@ -30,7 +30,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from .errors import PulsarError
+from .errors import INTERNAL, PulsarError
 from .jsonx import JSONObject, as_object
 from .ledger import (
     IMPORT_TOOL,
@@ -51,6 +51,7 @@ _META_KEYS = ("superseded_post_id", "superseded_note")
 
 @dataclass
 class ImportReport:
+    applied: bool = True  # False: a report of what an import would do; nothing written
     imported_published: int = 0
     imported_skipped: int = 0
     already_present: int = 0
@@ -59,6 +60,7 @@ class ImportReport:
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "applied": self.applied,
             "imported_published": self.imported_published,
             "imported_skipped": self.imported_skipped,
             "already_present": self.already_present,
@@ -138,18 +140,34 @@ def _parse(raw: bytes) -> _Line:
     )
 
 
-def _disagreements(row: PlanRecord, line: _Line, digest: str, account: AccountRef) -> list[str]:
-    first = row.items[0] if row.items else None
-    expected: dict[str, tuple[object, object]] = {
-        "state": (row.state, SKIPPED if line.post_id is None else PUBLISHED),
-        "post_id": (first.post_id if first else None, line.post_id),
-        "request_digest": (row.request_digest, digest),
-        "account_alias": (row.account_alias, account.alias),
-        "text_sha256": (first.text_sha256 if first else None, line.text_sha256),
-        "note": (row.note, line.note),
-        "meta": (row.meta, line.meta),
+def _line_facts(line: _Line, digest: str, account: AccountRef) -> dict[str, object]:
+    """What an imported row records for ``line``: the fields a re-import compares."""
+    return {
+        "state": SKIPPED if line.post_id is None else PUBLISHED,
+        "post_id": line.post_id,
+        "request_digest": digest,
+        "account_alias": account.alias,
+        "text_sha256": line.text_sha256,
+        "note": line.note,
+        "meta": line.meta,
     }
-    return [name for name, (have, want) in expected.items() if have != want]
+
+
+def _row_facts(row: PlanRecord) -> dict[str, object]:
+    first = row.items[0] if row.items else None
+    return {
+        "state": row.state,
+        "post_id": first.post_id if first else None,
+        "request_digest": row.request_digest,
+        "account_alias": row.account_alias,
+        "text_sha256": first.text_sha256 if first else None,
+        "note": row.note,
+        "meta": row.meta,
+    }
+
+
+def _disagreements(have: dict[str, object], want: dict[str, object]) -> list[str]:
+    return [name for name, value in want.items() if have[name] != value]
 
 
 def import_posted(
@@ -159,13 +177,19 @@ def import_posted(
     account: AccountRef,
     provider: str = "x",
     url_for: Callable[[str], str],
+    apply: bool = True,
 ) -> ImportReport:
     """Import ``path`` (a ``posted.jsonl``) as rows for ``account``.
 
     ``url_for`` builds a post's public URL from its id (provider-specific,
-    so the caller supplies it).
+    so the caller supplies it). With ``apply=False`` nothing is written: the
+    report says what an import would do, classified by the same rules.
     """
-    report = ImportReport()
+    report = ImportReport(applied=apply)
+    # A dry run inserts nothing, so it remembers what it would have inserted:
+    # a key repeated later in the file is then classified as the real run
+    # would classify it (STD-02 §R34).
+    would_insert: dict[str, dict[str, object]] = {}
     with Path(path).open("rb") as fh:
         for number, raw in enumerate(fh, start=1):
             if not raw.strip():
@@ -176,30 +200,45 @@ def import_posted(
                 report.errors.append((number, str(exc)))
                 continue
             digest = request_digest(IMPORT_TOOL, key=line.key, post_id=line.post_id)
-            inserted, row = ledger.record_import(
-                key=line.key,
-                tool=IMPORT_TOOL,
-                digest=digest,
-                provider=provider,
-                account=account,
-                caller=IMPORT_CALLER,
-                created_at=line.ts,
-                post_id=line.post_id,
-                url=url_for(line.post_id) if line.post_id is not None else None,
-                text_sha256=line.text_sha256,
-                note=line.note,
-                meta=line.meta,
-            )
+            if apply:
+                inserted, row = ledger.record_import(
+                    key=line.key,
+                    tool=IMPORT_TOOL,
+                    digest=digest,
+                    provider=provider,
+                    account=account,
+                    caller=IMPORT_CALLER,
+                    created_at=line.ts,
+                    post_id=line.post_id,
+                    url=url_for(line.post_id) if line.post_id is not None else None,
+                    text_sha256=line.text_sha256,
+                    note=line.note,
+                    meta=line.meta,
+                )
+            else:
+                row = ledger.get_plan(line.key)
+                inserted = row is None and line.key not in would_insert
+                if inserted:
+                    would_insert[line.key] = _line_facts(line, digest, account)
+            facts = _line_facts(line, digest, account)
             if inserted:
                 if line.post_id is None:
                     report.imported_skipped += 1
                 else:
                     report.imported_published += 1
+                continue
+            if row is None and line.key in would_insert:
+                have = would_insert[line.key]
+            elif row is None:  # unreachable: a row that was not inserted exists
+                raise PulsarError(INTERNAL, f"line {number}: no ledger row for {line.key}")
             elif row.tool != IMPORT_TOOL:
                 report.conflicts.append(
                     (number, line.key, f"key already used by a {row.tool} write ({row.state})")
                 )
-            elif differ := _disagreements(row, line, digest, account):
+                continue
+            else:
+                have = _row_facts(row)
+            if differ := _disagreements(have, facts):
                 report.conflicts.append(
                     (number, line.key, "imported row disagrees on " + ", ".join(differ))
                 )

@@ -265,8 +265,21 @@ class XClient:
                 },
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
             )
+        except NOT_SENT_ERRORS as exc:
+            raise PulsarError(
+                API_ERROR, f"token refresh was not sent: {exc.__class__.__name__}", retryable=True
+            ) from exc
         except httpx.HTTPError as exc:
-            raise PulsarError(API_ERROR, f"token refresh failed: {exc.__class__.__name__}") from exc
+            # The POST may have reached X, which rotates the pair on use: say
+            # so rather than report a plain failure (STD-03 §R31).
+            raise PulsarError(
+                API_ERROR,
+                f"token refresh reply lost ({exc.__class__.__name__}); X may have rotated the "
+                f"token pair already. If later calls return auth_expired, "
+                f"{self.store.reauth_hint()}",
+                retryable=True,
+                detail={"outcome": "unknown"},
+            ) from exc
 
     # -- transport ----------------------------------------------------------
 

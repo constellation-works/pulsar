@@ -2,7 +2,9 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "required": [
-    "rows"
+    "rows",
+    "total",
+    "truncated"
   ],
   "properties": {
     "rows": {
@@ -70,6 +72,15 @@
         },
         "additionalProperties": false
       }
+    },
+    "total": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Rows that match, before `limit`."
+    },
+    "truncated": {
+      "type": "boolean",
+      "description": "More rows match than `rows` holds."
     }
   },
   "additionalProperties": false

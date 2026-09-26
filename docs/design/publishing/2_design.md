@@ -9,7 +9,7 @@ doc_role: design
 type: design
 summary: How a plan is normalised and digested, how the publisher admits, claims and sends it, and how reconcile settles unknown posts.
 tags: [publishing, plan, ledger, idempotency, policy, reconcile]
-paths: ["src/pulsar/core/plan.py", "src/pulsar/core/publisher.py", "src/pulsar/core/ledger.py", "src/pulsar/core/policy.py", "src/pulsar/core/usage.py", "src/pulsar/core/guard.py", "src/pulsar/core/media.py", "src/pulsar/core/importer.py", "src/pulsar/core/writelog.py"]
+paths: ["src/pulsar/core/plan.py", "src/pulsar/core/publisher.py", "src/pulsar/core/ledger/**", "src/pulsar/core/policy.py", "src/pulsar/core/usage.py", "src/pulsar/core/guard.py", "src/pulsar/core/media.py", "src/pulsar/core/importer.py", "src/pulsar/core/writelog.py"]
 related_features: [accounts, channels, surfaces]
 related_artifacts: [ORB-13027, ORB-13028, ORB-13030, ORB-13039]
 ---
@@ -95,7 +95,7 @@ config, never constants.
 ## 5. The Ledger
 
 `ledger.sqlite3` in the home, SQLite in WAL mode, schema version in `PRAGMA user_version`
-([ledger.py](../../../src/pulsar/core/ledger.py)). One `writes` row per logical write and one
+([core/ledger/](../../../src/pulsar/core/ledger/)). One `writes` row per logical write and one
 `items` row per post of a plan row. Several processes share it; claims and state changes take
 the write lock. States, columns, usage accounting and schema migration are specified in
 [specs/ledger.md](./specs/ledger.md).
@@ -129,8 +129,18 @@ the write lock. States, columns, usage accounting and schema migration are speci
   text, media payload and idempotency key is scanned for credential patterns (`sk-…`, `ghp_…`,
   `github_pat_…`, `xox…`, AWS/Google/Stripe keys, X bearer tokens, `Bearer …` headers, PEM
   private keys, JWTs, `token=…`-style assignments) before any network call, including on
-  validation. A hit is `secret_detected` naming the pattern, never
-  the match. It is a backstop: most secrets match no pattern.
+  validation, and so is the caller label. A `token=…`-style assignment counts only when its
+  value looks generated (at least 20 characters, at least 3.5 bits of entropy per character,
+  not words joined by separators), so `password=correct-horse-battery-staple` in a post is
+  prose, not a hit. The live values the process has loaded (each account's access and
+  refresh token, the store key; 16 characters or more) are matched by value as `live
+  credential`, since X's OAuth 2 tokens have no shape (STD-05 §R14). A hit is
+  `secret_detected` naming the pattern, never the match. It is a backstop: most secrets
+  match no pattern.
+- **Redaction at rest** (`guard.redact`): free text pulsar persists or logs (the caller label,
+  provider error messages, notes, `meta` strings, `writes.jsonl` lines, stderr logs) passes
+  through `redact`, which masks the same live values and shapes as `[redacted:<label>]` and keeps the words
+  around them (STD-05 §R13). The ledger's inventory is `ledger/text.py`'s `REDACTED_COLUMNS`.
 - **Media confinement** ([media.py](../../../src/pulsar/core/media.py)): files are read only
   from configured roots, opened without following symlinks, size-checked before reading, and
   typed by content. See [specs/media-confinement.md](./specs/media-confinement.md).

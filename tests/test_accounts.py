@@ -650,12 +650,32 @@ def test_the_accounts_lock_times_out_naming_its_holder(paths, bundle, monkeypatc
     assert AccountRegistry(paths).get(ALIAS).status == "active"
 
 
-def _newer_registry(paths):
+def _newer_registry(paths, **declared):
     doc = json.loads(paths.accounts_file.read_text())
     doc["version"] = 2
+    doc["min_reader_version"] = 1  # version 2 only added fields
+    doc.update(declared)
     doc["accounts"][ALIAS]["posting_window"] = "weekdays"  # a field this pulsar does not know
     paths.accounts_file.write_text(json.dumps(doc))
     return paths.accounts_file.read_bytes()
+
+
+@pytest.mark.parametrize("min_reader", [2, None, "1", True])
+def test_a_newer_registry_that_does_not_declare_this_reader_is_refused(paths, bundle, min_reader):
+    """STD-03 §R10: newer state is read only when its writer declared it compatible."""
+    register(paths, bundle, handle="constworks", provider_user_id="1")
+    before = _newer_registry(paths, min_reader_version=min_reader)
+    err = _codes(lambda: AccountRegistry(paths).resolve(None, Settings()))
+    assert err.code == "invalid_config", "an undeclared newer registry is not reinterpreted"
+    assert "does not declare version 1 a reader" in err.message
+    assert err.detail == {"path": str(paths.accounts_file), "version": 2, "supported": 1}
+    assert paths.accounts_file.read_bytes() == before
+
+
+def test_the_registry_declares_its_oldest_reader(paths, bundle):
+    register(paths, bundle)
+    doc = json.loads(paths.accounts_file.read_text())
+    assert doc["version"] == 1 and doc["min_reader_version"] == 1
 
 
 def test_a_newer_registry_is_read_but_never_rewritten(paths, bundle, fake_x):

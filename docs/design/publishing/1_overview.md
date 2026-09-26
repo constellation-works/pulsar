@@ -9,7 +9,7 @@ doc_role: overview
 type: design
 summary: The plan, its digest, the publisher, the policy and the ledger — how pulsar turns a request into at most one paid post per intent.
 tags: [publishing, plan, ledger, idempotency, policy, reconcile]
-paths: ["src/pulsar/core/plan.py", "src/pulsar/core/publisher.py", "src/pulsar/core/ledger.py", "src/pulsar/core/policy.py", "src/pulsar/core/usage.py", "src/pulsar/core/guard.py", "src/pulsar/core/media.py", "src/pulsar/core/importer.py", "src/pulsar/core/writelog.py", "src/pulsar/core/settings.py"]
+paths: ["src/pulsar/core/plan.py", "src/pulsar/core/publisher.py", "src/pulsar/core/ledger/**", "src/pulsar/core/policy.py", "src/pulsar/core/usage.py", "src/pulsar/core/guard.py", "src/pulsar/core/media.py", "src/pulsar/core/importer.py", "src/pulsar/core/writelog.py", "src/pulsar/core/settings.py"]
 related_features: [accounts, channels, surfaces]
 related_artifacts: [ORB-13006, ORB-13027, ORB-13028, ORB-13030]
 ---
@@ -56,7 +56,7 @@ the account's timeline.
 |---------|------|------|
 | Plan model, normalisation, canonical digest | [core/plan.py](../../../src/pulsar/core/plan.py) | [ORB-13028] |
 | Validate, admit, claim, send, reconcile | [core/publisher.py](../../../src/pulsar/core/publisher.py) | [ORB-13028] |
-| Ledger: rows, items, states, usage, schema versions | [core/ledger.py](../../../src/pulsar/core/ledger.py) | [ORB-13027], [ORB-13028] |
+| Ledger: rows, items, states, usage, schema versions | [core/ledger/](../../../src/pulsar/core/ledger/) | [ORB-13027], [ORB-13028] |
 | Policy: quiet hours, cap, budgets | [core/policy.py](../../../src/pulsar/core/policy.py), [core/usage.py](../../../src/pulsar/core/usage.py) | [ORB-13028] |
 | Secret scanner | [core/guard.py](../../../src/pulsar/core/guard.py) | [ORB-12124] |
 | Media confinement, type sniffing, limits | [core/media.py](../../../src/pulsar/core/media.py) | [ORB-13006], [ORB-13027] |

@@ -30,27 +30,50 @@ import asyncio
 import json
 import logging
 import os
+import stat
 import sys
 from collections.abc import Callable, Coroutine, Mapping
 from dataclasses import replace
 from pathlib import Path
 from typing import IO, Any
 
-from ..core.errors import API_ERROR, INVALID_ARGUMENT, PulsarError
+from ..core.errors import (
+    INTERNAL,
+    INVALID_ARGUMENT,
+    INVALID_CONFIG,
+    INVALID_MEDIA,
+    INVALID_PLAN,
+    INVALID_TEXT,
+    SECRET_DETECTED,
+    UNSUPPORTED,
+    PulsarError,
+)
 from ..core.jsonx import as_object
 from ..core.ledger import PUBLISHED, PlanRecord
-from ..core.paths import Paths, pulsar_home
+from ..core.media import open_beneath
+from ..core.paths import Paths, resolve_home
 from ..core.plan import Plan
 from ..core.settings import Settings, load_settings
-from .mcp import Runtime
+from ..core.store import home_command
+from . import ops
+from .health import attention as health_attention
+from .health import auth_report
+from .runtime import Runtime, configure_logging
 
 log = logging.getLogger(__name__)
 
 NAMESPACE = "pulsar"
 ENVELOPE_VERSION = 1
-HISTORY_LIMIT_MAX = 100
 # A plan source is small YAML; refuse anything that is plainly not one.
 SOURCE_MAX_BYTES = 256 * 1024
+
+# Each tool's input keys: the request schemas' properties (a test holds them
+# equal). Anything else is refused, not ignored (STD-01 §R29).
+INPUTS: dict[str, frozenset[str]] = {
+    "status": frozenset({"account"}),
+    "validate": frozenset({"plan", "source", "account"}),
+    "history": frozenset({"account", "limit"}),
+}
 
 Output = dict[str, Any]
 
@@ -75,10 +98,29 @@ class Call:
 
 
 def plugin_paths(environ: Mapping[str, str]) -> Paths:
+    """``$ORBIT_PLUGIN_STATE/home`` under Orbit, else the usual home.
+
+    Under Orbit the sandbox can write only the plugin state, so a
+    ``PULSAR_HOME`` naming any other home cannot be honoured; it is refused
+    before any work (STD-01 §R28) rather than ignored, which would give this
+    call a different ledger from the CLI's and defeat its duplicate guard.
+    """
+    home_env = environ.get("HOME")
+    user_home = Path(home_env) if home_env else Path.home()
     state = environ.get("ORBIT_PLUGIN_STATE")
-    if state:
-        return Paths(home=Path(state) / "home")
-    return Paths(home=pulsar_home())
+    if not state:
+        return Paths.from_environ(environ, user_home)
+    home = Path(state) / "home"
+    other = environ.get("PULSAR_HOME")
+    if other and resolve_home(environ, user_home) != home:
+        raise PulsarError(
+            INVALID_CONFIG,
+            f"PULSAR_HOME={other} names a different home from this plugin's ({home}); under "
+            "Orbit pulsar can use only its plugin state. Unset PULSAR_HOME for the Orbit "
+            f"host, or set it to {home}",
+            detail={"pulsar_home": other, "plugin_home": str(home)},
+        )
+    return Paths(home=home, user_home=user_home)
 
 
 def _settings(paths: Paths, call: Call) -> Settings:
@@ -93,19 +135,16 @@ def _settings(paths: Paths, call: Call) -> Settings:
 
 
 async def status(paths: Paths, call: Call) -> Output:
-    """Accounts, token health, budget use, unresolved writes, last publication. Offline."""
-    from .cli import status_report
-    from .ops import budget_report
+    """Accounts, token health, budget use, unresolved writes, last publication.
 
+    Offline and read-only: token health from local state (``unverified``
+    when that cannot settle it), nothing migrated or written.
+    """
     account = call.string("account")
-    auth, _ = await status_report(paths, account=account, offline=True)
-    if "error" in auth:
-        raise _from_result(auth["error"])
-    budget, code = budget_report(paths, account=account)
-    if code != 0:
-        raise _from_result(budget)
+    auth, _ = await auth_report(paths, account=account)
+    budget, _ = ops.budget_report(paths, account=account)
     usage = {entry["alias"]: entry for entry in budget["accounts"]}
-    rt = Runtime(paths)
+    rt = Runtime(paths, read_only=True)
     try:
         accounts: list[dict[str, Any]] = []
         attention: list[str] = []
@@ -120,6 +159,8 @@ async def status(paths: Paths, call: Call) -> Output:
                 "reauth_required": entry["reauth_required"],
                 "token_state": entry["token_state"],
                 "access_token_expires_in_s": entry["access_token_expires_in_s"],
+                "health": entry["health"],
+                "reason": entry["reason"],
                 "healthy": entry["healthy"],
                 "posts": spent.get("posts"),
                 "day": spent.get("day"),
@@ -129,17 +170,21 @@ async def status(paths: Paths, call: Call) -> Output:
                 "last_published": _last_published(rt, alias),
             }
             accounts.append(row)
-            if entry["reauth_required"] or not entry["authorized"]:
-                attention.append(f"{alias}: re-authorization required (`pulsar auth login`)")
-            elif not entry["healthy"]:
-                attention.append(f"{alias}: {entry['status']}")
+            if (note := health_attention(entry, paths.home)) is not None:
+                attention.append(note)
             if row["unresolved"]:
                 attention.append(
                     f"{alias}: {len(row['unresolved'])} write(s) with an unknown outcome "
-                    "(`pulsar reconcile`)"
+                    f"(`{home_command(paths.home, f'reconcile --account {alias}')}`)"
                 )
         if not accounts:
+            # No home here: this is a conformance golden and the sandbox's home varies.
             attention.append("no account is bound (`pulsar auth login --account x:<handle>`)")
+        if auth["legacy"] is not None:
+            remedy = auth["legacy"]["message"] or (
+                f"run `{home_command(paths.home, 'migrate --confirm')}`"
+            )
+            attention.append(f"legacy credentials: {remedy}")
     finally:
         await rt.aclose()
     return {
@@ -151,10 +196,10 @@ async def status(paths: Paths, call: Call) -> Output:
 
 
 def _last_published(rt: Runtime, alias: str) -> dict[str, Any] | None:
-    for record in rt.ledger.history(limit=50, account_alias=alias):
-        if record.state == PUBLISHED:
-            return {"key": record.key, "url": record.url, "at": record.updated_at}
-    return None
+    record = rt.ledger.last_published(alias)
+    if record is None:
+        return None
+    return {"key": record.key, "url": record.url, "at": record.updated_at}
 
 
 async def validate(paths: Paths, call: Call) -> Output:
@@ -171,83 +216,99 @@ async def validate(paths: Paths, call: Call) -> Output:
     if raw_plan is not None and plan_input is None:
         raise PulsarError(INVALID_ARGUMENT, "`plan` must be an object")
     # An unreadable source is a bad argument (a tool error); what it says is the plan.
-    text = _read_source(_source_path(call, source), source) if source is not None else None
+    text = _read_source(call, source) if source is not None else None
     account = call.string("account")
-    rt = Runtime(paths, settings=_settings(paths, call))
+    # Relative media paths start at the workspace, never at this process's cwd.
+    rt = Runtime(paths, settings=_settings(paths, call), media_base=call.workspace, read_only=True)
     try:
         if text is not None:
             plan = Plan.from_yaml(text)
         else:
             plan = Plan.from_mapping(plan_input or {})
-        with _in_workspace(call):
-            plan, targets = rt.plan_targets(plan, account)
-            reports = [rt.publisher.prepare(plan, rt.offline_bound(a)).report() for a in targets]
+        plan, targets = rt.plan_targets(plan, account)
+        reports = [rt.publisher.prepare(plan, rt.offline_bound(a)).report() for a in targets]
     except PulsarError as exc:
+        if exc.code not in PLAN_VERDICTS:
+            raise  # the account, the home or the storage: a tool error, not a verdict
         return {"valid": False, "error": exc.to_envelope()["error"]}
     finally:
         await rt.aclose()
     return {"valid": True, "accounts": reports}
 
 
-def _source_path(call: Call, source: str) -> Path:
+# What is wrong with the plan itself, which ``validate`` answers as ``valid: false``.
+PLAN_VERDICTS = frozenset({INVALID_PLAN, INVALID_TEXT, INVALID_MEDIA, SECRET_DETECTED, UNSUPPORTED})
+
+
+def _read_source(call: Call, source: str) -> str:
+    """The plan file ``source`` names, read without following a symlink out of the
+    workspace between the check and the open (STD-05 §R7, §R9)."""
     if call.workspace is None:
         raise PulsarError(INVALID_ARGUMENT, "`source` needs a workspace")
-    path = (call.workspace / source).resolve()
-    if not path.is_relative_to(call.workspace):
+    workspace = call.workspace
+    detail = {"source": source}
+    try:
+        path = (workspace / source).resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise PulsarError(
+            INVALID_ARGUMENT, f"cannot read {source}: {_reason(exc)}", detail=detail
+        ) from exc
+    if not path.is_relative_to(workspace) or path == workspace:
         raise PulsarError(
             INVALID_ARGUMENT,
-            f"`source` must be inside the workspace ({call.workspace})",
-            detail={"source": source},
+            f"`source` must be a file inside the workspace ({workspace})",
+            detail=detail,
         )
-    return path
-
-
-def _read_source(path: Path, source: str) -> str:
     try:
-        with path.open("rb") as fh:
-            data = fh.read(SOURCE_MAX_BYTES + 1)
+        before = os.lstat(path)
+        if not stat.S_ISREG(before.st_mode):
+            raise PulsarError(INVALID_ARGUMENT, f"{source} is not a regular file", detail=detail)
+        fd = open_beneath(path, workspace)
     except OSError as exc:
         raise PulsarError(
-            INVALID_ARGUMENT, f"cannot read {source}: {exc.strerror}", detail={"source": source}
+            INVALID_ARGUMENT, f"cannot read {source}: {_reason(exc)}", detail=detail
         ) from exc
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or (st.st_dev, st.st_ino) != (before.st_dev, before.st_ino):
+            raise PulsarError(
+                INVALID_ARGUMENT, f"{source} changed while it was being opened", detail=detail
+            )
+        with os.fdopen(os.dup(fd), "rb") as fh:
+            data = fh.read(SOURCE_MAX_BYTES + 1)
+    finally:
+        os.close(fd)
     if len(data) > SOURCE_MAX_BYTES:
-        raise PulsarError(INVALID_ARGUMENT, f"{source} is over {SOURCE_MAX_BYTES} bytes")
+        raise PulsarError(
+            INVALID_ARGUMENT, f"{source} is over {SOURCE_MAX_BYTES} bytes", detail=detail
+        )
     try:
         return data.decode("utf-8")
     except UnicodeDecodeError as exc:
-        raise PulsarError(INVALID_ARGUMENT, f"{source} is not UTF-8") from exc
+        raise PulsarError(INVALID_ARGUMENT, f"{source} is not UTF-8", detail=detail) from exc
 
 
-class _in_workspace:
-    """Resolve relative media paths against the workspace root for the call."""
-
-    def __init__(self, call: Call) -> None:
-        self.target = call.workspace
-        self.previous: str | None = None
-
-    def __enter__(self) -> None:
-        if self.target is not None:
-            self.previous = os.getcwd()
-            os.chdir(self.target)
-
-    def __exit__(self, *_: object) -> None:
-        if self.previous is not None:
-            os.chdir(self.previous)
+def _reason(exc: BaseException) -> str:
+    return exc.strerror if isinstance(exc, OSError) and exc.strerror else type(exc).__name__
 
 
 async def history(paths: Paths, call: Call) -> Output:
-    """The newest ledger rows, flattened for a table. Offline."""
+    """The newest ledger rows, flattened for a table, and how many there are. Offline."""
     account = call.string("account")
-    limit = call.input.get("limit", 20)
-    if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= HISTORY_LIMIT_MAX:
-        raise PulsarError(INVALID_ARGUMENT, f"`limit` must be an integer 1..{HISTORY_LIMIT_MAX}")
-    rt = Runtime(paths)
+    limit = call.input.get("limit", ops.HISTORY_LIMIT_DEFAULT)
+    if not isinstance(limit, int):
+        raise PulsarError(
+            INVALID_ARGUMENT, f"`limit` must be an integer 1..{ops.HISTORY_LIMIT_MAX}"
+        )
+    limit = ops.check_limit(limit)
+    rt = Runtime(paths, read_only=True)
     try:
         alias = rt.account(account).alias if account is not None else None
         rows = [_row(r) for r in rt.ledger.history(limit=limit, account_alias=alias)]
+        total = rt.ledger.count(account_alias=alias)
     finally:
         await rt.aclose()
-    return {"rows": rows}
+    return {"rows": rows, "total": total, "truncated": total > len(rows)}
 
 
 def _row(record: PlanRecord) -> dict[str, Any]:
@@ -275,16 +336,6 @@ TOOLS: dict[str, Handler] = {"status": status, "validate": validate, "history": 
 # -- protocol ---------------------------------------------------------------------------
 
 
-def _from_result(result: Mapping[str, Any]) -> PulsarError:
-    """A ``to_result`` dict (the ops/CLI reports) back as the error it was."""
-    return PulsarError(
-        str(result.get("code", API_ERROR)),
-        str(result.get("message", "")),
-        detail=result.get("detail"),
-        retryable=bool(result.get("retryable", False)),
-    )
-
-
 def _failure(exc: PulsarError) -> dict[str, Any]:
     return exc.to_envelope()
 
@@ -300,7 +351,7 @@ def handle(envelope: object, environ: Mapping[str, str]) -> dict[str, Any]:
     except Exception as exc:
         log.exception("pulsar orbit-tool: unexpected error")
         return _failure(
-            PulsarError(API_ERROR, f"unexpected {exc.__class__.__name__}", retryable=False)
+            PulsarError(INTERNAL, f"internal error: {exc.__class__.__name__}", retryable=False)
         )
     return {"ok": True, "output": output}
 
@@ -329,6 +380,13 @@ def _parse(envelope: object, environ: Mapping[str, str]) -> Call:
     input_ = as_object({} if request.get("input") is None else request.get("input"))
     if input_ is None:
         raise PulsarError(INVALID_ARGUMENT, "`input` must be a JSON object")
+    unknown = sorted(set(input_) - INPUTS[verb])
+    if unknown:
+        raise PulsarError(
+            INVALID_ARGUMENT,
+            f"{NAMESPACE}.{verb} does not take " + ", ".join(f"`{k}`" for k in unknown),
+            detail={"unknown": unknown, "accepted": sorted(INPUTS[verb])},
+        )
     context = as_object({} if request.get("context") is None else request.get("context"))
     if context is None:
         raise PulsarError(INVALID_ARGUMENT, "`context` must be a JSON object")
@@ -364,5 +422,5 @@ def main(
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
+    configure_logging()
     raise SystemExit(main())

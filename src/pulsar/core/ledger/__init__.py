@@ -40,7 +40,7 @@ there through ``WriteLog.export``. The ledger is the source of truth.
 
 ``Ledger(paths, read_only=True)`` serves reports: it never creates,
 migrates or locks anything, and refuses a file older than this pulsar with
-the remedy (``pulsar migrate``). Every connection re-reads the schema
+the remedy (``pulsar migrate --confirm``). Every connection re-reads the schema
 version, so a running process stops writing once a newer pulsar migrates
 the file.
 
@@ -59,9 +59,7 @@ from .keys import MAX_KEY_LENGTH, check_key, check_note, default_key, request_di
 from .records import (
     COMMITTED_ITEM_STATES,
     FAILED,
-    FINISHED_STATES,
     IMPORT_TOOL,
-    ITEM_STATES,
     LEGACY_ITEM_TOOLS,
     LEGACY_PROVIDER,
     OPEN_ROW_STATES,
@@ -70,7 +68,6 @@ from .records import (
     PUBLISHED,
     REARMABLE_TOOLS,
     RESOLVED_ABSENT,
-    ROW_STATES,
     SKIP_TOOL,
     SKIPPED,
     SUBMITTING,
@@ -93,9 +90,7 @@ __all__ = [
     "BUSY_TIMEOUT_MS",
     "COMMITTED_ITEM_STATES",
     "FAILED",
-    "FINISHED_STATES",
     "IMPORT_TOOL",
-    "ITEM_STATES",
     "LEGACY_ITEM_TOOLS",
     "LEGACY_PROVIDER",
     "MAX_KEY_LENGTH",
@@ -105,7 +100,6 @@ __all__ = [
     "PUBLISHED",
     "REARMABLE_TOOLS",
     "RESOLVED_ABSENT",
-    "ROW_STATES",
     "SCHEMA_VERSION",
     "SKIP_TOOL",
     "SKIPPED",

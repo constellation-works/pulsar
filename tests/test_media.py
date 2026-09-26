@@ -127,12 +127,24 @@ def test_dotdot_traversal_is_refused(root, outside):
     assert "outside the allowed media roots" in err.message
 
 
-def test_relative_paths_resolve_against_cwd(root, monkeypatch):
+def test_relative_paths_resolve_against_the_given_base(root, monkeypatch):
+    (root / "pic.png").write_bytes(PNG)
+    monkeypatch.chdir(root.parent)  # the process cwd is never consulted
+    assert load_media("pic.png", None, None, roots=[root], base=root)[1] == "image/png"
+    _refused("pic.png", None, None, roots=[root], base=root.parent)  # no such file there
+
+
+def test_a_relative_path_without_a_base_is_refused(root, monkeypatch):
     (root / "pic.png").write_bytes(PNG)
     monkeypatch.chdir(root)
-    assert load_media("pic.png", None, None, roots=[root])[1] == "image/png"
-    monkeypatch.chdir(root.parent)
-    _refused("pic.png", None, None, roots=[root])  # no such file relative to the new cwd
+    err = _refused("pic.png", None, None, roots=[root])
+    assert "relative" in err.message
+
+
+def test_a_tilde_path_is_not_expanded(root, monkeypatch):
+    monkeypatch.setenv("HOME", str(root))
+    (root / "pic.png").write_bytes(PNG)
+    _refused("~/pic.png", None, None, roots=[root], base=root.parent)
 
 
 def test_pulsar_home_inside_a_root_is_refused(tmp_path):
@@ -243,13 +255,13 @@ def test_file_replaced_after_the_check_is_refused(root, monkeypatch):
     """The fd must be the inode that was checked, not whatever is at the path by then."""
     (root / "pic.png").write_bytes(PNG)
     (root / "other.png").write_bytes(PNG)
-    real_open = media._open_nofollow
+    real_open = media.open_beneath
 
     def replace_then_open(resolved, r):
         os.replace(root / "other.png", root / "pic.png")
         return real_open(resolved, r)
 
-    monkeypatch.setattr(media, "_open_nofollow", replace_then_open)
+    monkeypatch.setattr(media, "open_beneath", replace_then_open)
     err = _refused(str(root / "pic.png"), None, None, roots=[root])
     assert "changed while" in err.message
 
@@ -257,14 +269,14 @@ def test_file_replaced_after_the_check_is_refused(root, monkeypatch):
 def test_symlink_swapped_in_after_resolution_is_not_followed(root, outside, monkeypatch):
     (outside / "pic.png").write_bytes(PNG)
     (root / "pic.png").write_bytes(PNG)
-    real_open = media._open_nofollow
+    real_open = media.open_beneath
 
     def swap_then_open(resolved, r):
         (root / "pic.png").unlink()
         (root / "pic.png").symlink_to(outside / "pic.png")
         return real_open(resolved, r)
 
-    monkeypatch.setattr(media, "_open_nofollow", swap_then_open)
+    monkeypatch.setattr(media, "open_beneath", swap_then_open)
     err = _refused(str(root / "pic.png"), None, None, roots=[root])
     assert "cannot open" in err.message
 

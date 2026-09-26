@@ -22,6 +22,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
 import secrets
 import sys
 import threading
@@ -142,6 +143,9 @@ class CallbackServer(HTTPServer):
 
 class _Callback(BaseHTTPRequestHandler):
     server: CallbackServer  # pyright: ignore[reportIncompatibleVariableOverride]
+    # A connection that sends nothing (a browser's preconnect) is dropped after
+    # this long, so it cannot hold ``wait`` past its deadline (STD-03 §R22).
+    timeout = 5.0
 
     def _reply(self, status: int, body: bytes) -> None:
         self.send_response(status)
@@ -251,7 +255,7 @@ def authorize(
     try:
         notify(f"Open this URL and approve as the account that should post:\n\n  {url}\n")
         if open_browser:
-            threading.Thread(target=webbrowser.open, args=(url,), daemon=True).start()
+            threading.Thread(target=open_quietly, args=(url,), daemon=True).start()
         query = server.wait(300.0)
     finally:
         server.server_close()
@@ -332,6 +336,26 @@ def require_x_alias(alias: str) -> str:
             detail={"account": canonical},
         )
     return canonical
+
+
+def open_quietly(url: str) -> None:
+    """``webbrowser.open`` with file descriptor 1 on ``/dev/null``.
+
+    A launched browser inherits stdout, and some launchers print to it
+    ("Opening in existing browser session."), which would land before the
+    command's JSON (STD-01 §R12). Login writes nothing to stdout until the
+    human has approved, so the brief swap cannot hide pulsar's own output.
+    """
+    sys.stdout.flush()
+    saved = os.dup(1)
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    try:
+        os.dup2(devnull, 1)
+        webbrowser.open(url)
+    finally:
+        os.dup2(saved, 1)
+        os.close(saved)
+        os.close(devnull)
 
 
 def login(

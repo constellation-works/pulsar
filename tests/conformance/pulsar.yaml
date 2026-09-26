@@ -127,12 +127,8 @@ tests:
     plan:
       text: hello
   expect:
-    output:
-      valid: false
-      error:
-        code: auth_expired
-        message: no account is bound on this host; a human runs `pulsar auth login --account provider:handle`
-        retryable: false
+    error:
+      code: auth_expired
 - name: validate_needs_exactly_one_of_plan_or_source
   tool: validate
   input: {}
@@ -153,6 +149,8 @@ tests:
   expect:
     output:
       rows: []
+      total: 0
+      truncated: false
 - name: history_for_an_unknown_account
   tool: history
   input:

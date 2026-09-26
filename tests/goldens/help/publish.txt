@@ -1,0 +1,25 @@
+usage: pulsar publish [-h] [--json] [--account ACCOUNT] [--idempotency-key IDEMPOTENCY_KEY]
+                      [--caller CALLER] [--confirm] [--yes]
+                      plan
+
+publish a plan through the ledger and policy; validates only without --confirm
+
+positional arguments:
+  plan                  plan file (YAML)
+
+options:
+  -h, --help            show this help message and exit
+  --json                machine output (the default and only mode: every command prints JSON)
+  --account ACCOUNT     one of the plan's accounts, or the one to bind a plan that names none;
+                        default: default_account in config.toml, else the only bound account
+  --idempotency-key IDEMPOTENCY_KEY
+                        the write's key: re-running with it replays the receipt instead of posting
+                        again; default: derived from the plan's digest and the account
+  --caller CALLER       audit label recorded in the ledger; default: $PULSAR_CALLER, else pulsar-
+                        cli
+  --confirm             actually publish (costs money)
+  --yes                 deprecated alias of --confirm
+
+Examples:
+  pulsar publish plan.yaml            # what would post, and its cost
+  pulsar publish plan.yaml --confirm  # post it (re-running replays the receipt)

@@ -11,7 +11,7 @@ summary: The MCP tools and the caller boundary, the operator CLI, and how the Or
 tags: [surfaces, mcp, cli, orbit-plugin]
 paths: ["src/pulsar/surfaces/**", "plugin.yaml", "bin/pulsar", "schemas/**"]
 related_features: [publishing, accounts]
-related_artifacts: [ORB-13029, ORB-13032, ORB-13114, ORB-13115]
+related_artifacts: [ORB-13029, ORB-13032, ORB-13114, ORB-13115, ORB-13138]
 ---
 
 # Surfaces — Design
@@ -21,9 +21,13 @@ The three front ends as built. The phase 4 plugin tools are in [3_vision.md](./3
 ## 1. MCP Server
 
 `pulsar serve` ([mcp.py](../../../src/pulsar/surfaces/mcp.py)) runs over stdio, or
-streamable HTTP bound to loopback (`--transport http --port 8977`; exposing it and putting
-auth in front is an operator step). Register it with a client, for example
-`claude mcp add pulsar -- uv --directory /path/to/pulsar run pulsar serve`.
+streamable HTTP on a loopback address (`--transport http --host 127.0.0.1 --port 8977`;
+`--host` accepts only `127.0.0.1`, `localhost` or `::1`; both flags are refused without
+`--transport http`). Over HTTP a request whose `Host` is not one of the bound loopback
+`name:port` authorities, or whose `Origin` is not `http://` plus one of them, is refused
+(421, 403) before any tool runs (STD-05 §R16; §R17 is a recorded deviation for clients that
+send no `Origin`). Register it with a client, for
+example `claude mcp add pulsar -- uv --directory /path/to/pulsar run pulsar serve`.
 
 | Tool | Annotation | Provider call | Input → output |
 |---|---|---|---|
@@ -39,8 +43,13 @@ auth in front is an operator step). Register it with a client, for example
   returns the same report and records nothing.
 - Upload media as the account that will post it.
 - Every tool returns an object: `{ok: true, …}` or `{ok: false, code, message, retryable,
-  detail?}`. An unexpected exception becomes a non-retryable `api_error` naming its type; nothing
+  detail?}`. An unexpected exception becomes a non-retryable `internal` naming its type; nothing
   raises into the client.
+- Arguments are strict: every input schema has `additionalProperties: false`, and an unknown
+  argument is refused, not ignored (STD-01 §R29). `create_post` always returns `replayed`.
+- Planning, media reads and claims run in a worker thread so one slow call does not stall the
+  server; the publisher's per-post ledger writes stay on the loop (see
+  [Publishing — Decisions](../publishing/4_decisions.md)).
 
 ### The caller boundary
 
@@ -54,25 +63,46 @@ that gates by tool name and annotations:
 - `delete_post`: `destructiveHint: true`; prompt harder.
 
 `create_post(dry_run=true)` shares a name with a live post, so a name-based gate cannot tell
-them apart; new callers validate with `validate_post` or `validate_plan`.
+them apart; new callers validate with `validate_post` or `validate_plan`. A dry run makes the
+checks the live call would make before sending (schedule, idempotency key, budget and caps)
+and records nothing.
 
 `caller` (argument, else `PULSAR_CALLER`) is recorded in the ledger and is advisory: nothing
 authenticates it.
 
 ## 2. Operator CLI
 
-[cli.py](../../../src/pulsar/surfaces/cli.py), verbs in [ops.py](../../../src/pulsar/surfaces/ops.py).
-Each prints JSON and exits 0 on success, 1 otherwise.
+[cli.py](../../../src/pulsar/surfaces/cli.py), verbs in [ops.py](../../../src/pulsar/surfaces/ops.py),
+health in [health.py](../../../src/pulsar/surfaces/health.py).
+
+- **Output.** One JSON document on stdout; `--json` is accepted anywhere and changes nothing
+  (the CLI is JSON-only, a recorded deviation). Notices (an empty result, a deprecated flag)
+  are prose lines on stderr.
+- **Errors.** One JSON object on stderr, `{error, code, retryable, detail}`, with nothing on
+  stdout; argparse's own errors take the same shape (`invalid_argument`, `detail.usage`).
+  Exit 0 success, 1 the command failed or reported something not healthy or not settled, 2 a
+  usage error. An unexpected exception is `internal`. A closed stdout
+  (`pulsar history | head -1`) exits 0.
+- **Effects.** The reports (`status`, `history`, `validate`, `auth status`) read the home
+  without writing, creating or migrating anything. A write command upgrades the ledger schema
+  and moves phase 1 credentials on first use; `pulsar migrate --confirm` does it on purpose.
+  What sends, deletes or cannot be undone needs `--confirm` (`publish`, `auth logout`,
+  `import-posted`, `migrate`, `auth migrate`), checked before anything else runs; without it
+  `publish`, `import-posted` and both migrates report what they would do. `reconcile`
+  applies without it ([decision](4_decisions.md#reconcile-and-first-use-migration-apply-without---confirm)).
+  Writes name the `home` they wrote. A remedy that names a command pins it to that home
+  (`PULSAR_HOME=… pulsar …`), so the plugin's advice acts on the plugin's home.
 
 | Command | Network | What it does |
 |---|---|---|
 | `pulsar auth login | status | logout | migrate` | see [Accounts — Design](../accounts/2_design.md) | bind, check, unbind, migrate accounts |
 | `pulsar status [--account A]` | none | budget and cap use, quiet hours, unresolved keys |
-| `pulsar history [--account A] [--limit N]` | none | newest ledger rows with items |
+| `pulsar history [--account A] [--limit N]` | none | newest ledger rows with items; `total` and `truncated` (`--limit` 1–100, refused outside) |
 | `pulsar validate PLAN.yaml [--account A]` | none | the publisher's report; needs no credentials |
-| `pulsar publish PLAN.yaml [--account A] [--idempotency-key K] [--caller C] --yes` | posts | publishes; without `--yes` only validates |
-| `pulsar reconcile [--account A]` | timeline reads only when something is unresolved | settles unknown and stale posts |
-| `pulsar import-posted FILE [--account A]` | `/users/me` only if identity is not cached | imports `posted.jsonl` |
+| `pulsar publish PLAN.yaml [--account A] [--idempotency-key K] [--caller C] --confirm` | posts | prepares every account's plan, then publishes; without `--confirm` it makes every offline check the live run makes (key, caller, schedule, budget, cap) and sends nothing (`--yes` is a deprecated alias) |
+| `pulsar reconcile [--account A]` | timeline reads only when something is unresolved | settles unknown and stale posts; one failing row is reported and the rest still run |
+| `pulsar import-posted FILE [--account A] --confirm` | `/users/me` only if identity is not cached | imports `posted.jsonl`; without `--confirm` reports only |
+| `pulsar migrate [--confirm]` | none | reports, or with `--confirm` applies, the ledger schema upgrade and the phase 1 credential move |
 | `pulsar serve` | — | the MCP server |
 | `pulsar orbit-tool` | — | the Orbit backend, one envelope on stdin |
 
@@ -83,24 +113,29 @@ Each prints JSON and exits 0 on success, 1 otherwise.
 
 | Tool | CLI | Output |
 |---|---|---|
-| `pulsar.status` | `orbit pulsar status` | per account: token health (offline), budget and cap use, unresolved writes, last publication; `healthy` and `attention` |
+| `pulsar.status` | `orbit pulsar status` | per account: `health` (`healthy`, `unverified`, `unhealthy`, offline), budget and cap use, unresolved writes, last publication; `healthy` and `attention` |
 | `pulsar.validate` | `orbit pulsar validate PLAN.yaml` | inline `plan` or workspace `source`; `{valid: true, accounts}` or `{valid: false, error}` |
-| `pulsar.history` | `orbit pulsar history` | newest ledger rows flattened for a table (`limit` 1–100) |
+| `pulsar.history` | `orbit pulsar history` | newest ledger rows flattened for a table (`limit` 1–100), with `total` and `truncated` |
 
 All are `execution_kind: read_only`, `mcp_scope: workspace`, with request and response
-schemas under [schemas/](../../../schemas/). Panels: *Pulsar accounts* (kv, `status`) and
+schemas under [schemas/](../../../schemas/). An input key the request schema does not list is
+refused (`invalid_argument` naming it). The tools read the home without writing to it. Panels: *Pulsar accounts* (kv, `status`) and
 *Recent publications* (table, `history`). The skill [skills/publish](../../../skills/publish/SKILL.md)
 is linked as `pulsar-publish`.
 
 ### How it runs
 
 - **Home.** `$ORBIT_PLUGIN_STATE/home` (`~/.orbit/state/plugins/pulsar/home`): the sandbox can
-  write only the plugin state. The CLI and MCP server reach the same home with `PULSAR_HOME`.
-  Outside Orbit (`pulsar orbit-tool` for debugging) the usual home applies.
+  write only the plugin state. The CLI and MCP server reach the same home with `PULSAR_HOME`;
+  a `PULSAR_HOME` under Orbit that names any other home is `invalid_config` before any work
+  (STD-01 §R28), since the call could not use it. Outside Orbit
+  (`pulsar orbit-tool` for debugging) the usual home applies.
 - **Settings.** The home's `config.toml` is the only source. `[plugins.pulsar]` has a closed,
   empty schema; a call that carries keys is `invalid_argument`.
 - **Paths.** `source` and plan media resolve against the workspace root and must stay inside it,
-  symlinks included. Configured media roots are replaced by the workspace for plugin calls.
+  symlinks included; the source is opened without following a symlink, so a swap after the
+  check cannot redirect the read. Configured media roots are replaced by the workspace for
+  plugin calls. The backend never changes its working directory.
   A source is at most 256 KiB of UTF-8; an unreadable source is a tool error, a bad plan is
   `valid: false`.
 - **Grants.** `fs` (read `{{workspace}}`, write `{{plugin_state}}`) and `network: any` (X, and
@@ -113,8 +148,9 @@ is linked as `pulsar-publish`.
   enable ([ORB-13032]); older hosts need uv on the caller's `PATH`.
 - **Envelope.** [orbit_tool.py](../../../src/pulsar/surfaces/orbit_tool.py) reads
   `{schema_version: 1, tool, input, context}` and writes exactly one JSON line,
-  `{ok: true, output}` or `{ok: false, error: {code, message, retryable, detail?}}`, exit 0.
-  It never raises. Diagnostics go to stderr.
+  `{ok: true, output}` or `{ok: false, error: {code, message, retryable, detail?}}`, exit 0
+  (a recorded deviation from STD-01 §R20). It never raises; an unexpected exception is
+  `internal`. Diagnostics go to stderr.
 - **Install tree.** The installer refuses symlinks anywhere in the tree (so `CLAUDE.md` is a
   file containing `@AGENTS.md`), and a working tree carries a `.venv`; install from `git
   archive` of a commit.
@@ -147,5 +183,6 @@ no request schema has a credential-shaped property.
 - [ORB-13032] — Orbit: resolve and grant `requires.programs` (ws_orbit).
 - [ORB-13114] — Orbit: keep `retryable` and `detail` in plugin errors (ws_orbit).
 - [ORB-13115] — Orbit: task and run id in the plugin context (ws_orbit).
+- [ORB-13138] — aligned the surfaces with the constellation standards.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

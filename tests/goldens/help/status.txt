@@ -1,0 +1,9 @@
+usage: pulsar status [-h] [--json] [--account ACCOUNT]
+
+budgets, today's posts, quiet hours and unresolved writes (offline)
+
+options:
+  -h, --help         show this help message and exit
+  --json             machine output (the default and only mode: every command prints JSON)
+  --account ACCOUNT  report only this account (an alias, provider:handle such as x:<handle>);
+                     default: all

@@ -106,10 +106,6 @@ def parse_state(value: object, *, where: str) -> State:
 
 # Outcomes of the single-request API (``claim`` / ``publish`` / ``fail``).
 TERMINAL_STATES = frozenset({PUBLISHED, FAILED, UNKNOWN})
-ROW_STATES = frozenset(State)
-ITEM_STATES = frozenset({PENDING, SUBMITTING, PUBLISHED, FAILED, UNKNOWN})
-# Row states ``finish`` can land on; each appends a writes.jsonl line.
-FINISHED_STATES = frozenset({PUBLISHED, PARTIAL, FAILED, UNKNOWN})
 # Item states that may have cost money: counted by ``usage``.
 COMMITTED_ITEM_STATES = tuple(s for s in State if is_committed(s))
 # Rows whose ``pending`` items are still going to be sent: those items are

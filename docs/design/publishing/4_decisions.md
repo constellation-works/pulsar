@@ -9,7 +9,7 @@ doc_role: decisions
 type: design
 summary: Record before send, a missed post beats a double post, digest excludes path and schedule, reservations, legacy digests.
 tags: [publishing, ledger, idempotency, policy]
-paths: ["src/pulsar/core/ledger.py", "src/pulsar/core/publisher.py", "src/pulsar/core/plan.py"]
+paths: ["src/pulsar/core/ledger/**", "src/pulsar/core/publisher.py", "src/pulsar/core/plan.py"]
 related_features: [channels, surfaces]
 related_artifacts: [ORB-13027, ORB-13028]
 ---
@@ -86,7 +86,7 @@ It excludes media paths and `not_before`.
 ## Reserve a plan's unsent posts until it settles
 
 **Recorded:** 2026-09-26 · [ORB-13028]
-**Code anchors:** `src/pulsar/core/ledger.py::Ledger._usage`
+**Code anchors:** `src/pulsar/core/ledger/queries.py::usage`
 
 ### Context
 
@@ -107,7 +107,7 @@ claimed) as well as sent, published and unknown ones.
 ## `create_post` keeps its original request digest
 
 **Recorded:** 2026-09-26 · [ORB-13028]
-**Code anchors:** `src/pulsar/core/ledger.py::request_digest`, `src/pulsar/surfaces/mcp.py::_legacy_post`
+**Code anchors:** `src/pulsar/core/ledger/keys.py::request_digest`, `src/pulsar/surfaces/mcp.py::_legacy_post`
 
 ### Context
 
@@ -125,9 +125,139 @@ account user id), not the plan digest.
 - Cost: two digest schemes coexist in the ledger, and `create_post` and `pulsar publish` of the
   same text do not share a key.
 
+## X's duplicate refusal is classified from its text
+
+**Recorded:** 2026-09-26 · [ORB-13138]
+**Deviates from:** STD-02@2 §R10
+**Code anchors:** `src/pulsar/providers/x/client.py`
+
+### Context
+
+X answers a duplicate post with 403 (sometimes 400) and a `detail` saying it is a duplicate; the
+response carries no structured code that tells it from other 403s (suspension, a missing
+scope). pulsar reports duplicates as `duplicate`, which callers treat as "already said".
+
+### Decision
+
+The X client matches "duplicate" in a 403 or 400 body, the one place pulsar classifies by
+substring; everything else is classified from status codes and fields.
+
+### Consequences
+
+- A repeated post is reported as a duplicate, not a permission failure.
+- Cost: if X rewords the message, duplicates become `forbidden`; the client tests pin the
+  current wording so the change shows up as a failing test, not a silent reclassification.
+
+## Publisher ledger writes run on the event loop
+
+**Recorded:** 2026-09-26 · [ORB-13138]
+**Deviates from:** STD-03@2 §R1 (blocking calls off async threads)
+**Code anchors:** `src/pulsar/core/publisher.py::Publisher.publish`, `src/pulsar/core/publisher.py::Publisher.reconcile`, `src/pulsar/surfaces/mcp.py::_settle_on_error`, `src/pulsar/surfaces/mcp.py::_record_success`
+
+### Context
+
+Each post is claimed and marked `submitting` in SQLite before its network call, and its
+outcome recorded right after. Handing those writes to a thread lets a cancellation detach the
+write from the send: the task can be cancelled after the send while the thread still commits,
+or before the commit while the send already happened.
+
+### Decision
+
+The publisher's per-item ledger writes (short, local transactions under a 5 s busy timeout),
+the MCP server's settling of a legacy `upload_media` / `delete_post` row, and reconcile's
+ledger reads and settles between its timeline requests, run inline on the event loop, so
+each is ordered with its send or read. Slow or unbounded work (preparing a plan, reading
+media, account and registry reads, claims made by the MCP surfaces) goes to a thread on
+every surface, the CLI included.
+
+### Consequences
+
+- The ledger can never disagree with what was sent because of task cancellation.
+- Cost: under lock contention a write can hold the loop up to the busy timeout; the MCP
+  server serves one account's writes at a time anyway.
+
+## `writes.jsonl` is a best-effort export
+
+**Recorded:** 2026-09-26 · [ORB-13138]
+**Deviates from:** STD-03@2 §R8
+**Code anchors:** `src/pulsar/core/writelog.py::WriteLog.export`
+
+### Context
+
+The ledger (SQLite) is the one commit decision for every write. `writes.jsonl` is a
+line-per-row export for tools that tail a file; it is appended after the ledger commits.
+
+### Decision
+
+The export is written after the commit and a failure to write it is logged, not raised: the
+write already happened, and reporting it as failed would invite a duplicate.
+
+### Consequences
+
+- The ledger, `pulsar history` and `pulsar.history` are always right.
+- Cost: `writes.jsonl` can miss a row after a disk error; it is not a source of truth and
+  nothing reads it back.
+
+## A stale delete is re-armed and a lost delete is retryable
+
+**Recorded:** 2026-09-26 · [ORB-13138]
+**Deviates from:** STD-03@2 §R31
+**Code anchors:** `src/pulsar/core/ledger/records.py::REARMABLE_TOOLS`, `src/pulsar/core/ledger/facade.py::Ledger.claim`, `src/pulsar/surfaces/mcp.py::delete_post`, `src/pulsar/providers/x/client.py::XClient._post_refresh`
+
+### Context
+
+§R31 says work a silent peer holds is never reclaimed because a TTL lapsed; only an explicit,
+recorded reclaim may take it. A `delete_post` row stays `submitting` when its sender dies
+mid-request, and its key (default `delete:<post_id>`) would then refuse every later delete of
+that post with `outcome_unknown`, with nothing to reconcile: legacy rows have no items.
+
+### Decision
+
+`claim(stale_after=STALE_SUBMITTING)` (ten minutes) re-arms a `submitting` row, but only for
+`REARMABLE_TOOLS`, the requests with no duplicate effect: `delete_post` (DELETE is idempotent
+at X) and `upload_media` (a second upload leaves an orphaned media id that expires; uploads
+also take a fresh key per call). The takeover bumps `attempts` and writes a `note`, so it is
+recorded. `create_post` and plan rows are never re-armed; they go through `pulsar reconcile`.
+
+For the same two requests a reply lost after sending is reported as a retryable `api_error`,
+not `outcome_unknown` (`ambiguous=False` in `mcp.py`): repeating either is harmless, so the
+caller is told to retry rather than to reconcile. A lost token-refresh reply is a retryable
+`api_error` whose message says X may have rotated the pair (`detail.outcome: "unknown"`).
+
+### Consequences
+
+- A crashed delete does not block that post's deletion for good.
+- Cost: an automatic reclaim after a TTL, which §R31 forbids in general; confined to requests
+  whose repeat is harmless, and tests pin that `create_post` is never taken over.
+
+## Protocol strings are validated at the edge, not wrapped in types
+
+**Recorded:** 2026-09-26 · [ORB-13138]
+**Deviates from:** STD-02@2 §R14
+**Code anchors:** `src/pulsar/core/ledger/keys.py::check_key`, `src/pulsar/providers/x/client.py::check_x_id`, `src/pulsar/core/plan.py::alias_provider`
+
+### Context
+
+§R14 (a SHOULD) prefers newtypes with validating constructors for ids, keys and selectors over
+bare strings checked by helpers. pulsar's are idempotency keys, account aliases, X post and
+media ids, and digests.
+
+### Decision
+
+Each is validated once where it enters (a tool argument, a plan, the ledger) by a `check_*`
+helper or by `Plan.from_mapping`, and flows on as `str`. Records that hold them (`AccountRef`,
+`PlanRecord`, `WriteRecord`) are frozen dataclasses built only after validation.
+
+### Consequences
+
+- The validation is in one place per kind, and the JSON and SQLite boundaries stay plain.
+- Cost: the type checker cannot tell a validated key from any string; a new entry point must
+  call the helper. Revisit if a second provider adds id shapes.
+
 ## Task References
 
 - [ORB-13027] — added the ledger v0 and `outcome_unknown`.
 - [ORB-13028] — added plans, digests, reservations and the publisher.
+- [ORB-13138] — aligned the publishing core with the constellation standards.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

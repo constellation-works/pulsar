@@ -34,6 +34,7 @@ from pulsar.core.paths import Paths
 from pulsar.core.usage import Usage
 from pulsar.core.writelog import WriteLog
 
+from .conftest import collect, reap
 from .test_ledger import (
     ACCT,
     DAY,
@@ -257,13 +258,16 @@ def test_begin_item_cas_across_processes(paths):
     procs = [
         ctx.Process(target=_begin_in_process, args=(str(paths.home), go, results)) for _ in range(3)
     ]
-    for p in procs:
-        p.start()
-    go.set()
-    outcomes = sorted(results.get(timeout=60) for _ in procs)
-    for p in procs:
-        p.join(timeout=30)
-        assert p.exitcode == 0
+    try:
+        for p in procs:
+            p.start()
+        go.set()
+        outcomes = sorted(collect(results, procs))
+        for p in procs:
+            p.join(timeout=30)
+            assert p.exitcode == 0, f"a child exited {p.exitcode}"
+    finally:
+        reap(procs)
     assert outcomes == ["blocked", "blocked", "started"]
 
 

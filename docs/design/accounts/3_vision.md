@@ -27,7 +27,7 @@ Where account storage and auth are heading. Nothing here is built unless
    home moves into `{{plugin_state}}` once the host's Orbit carries [ORB-13008].
 2. **How is re-authorization noticed?** Today `auth_expired` surfaces only when a write fails.
    Phase 4 ([ORB-13030]) plans a daily auth-health auto-task that files a task when an account
-   is `reauth_required`; what it may call (`--offline` only, or a paid `--live` probe) is open.
+   is `reauth_required`; what it may call (the offline default only, or a paid `--live` probe) is open.
 3. **Is a device-code or remote-callback login worth it?** SSH forwarding works for one
    operator; it does not scale to several people binding accounts.
 4. **Should the registry record who bound an account?** Today it records when and which

@@ -33,8 +33,9 @@ spec:
   tools:
     - name: status
       description: >-
-        Accounts, token health (offline: no refresh is attempted), budget and daily-cap
-        use, writes with an unknown outcome, and the last publication per account.
+        Accounts and their health (healthy, unverified or unhealthy, from local state:
+        no refresh is attempted and nothing is written), budget and daily-cap use, writes
+        with an unknown outcome, and the last publication per account.
       execution_kind: read_only
       mcp_scope: workspace
       input_schema: { $ref: schemas/status.request.json }
@@ -53,7 +54,7 @@ spec:
     - name: history
       description: >-
         The newest ledger rows (posts, threads, deletes, uploads, imports, skips) with
-        state, URL and estimated cost. Offline.
+        state, URL and estimated cost, and how many rows match in all. Offline.
       execution_kind: read_only
       mcp_scope: workspace
       input_schema: { $ref: schemas/history.request.json }

@@ -1,6 +1,6 @@
 """Append-only ``writes.jsonl``: a line-per-outcome export of the ledger.
 
-The ledger (``ledger.py``) is the source of truth and is written *before* a
+The ledger (``core/ledger/``) is the source of truth and is written *before* a
 request leaves; this file gets one line each time a write reaches a terminal
 state (published, partial, failed, unknown, skipped), for tools that tail or
 grep JSONL. Validation and dry runs are not writes and never appear here, and
@@ -11,23 +11,17 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 from datetime import UTC, datetime
 from typing import Any
 
 from .fsutil import append_private
 from .ledger import PlanRecord, WriteRecord
+from .ledger.text import redact_strings
 from .paths import Paths
-
-DEFAULT_CALLER_ENV = "PULSAR_CALLER"
 
 
 def text_sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-
-def resolve_caller(explicit: str | None) -> str:
-    return explicit or os.environ.get(DEFAULT_CALLER_ENV) or "unknown"
 
 
 class WriteLog:
@@ -41,21 +35,23 @@ class WriteLog:
         caller: str | None,
         text: str | None = None,
         post_id: str | None = None,
-        dry_run: bool = False,
         extra: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         entry: dict[str, Any] = {
             "ts": datetime.now(UTC).isoformat(timespec="seconds"),
             "tool": tool,
-            "caller": resolve_caller(caller),
-            "dry_run": dry_run,
+            "caller": caller or "unknown",
+            # Kept for readers of the phase 1 format; writes are never dry runs.
+            "dry_run": False,
             "post_id": post_id,
             "text_sha256": text_sha256(text) if text is not None else None,
         }
         if extra:
             entry.update(extra)
+        # The export is a second durable copy: the same redaction as the ledger (STD-05 §R13).
+        line = redact_strings(entry)
         self.paths.ensure()
-        append_private(self.paths.write_log, json.dumps(entry, sort_keys=True) + "\n")
+        append_private(self.paths.write_log, json.dumps(line, sort_keys=True) + "\n")
         return entry
 
     def export(self, record: WriteRecord | PlanRecord) -> dict[str, Any]:

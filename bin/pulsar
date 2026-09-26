@@ -52,11 +52,12 @@ mkdir -p "$TMPDIR"
 lock=$(cksum <"$ORBIT_PLUGIN_ROOT/uv.lock")
 stamp="$venv/.pulsar-lock"
 if [ ! -x "$venv/bin/python" ] || [ "$(cat "$stamp" 2>/dev/null || true)" != "$lock" ]; then
-    # Bound the sync (STD-03 §R22). Probe rather than trust `command -v`, as
-    # for uv above. Without a runnable timeout(1) (stock macOS has none) the
-    # sync runs unbounded and the host's per-call timeout is the only bound.
+    # Bound the sync (STD-03 §R22): TERM at 600s, KILL 10s later (§R12).
+    # Probe rather than trust `command -v`, as for uv above. Without a
+    # runnable timeout(1) (stock macOS has none) the host's per-call timeout
+    # is the only bound: a recorded deviation (surfaces/4_decisions.md).
     bound=""
-    if timeout 5 true >/dev/null 2>&1; then bound="timeout 600"; fi
+    if timeout 5 true >/dev/null 2>&1; then bound="timeout -k 10 600"; fi
     # $bound is deliberately unquoted: empty, or the command and its argument.
     $bound "$uv_bin" sync --frozen --no-dev --no-install-project --quiet \
         --project "$ORBIT_PLUGIN_ROOT" </dev/null >&2 \

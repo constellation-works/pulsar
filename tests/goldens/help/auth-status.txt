@@ -1,0 +1,14 @@
+usage: pulsar auth status [-h] [--json] [--account ACCOUNT] [--live | --offline]
+
+each bound account and its health, from local state (no network)
+
+options:
+  -h, --help         show this help message and exit
+  --json             machine output (the default and only mode: every command prints JSON)
+  --account ACCOUNT  report only this account (an alias, provider:handle such as x:<handle>);
+                     default: all
+  --live             prove each binding: force a token refresh (rotates the pair), then GET
+                     /users/me
+  --offline          deprecated, no effect: the default is offline
+
+Exit 0 only when every reported account is healthy.

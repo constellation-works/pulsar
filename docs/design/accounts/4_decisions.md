@@ -157,6 +157,28 @@ one, use it instead of reporting `auth_expired`.
 - Cost: a real revocation takes one more store read to be reported, and two hosts sharing a
   copied home can still kill each other's tokens: the lock is per host.
 
+## The browser is opened, not supervised
+
+**Recorded:** 2026-09-26 · [ORB-13138]
+**Deviates from:** STD-03@2 §R11, §R16
+**Code anchors:** `src/pulsar/providers/x/auth.py::authorize`
+
+### Context
+
+`pulsar auth login` opens the consent page with Python's `webbrowser`, which hands the URL to
+the desktop's browser (often an already-running process) and returns. pulsar does not own
+that process and cannot put it in a process group or bound it.
+
+### Decision
+
+Open the URL and wait only on pulsar's own loopback listener, with a deadline. `--no-browser`
+prints the URL on stderr instead, for SSH sessions.
+
+### Consequences
+
+- Login uses the operator's real browser session, where they are signed in to X.
+- Cost: pulsar cannot close the tab or clean up a browser it started.
+
 ## Task References
 
 - [ORB-12124] — built the first connector with no credential parameters.

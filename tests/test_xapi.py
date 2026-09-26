@@ -4,6 +4,7 @@ import http.client
 import json
 import multiprocessing
 import os
+import socket
 import threading
 import time
 from pathlib import Path
@@ -25,6 +26,8 @@ from .conftest import (
     ROTATED_ACCESS,
     ROTATED_REFRESH,
     RotatingTokenEndpoint,
+    collect,
+    reap,
 )
 
 pytestmark = pytest.mark.anyio
@@ -84,6 +87,33 @@ async def test_refresh_failure_is_auth_expired_not_a_stack_trace(client, authed,
     assert exc.value.code == "auth_expired"
     assert "X refused the refresh token (HTTP 400)" in exc.value.message
     assert "pulsar auth login --account x:constworks" in exc.value.message
+
+
+@pytest.mark.parametrize(
+    ("error", "sent"),
+    [(httpx.ConnectError("refused"), False), (httpx.ReadTimeout("slow"), True)],
+)
+async def test_a_refresh_says_whether_x_may_have_rotated_the_pair(
+    store, authed, fake_x, error, sent
+):
+    def handle(request):
+        if request.url.path.endswith("/oauth2/token"):
+            raise error
+        return fake_x.handle(request)
+
+    fake_x.fail_auth_once = True
+    client = XClient(store, transport=httpx.MockTransport(handle))
+    try:
+        with pytest.raises(PulsarError) as exc:
+            await client.me()
+    finally:
+        await client.aclose()
+    assert exc.value.code == "api_error" and exc.value.retryable
+    if sent:
+        assert "may have rotated" in exc.value.message
+        assert exc.value.detail == {"outcome": "unknown"}
+    else:
+        assert "was not sent" in exc.value.message and exc.value.detail is None
 
 
 async def test_create_post_body_shape(client, authed, fake_x):
@@ -308,7 +338,7 @@ def _refresh_in_child(home, state_file, barrier, results):
         finally:
             await client.aclose()
 
-    barrier.wait()
+    barrier.wait(30)
     try:
         results.put(("ok", asyncio.run(run())))
     except PulsarError as exc:
@@ -326,12 +356,15 @@ async def test_two_processes_on_one_home_refresh_once(paths, bundle, token_endpo
         )
         for _ in range(2)
     ]
-    for p in procs:
-        p.start()
-    outcomes = [await asyncio.to_thread(results.get, timeout=60) for _ in procs]
-    for p in procs:
-        await asyncio.to_thread(p.join, 30)
-        assert p.exitcode == 0
+    try:
+        for p in procs:
+            p.start()
+        outcomes = await asyncio.to_thread(collect, results, procs)
+        for p in procs:
+            await asyncio.to_thread(p.join, 30)
+            assert p.exitcode == 0, f"a child exited {p.exitcode}"
+    finally:
+        await asyncio.to_thread(reap, procs)
     assert outcomes == [("ok", "access-gen1-YYYY")] * 2
     assert token_endpoint.calls() == 1
 
@@ -620,6 +653,36 @@ def callback():
     server.server_close()
 
 
+def test_a_silent_connection_cannot_hold_the_login_past_its_deadline(monkeypatch):
+    """A preconnect that never sends a request is dropped, so ``wait`` still
+    times out (STD-03 §R22) instead of blocking on the socket."""
+    shipped = auth._Callback.timeout
+    assert shipped is not None and 0 < shipped <= 30, "the handler's socket timeout is set"
+    monkeypatch.setattr(auth._Callback, "timeout", 0.5)  # the same mechanism, faster
+    server = CallbackServer("the-state", port=0)
+    server.timeout = 0.1
+    result: dict[str, object] = {}
+
+    def serve():
+        try:
+            server.wait(0.3)
+        except PulsarError as exc:
+            result["error"] = exc
+
+    silent = socket.create_connection(("127.0.0.1", server.port))
+    thread = threading.Thread(target=serve, daemon=True)
+    try:
+        thread.start()
+        thread.join(5)
+        assert not thread.is_alive(), "wait blocked on a connection that sent nothing"
+    finally:
+        silent.close()
+        thread.join(5)
+        server.server_close()
+    assert isinstance(result.get("error"), PulsarError), result
+    assert "timed out" in result["error"].message
+
+
 def _get(server, path, *, host="default", origin=None):
     conn = http.client.HTTPConnection("127.0.0.1", server.port, timeout=5)
     conn.putrequest("GET", path, skip_host=True)
@@ -717,3 +780,18 @@ def test_the_default_notify_writes_to_stderr(monkeypatch, capsys):
     out, err = capsys.readouterr()
     assert out == "" and "https://x.com/i/oauth2/authorize?" in err
     assert "[truncated 1500 of 2000 characters]" in exc.value.message
+
+
+def test_a_browser_launcher_cannot_write_to_stdout(monkeypatch, capfd):
+    opened = []
+
+    def chatty_open(url):
+        os.write(1, b"Opening in existing browser session.\n")
+        opened.append(url)
+        return True
+
+    monkeypatch.setattr(auth.webbrowser, "open", chatty_open)
+    auth.open_quietly("https://x.com/i/oauth2/authorize")
+    print("payload")
+    assert opened == ["https://x.com/i/oauth2/authorize"]
+    assert capfd.readouterr().out == "payload\n"

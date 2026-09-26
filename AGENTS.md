@@ -25,7 +25,25 @@
   `docs/design/CONVENTIONS.md`. A behaviour change updates its design doc (and
   the README only if the front door changed) in the same commit; keep the README
   minimal.
-- Run `make check` (ruff, basedpyright strict, pytest) before handing off.
+- Run `make check` (standards check, `uv lock --check`, ruff, basedpyright
+  strict, pytest) before handing off.
+
+## Verification and handoff (STD-04)
+
+- A regression test is shown failing against the unfixed code (revert the fix
+  or run the test on the base commit) before the fix counts; keep that run as
+  evidence. Fix the defect; never loosen a guard, assertion or golden to pass.
+- A red gate is reproduced on a clean checkout of the base commit before it is
+  called pre-existing.
+- Before starting, check the task's premise against the current head: it may
+  have landed or moved.
+- The handoff lists each command run as passed, failed or not run (with why);
+  "tested" alone is not a result.
+- Read back what you wrote to Orbit or git (task state, the pushed commit)
+  before reporting it; after an uncertain write, query before retrying.
+- Before anything destructive (reset, branch delete, file removal), record the
+  commit or an inventory of what goes. Never stash, clean or discard edits you
+  did not make.
 
 <!-- constellation-standards:begin -->
 <!-- Managed by the constellation's operations/scripts/sync-standards.sh; edits inside this block are overwritten. -->

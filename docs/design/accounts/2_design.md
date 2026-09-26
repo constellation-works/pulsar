@@ -82,15 +82,22 @@ handle.
 
 ## 4. Status
 
-`pulsar auth status` reports each account: `alias`, `status`, `expected_handle`, `mismatch`,
-`token_state`, `account`, `account_source`, `verified`, `reauth_required`, `healthy`, and a
-`note` when unproven; exit 0 only when every reported account is healthy.
+`pulsar auth status` ([health.py](../../../src/pulsar/surfaces/health.py)) reports each
+account with every key present (null when unknown): `alias`, `status`, `expected_handle`,
+`mismatch`, `token_state`, `account`, `account_source`, `verified`, `refreshed`,
+`reauth_required`, `error`, and `health` with its `reason`. Exit 0 only when every reported
+account is `healthy`.
 
-- **Default (cached).** Reads identity from the registry, so it names the account even when
-  the refresh token is dead, and says so (`verified: false`, a `note`).
+- **`health`** is three-valued, because unknown is never reported as healthy (STD-02 §R29):
+  `healthy` (active, identity cached for this binding and matching, token valid or just
+  refreshed); `unverified` (nothing known to be wrong, but local state cannot settle it: no
+  cached identity, or an expired access token whose refresh was not exercised); `unhealthy`
+  (not bound, logged out, re-authorization required, a mismatch, unreadable storage).
+- **Default.** Local state only: no network call and no write. Legacy credentials are
+  reported under `legacy`, not migrated. The Orbit `pulsar.status` tool uses this.
 - **`--live`.** The proof: rotates the token pair through the account's refresh lock, fetches
   the identity from X and rewrites the registry row. One `/users/me` read per account.
-- **`--offline`.** Stored state only; never calls X. The Orbit `pulsar.status` tool uses this.
+- **`--offline`** is a deprecated no-op (the default is offline) and warns on stderr.
 
 Cached identity is tagged with the `binding_id` it was fetched under, so after a re-login it
 is ignored until `/users/me` has been asked again, even if a lookup started before the
@@ -150,21 +157,27 @@ refreshes rather than trusting an invented lifetime. A failure inside pulsar aft
   a replaced `key` or corrupt ciphertext (restore the key; only if it is lost, remove the
   bundle and log in again), or a bundle a newer pulsar wrote with fields this one does not
   know (upgrade). pulsar never overwrites it on its own.
-- `accounts.json` carries a `version`. One from a newer pulsar is still read to resolve an
-  account, but every write (login, logout, status changes, migration) is refused with
-  `invalid_config` naming the file and both versions, before anything is stored.
+- `accounts.json` carries a `version` and `min_reader_version`, the oldest version that still
+  reads it correctly (a version that only adds fields keeps it; one that removes, renames or
+  reinterprets a field raises it). One from a newer pulsar is read to resolve an account only
+  when it names this version a reader; otherwise it is refused with `invalid_config`
+  (STD-03 §R10). Every write to a newer registry (login, logout, status changes, migration)
+  is refused with `invalid_config` naming the file and both versions, before anything is
+  stored.
 
 ## 7. Legacy Migration
 
 A home from before accounts has `tokens.enc` and `whoami.json` at its root.
 `migrate_legacy` moves the bundle to `accounts/x--<handle>/` as `default_account` if
-configured, else as `x:<username>` from a `whoami.json` that describes the stored login; it
-runs on first use and as `pulsar auth migrate`, which infers the alias the same way when
-`--account` is not given. If neither names it (`needs_alias`), every call says to run
-`pulsar auth migrate --account x:<handle>`. Without `--account` the bundle is only moved while
-no account is registered (`ignored` otherwise); `--account` adopts it beside registered ones.
-A cached identity that contradicts the alias is `account_mismatch` and moves nothing, and
-migration never overwrites an account that already has credentials.
+configured, else as `x:<username>` from a `whoami.json` that describes the stored login. It
+runs as `pulsar migrate --confirm`, as `pulsar auth migrate --confirm` (which infers the alias
+the same way when `--account` is not given), and on the first command or tool call that
+writes; reports never migrate (they show `legacy` from `legacy_status`), and `auth migrate`
+without `--confirm` is one. If neither names it (`needs_alias`), every call says to run
+`pulsar auth migrate --account x:<handle> --confirm`. Without `--account` the bundle is
+only moved while no account is registered (`ignored` otherwise); `--account` adopts it beside
+registered ones. A cached identity that contradicts the alias is `account_mismatch` and moves
+nothing, and migration never overwrites an account that already has credentials.
 
 The move holds the old root refresh lock, renames the bundle, writes the registry row, then
 removes `whoami.json`; re-running after a crash at any step finishes the job.

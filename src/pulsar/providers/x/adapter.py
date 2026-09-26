@@ -196,13 +196,20 @@ class XChannel:
         return await self.client.delete_post(post_id)
 
     async def recent_posts(self, since: datetime) -> RecentPosts:
-        """The account's posts since ``since``, newest first, up to the page cap."""
+        """The account's posts since ``since``, newest first, up to the page cap.
+
+        A post that comes back without a usable id or ``created_at`` is left
+        out and the listing is marked incomplete: reconcile may call an item
+        absent only on a complete listing, and a post it could not read is
+        not evidence of absence (STD-02 §R16: no invented timestamp).
+        """
         params: dict[str, Any] = {
             "max_results": 100,
             "start_time": since.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "tweet.fields": "created_at",
         }
         found: list[RemotePost] = []
+        unreadable = False
         for _ in range(RECONCILE_MAX_PAGES):
             resp = await self.client.request(
                 "GET", f"/users/{check_x_id(self.user_id, 'user_id')}/tweets", params=params
@@ -213,20 +220,21 @@ class XChannel:
                 raise PulsarError(API_ERROR, "X timeline response is not JSON") from exc
             for raw in as_list(body.get("data")):
                 post = as_object(raw)
-                if post is None or not isinstance(post.get("id"), str):
+                created = _parse_time(post.get("created_at")) if post is not None else None
+                if post is None or not isinstance(post.get("id"), str) or created is None:
+                    unreadable = True
                     continue
-                created = _parse_time(post.get("created_at"))
                 found.append(
                     RemotePost(
                         post_id=post["id"],
                         url=post_url(self.handle, post["id"]),
-                        created_at=created or since,
+                        created_at=created,
                         fingerprint=remote_fingerprint(str(post.get("text", ""))),
                     )
                 )
             token = obj(body.get("meta")).get("next_token")
             if not isinstance(token, str) or not token:
-                return RecentPosts(posts=tuple(found), complete=True)
+                return RecentPosts(posts=tuple(found), complete=not unreadable)
             params["pagination_token"] = token
         return RecentPosts(posts=tuple(found), complete=False)
 

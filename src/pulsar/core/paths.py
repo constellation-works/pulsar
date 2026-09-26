@@ -162,17 +162,3 @@ class Paths:
     def ensure(self) -> None:
         """Create the home 0700 if missing; refuse an unsafe existing one (``check_home``)."""
         ensure_private_dir(self.home, symlink_fix=self._home_symlink_fix())
-
-
-def default_paths() -> Paths:
-    """The surface-side convenience: the layout for this process's environment and ``$HOME``.
-
-    Only surfaces call this; core receives the resulting ``Paths``. New code
-    resolves once with ``Paths.from_environ(os.environ, Path.home())``.
-    """
-    return Paths.from_environ(os.environ, Path.home())
-
-
-def pulsar_home() -> Path:
-    """``default_paths().home``; kept for surfaces that have not switched to ``Paths``."""
-    return default_paths().home

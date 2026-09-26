@@ -160,3 +160,21 @@ async def test_recent_posts_paginates_and_reports_completeness(channel, fake_x, 
     monkeypatch.setattr("pulsar.providers.x.adapter.RECONCILE_MAX_PAGES", 2)
     capped = await channel.recent_posts(SINCE)
     assert not capped.complete and len(capped.posts) == 4
+
+
+@pytest.mark.parametrize(
+    "unreadable",
+    [
+        {"id": "950", "text": "no time"},
+        {"id": "951", "text": "bad time", "created_at": "yesterday"},
+        {"text": "no id", "created_at": "2026-09-26T01:05:00.000Z"},
+    ],
+)
+async def test_an_unreadable_post_makes_the_listing_incomplete(channel, unreadable):
+    """A post that cannot be placed in time is neither invented nor dropped silently:
+    the listing says it is incomplete, so reconcile never reads it as absence."""
+    good = {"id": "900", "text": "fine", "created_at": "2026-09-26T01:00:00.000Z"}
+    channel.timeline.extend([good, unreadable])
+    recent = await channel.recent_posts(SINCE)
+    assert recent.complete is False
+    assert [p.post_id for p in recent.posts] == ["900"]

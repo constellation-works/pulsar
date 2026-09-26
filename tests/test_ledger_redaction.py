@@ -16,6 +16,7 @@ import pulsar.core.ledger.text as text_mod
 from pulsar.core.errors import OutcomeUnknown, PulsarError
 from pulsar.core.ledger import Ledger
 from pulsar.core.ledger.text import REDACTED_COLUMNS
+from pulsar.core.writelog import WriteLog
 
 from .test_ledger import ACCT, ME, claim_plan, sql
 
@@ -107,3 +108,39 @@ def strings(value) -> list[str]:
     if isinstance(value, list):
         return [s for v in value for s in strings(v)]
     return []
+
+
+# A credential shape a provider could echo back in an error body.
+LEAKED = "Authorization: Bearer abcdefghijklmnopqrstuvwxyz0123456789"
+LEAKED_VALUE = LEAKED.rsplit(" ", 1)[1]
+
+
+def stored_bytes(paths) -> bytes:
+    raw = paths.ledger_db.read_bytes()
+    for wal in paths.home.glob("ledger.sqlite3-wal"):
+        raw += wal.read_bytes()
+    return raw
+
+
+def test_a_credential_in_an_error_message_is_stored_masked(paths):
+    ledger = Ledger(paths)
+    ledger.claim(key="up", tool="upload_media", digest="u", account=ME, caller="bot",
+                 meta={"echo": LEAKED})  # fmt: skip
+    ledger.fail("up", PulsarError("provider_error", f"X said: {LEAKED}"))
+    claim_plan(ledger, "thread", n=1)
+    ledger.begin_item("thread", 0)
+    ledger.item_unknown("thread", 0, OutcomeUnknown(f"reset after {LEAKED}"))
+    ledger.finish("thread")
+
+    assert LEAKED_VALUE.encode() not in stored_bytes(paths)
+    (message,) = [v for (v,) in sql(paths, "SELECT error_message FROM writes WHERE "
+                                           "idempotency_key = 'up'")]  # fmt: skip
+    assert "[redacted:bearer header]" in message
+
+
+def test_a_credential_never_reaches_the_export(paths):
+    log = WriteLog(paths)
+    log.append(tool="publish", caller=f"bot {LEAKED}", extra={"detail": {"why": [LEAKED]}})
+    line = paths.write_log.read_text()
+    assert LEAKED_VALUE not in line
+    assert json.loads(line)["detail"]["why"] == ["Authorization: Bearer [redacted:bearer header]"]

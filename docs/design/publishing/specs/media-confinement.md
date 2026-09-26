@@ -25,8 +25,9 @@ its patterns.
   refused.
 - The Orbit plugin replaces the roots with the workspace root for its calls: the sandbox can
   read nothing else.
-- `path` is `~`-expanded and fully resolved (a relative path against the cwd, or the workspace
-  for plugin calls). The result must be inside a root. A symlink that stays inside is fine; one
+- `path` is fully resolved (a relative path against the cwd, or the workspace for plugin
+  calls). `~` in `path` is not expanded: pulsar takes paths as given, and a tool caller's `~`
+  would name the server's home, not its own. The result must be inside a root. A symlink that stays inside is fine; one
   that points outside is refused. The pulsar home is refused even when a root contains it.
 
 ## Opening

@@ -5,8 +5,9 @@ path: without confinement, ``path="~/.ssh/id_rsa", mime="image/png"`` would
 post a private key. The secret scanner is not a defence against that — most
 secrets match none of its patterns. The defences here are, in order:
 
-1. **Roots.** A path is resolved (``~`` expanded, symlinks followed, relative
-   paths against the server's cwd) and must land inside one of the configured
+1. **Roots.** A path is resolved (symlinks followed, a relative path against
+   the base the surface passed; ``~`` is not expanded, it is a directory
+   name like any other) and must land inside one of the configured
    media roots (``config.toml [media] roots``; with none configured, path
    uploads are refused and only ``base64`` is accepted). A symlink that
    escapes the roots is refused; the pulsar home, where the token bundle and
@@ -132,18 +133,31 @@ def _check_content(data: bytes, claimed: str | None) -> str:
     return sniffed
 
 
-def _resolve_confined(path: str, roots: Iterable[Path], deny: Iterable[Path]) -> tuple[Path, Path]:
-    """Resolve ``path`` strictly; return it with the root that contains it, or refuse."""
+def _resolve_confined(
+    path: str, roots: Iterable[Path], deny: Iterable[Path], base: Path | None
+) -> tuple[Path, Path]:
+    """Resolve ``path`` strictly; return it with the root that contains it, or refuse.
+
+    A relative ``path`` starts from ``base``, which the surface resolved (its
+    cwd, or the Orbit workspace); core never consults the process cwd.
+    """
+    given = Path(path)
+    if not given.is_absolute():
+        if base is None:
+            raise PulsarError(INVALID_MEDIA, f"{path} is relative and this call has no base")
+        given = base / given
     try:
-        resolved = Path(path).expanduser().resolve(strict=True)
+        resolved = given.resolve(strict=True)
     except FileNotFoundError as exc:
         raise PulsarError(INVALID_MEDIA, f"no such file: {path}") from exc
     except (OSError, RuntimeError) as exc:
         raise PulsarError(INVALID_MEDIA, f"cannot resolve {path}: {type(exc).__name__}") from exc
     for denied in deny:
-        if resolved.is_relative_to(denied.expanduser().resolve()):
+        if resolved.is_relative_to(denied.resolve()):
             raise PulsarError(INVALID_MEDIA, f"refusing to read pulsar's own state: {path}")
-    resolved_roots = [r.expanduser().resolve() for r in roots]
+    # Roots and the deny list arrive absolute: settings expanded any ``~``
+    # against the home it was given; core never reads ``$HOME``.
+    resolved_roots = [r.resolve() for r in roots]
     for root in resolved_roots:
         if resolved.is_relative_to(root):
             return resolved, root
@@ -154,7 +168,7 @@ def _resolve_confined(path: str, roots: Iterable[Path], deny: Iterable[Path]) ->
     )
 
 
-def _open_nofollow(resolved: Path, root: Path) -> int:
+def open_beneath(resolved: Path, root: Path) -> int:
     """Open ``resolved`` by walking down from ``root`` without following any symlink.
 
     ``resolved`` has no symlinks in it, so meeting one here means the tree
@@ -190,16 +204,16 @@ def _read_bounded(fd: int, limit: int) -> bytes:
 
 
 def _load_path(
-    path: str, mime: str | None, roots: Iterable[Path], deny: Iterable[Path]
+    path: str, mime: str | None, roots: Iterable[Path], deny: Iterable[Path], base: Path | None
 ) -> tuple[bytes, str | None]:
-    resolved, root = _resolve_confined(path, roots, deny)
+    resolved, root = _resolve_confined(path, roots, deny, base)
     # lstat before opening so a device node or FIFO is refused without ever being opened.
     before = os.lstat(resolved)
     if not stat.S_ISREG(before.st_mode):
         raise PulsarError(INVALID_MEDIA, f"not a regular file: {path}")
     claimed = _claimed_mime(mime, Path(path).name)
     try:
-        fd = _open_nofollow(resolved, root)
+        fd = open_beneath(resolved, root)
     except OSError as exc:
         raise PulsarError(
             INVALID_MEDIA, f"cannot open {path} safely: {type(exc).__name__}"
@@ -237,11 +251,13 @@ def load_media(
     *,
     roots: Sequence[Path],
     deny: Iterable[Path] = (),
+    base: Path | None = None,
 ) -> tuple[bytes, str]:
     """Return ``(bytes, mime)`` ready for X, or raise ``invalid_media`` / ``secret_detected``.
 
     ``roots`` are the directories a ``path`` may resolve into; ``deny`` are
-    directories refused even inside a root (the pulsar home). The returned
+    directories refused even inside a root (the pulsar home); a relative
+    ``path`` starts from ``base``. The returned
     MIME is always the sniffed one.
     """
     if bool(path) == bool(base64_data):
@@ -254,7 +270,7 @@ def load_media(
                 "config.toml; pass `base64` instead",
             )
         try:
-            data, claimed = _load_path(path, mime, roots, deny)
+            data, claimed = _load_path(path, mime, roots, deny, base)
         except OSError as exc:
             # A file removed or replaced mid-load; the errno name, never its contents.
             raise PulsarError(INVALID_MEDIA, f"cannot read {path}: {type(exc).__name__}") from exc
@@ -264,12 +280,17 @@ def load_media(
 
 
 def load_ref(
-    path: str, alt: str, *, roots: Sequence[Path], deny: Iterable[Path] = ()
+    path: str,
+    alt: str,
+    *,
+    roots: Sequence[Path],
+    deny: Iterable[Path] = (),
+    base: Path | None = None,
 ) -> LoadedMedia:
     """Load one plan media item under the same confinement as ``upload_media``.
 
     The digest is over these bytes, and these bytes are what gets uploaded, so a
     file swapped after approval changes the digest instead of the post.
     """
-    data, mime = load_media(path, None, None, roots=roots, deny=deny)
+    data, mime = load_media(path, None, None, roots=roots, deny=deny, base=base)
     return LoadedMedia(data=data, mime=mime, alt=alt, sha256=hashlib.sha256(data).hexdigest())

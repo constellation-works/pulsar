@@ -101,18 +101,36 @@ SECRET_PATTERNS: tuple[SecretPattern, ...] = (
 )
 
 
+# The credential values this process has loaded (tokens, the store key). X's
+# OAuth 2 tokens have no recognisable shape, so they are matched by value
+# (STD-05 §R14). Only long values are kept: a short one could be a word.
+LIVE_LABEL = "live credential"
+LIVE_MIN_LENGTH = 16
+_live: set[str] = set()
+
+
+def register_live_secret(value: str | None) -> None:
+    """Mask ``value`` wherever it appears from now on, in this process."""
+    if value is not None and len(value) >= LIVE_MIN_LENGTH:
+        _live.add(value)
+
+
 def scan_for_secrets(text: str) -> list[str]:
-    """The labels of every credential shape found in ``text``, in pattern order."""
-    return [p.label for p in SECRET_PATTERNS if p.matches(text)]
+    """The labels of every credential found in ``text``: a live value first,
+    then each shape in pattern order."""
+    live = [LIVE_LABEL] if any(v in text for v in _live) else []
+    return live + [p.label for p in SECRET_PATTERNS if p.matches(text)]
 
 
 def redact(text: str) -> str:
-    """``text`` with every credential shape ``scan_for_secrets`` knows masked.
+    """``text`` with every live value and credential shape masked.
 
     The secret (a pattern's ``value`` group, else the whole match) becomes
     ``[redacted:<label>]``; the words around it, such as ``Bearer`` or
     ``api_key =``, stay so the record still reads.
     """
+    for value in sorted(_live, key=len, reverse=True):
+        text = text.replace(value, f"[redacted:{LIVE_LABEL}]")
     for pattern in SECRET_PATTERNS:
         text = _mask(pattern, text)
     return text

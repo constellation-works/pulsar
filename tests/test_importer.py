@@ -93,6 +93,38 @@ def test_fixture_imports_every_row_shape(paths):
         assert row.note == by_key[key]["note"]
 
 
+def test_a_dry_run_reports_the_same_counts_and_writes_nothing(paths):
+    ledger = Ledger(paths)
+    dry = import_posted(ledger, FIXTURE, account=ACCT, url_for=url_for, apply=False)
+    assert dry.applied is False and dry.to_dict()["applied"] is False
+    assert ledger.history() == []
+    real = run(ledger)
+    assert real.applied is True
+    assert (dry.imported_published, dry.imported_skipped) == (
+        real.imported_published,
+        real.imported_skipped,
+    )
+    again = import_posted(ledger, FIXTURE, account=ACCT, url_for=url_for, apply=False)
+    assert again.already_present == real.imported_published + real.imported_skipped
+
+
+def test_a_dry_run_classifies_a_repeated_key_as_the_real_run_does(paths, tmp_path):
+    rows = lines()
+    same = rows[0]
+    changed = {**rows[1], "post_id": "1000000000000000777"}
+    path = tmp_path / "posted.jsonl"
+    path.write_text("\n".join(json.dumps(r) for r in [*rows, same, changed]) + "\n")
+
+    def counts(report):
+        keys = [(n, k) for n, k, _ in report.conflicts]
+        return (report.imported_published, report.imported_skipped, report.already_present, keys)
+
+    dry = import_posted(Ledger(paths), path, account=ACCT, url_for=url_for, apply=False)
+    real = run(Ledger(paths), path)
+    assert counts(dry) == counts(real)
+    assert real.already_present == 1 and len(real.conflicts) == 1
+
+
 def test_timestamps_are_normalised_to_utc(paths):
     ledger = Ledger(paths)
     run(ledger)
@@ -230,6 +262,7 @@ def test_report_to_dict(paths, tmp_path):
     path.write_text("oops\n")
     report = run(Ledger(paths), path)
     assert report.to_dict() == {
+        "applied": True,
         "imported_published": 0,
         "imported_skipped": 0,
         "already_present": 0,

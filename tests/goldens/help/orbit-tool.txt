@@ -1,0 +1,7 @@
+usage: pulsar orbit-tool [-h] [--json]
+
+answer one Orbit plugin request (envelope on stdin, response on stdout)
+
+options:
+  -h, --help  show this help message and exit
+  --json      machine output (the default and only mode: every command prints JSON)

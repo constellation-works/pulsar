@@ -1,0 +1,11 @@
+{
+  "code": "unknown_account",
+  "detail": {
+    "account": "x:nobody",
+    "known": [
+      "x:constworks"
+    ]
+  },
+  "error": "no account x:nobody, which is not registered on this host (known: x:constworks); a human binds it with `PULSAR_HOME=<home> pulsar auth login --account x:nobody`",
+  "retryable": false
+}

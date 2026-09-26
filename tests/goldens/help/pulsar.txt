@@ -1,0 +1,29 @@
+usage: pulsar [-h] [--json] [--version] COMMAND ...
+
+Social write connector for the constellation: publish to X as accounts a human bound on this host,
+through one ledger and policy.
+
+positional arguments:
+  COMMAND
+    auth         manage the account authorizations on this host
+    status       budgets, today's posts, quiet hours and unresolved writes (offline)
+    history      the newest ledger rows (offline)
+    validate     check a plan offline: per account, what would post, its digest and cost
+    publish      publish a plan through the ledger and policy; validates only without --confirm
+    reconcile    settle writes whose outcome is unknown from the account's timeline (reads X only
+                 when something is unresolved)
+    import-posted
+                 import a retired routine's posted.jsonl into the ledger (idempotent); reports
+                 only without --confirm
+    migrate      upgrade the home in place: the ledger schema, then phase 1 credentials; reports
+                 only without --confirm
+    serve        run the MCP server
+    orbit-tool   answer one Orbit plugin request (envelope on stdin, response on stdout)
+
+options:
+  -h, --help     show this help message and exit
+  --json         machine output (the default and only mode: every command prints JSON)
+  --version      show program's version number and exit
+
+Output is JSON on stdout; errors are JSON on stderr. Exit codes: 0 ok, 1 failed or not settled, 2
+usage error.

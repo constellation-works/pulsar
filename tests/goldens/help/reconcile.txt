@@ -1,0 +1,11 @@
+usage: pulsar reconcile [-h] [--json] [--account ACCOUNT]
+
+settle writes whose outcome is unknown from the account's timeline (reads X only when something is unresolved)
+
+options:
+  -h, --help         show this help message and exit
+  --json             machine output (the default and only mode: every command prints JSON)
+  --account ACCOUNT  the account to reconcile; default: default_account in config.toml, else the
+                     only bound account
+
+Exit 0 only when every row it looked at is settled.

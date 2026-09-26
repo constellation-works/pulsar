@@ -1,8 +1,10 @@
 import pytest
 
+from pulsar.core import guard
 from pulsar.core.errors import INVALID_TEXT, SECRET_DETECTED, PulsarError
 from pulsar.core.guard import SECRET_PATTERNS, looks_generated, redact, scan_for_secrets
 from pulsar.core.settings import DEFAULT_PLAIN_POST_USD, DEFAULT_URL_POST_USD, Prices
+from pulsar.core.store import FernetFileStore, TokenBundle
 from pulsar.providers.x.text import validate_text, weighted_length
 
 
@@ -151,3 +153,33 @@ def test_cost_comes_from_the_configured_price_table():
     prices = Prices(plain_post_usd=0.01, url_post_usd=0.5)
     assert validate_text("plain", prices).estimated_cost_usd == 0.01
     assert validate_text("see https://example.com", prices).estimated_cost_usd == 0.5
+
+
+# -- live values (STD-05 §R14) ----------------------------------------------------------
+
+# An X OAuth 2 token has no prefix and no header around it: only its value gives it away.
+SHAPELESS = "dGhpcy1pcy1ub3QtYS1zaGFwZWQtdG9rZW4tMTIz"
+
+
+def test_a_loaded_token_is_masked_whatever_its_shape(paths):
+    text = f"X answered 401 for {SHAPELESS}"
+    assert guard.redact(text) == text and guard.scan_for_secrets(text) == []
+    store = FernetFileStore.for_account(paths, "x:constworks")
+    store.save(
+        TokenBundle(
+            access_token=SHAPELESS, refresh_token=None, expires_at=0.0, scope="s", client_id="c"
+        )
+    )
+    assert guard.redact(text) == "X answered 401 for [redacted:live credential]"
+    assert guard.scan_for_secrets(text) == ["live credential"], "a post quoting it is refused"
+    key = paths.key_file.read_text().strip()
+    guard._live.clear()
+    store.load()
+    assert SHAPELESS not in guard.redact(text), "loading registers it too"
+    assert key not in guard.redact(f"key={key}"), "and the store key"
+
+
+def test_a_short_value_is_never_registered():
+    guard.register_live_secret("hunter2")
+    guard.register_live_secret(None)
+    assert guard.redact("my password is hunter2") == "my password is hunter2"

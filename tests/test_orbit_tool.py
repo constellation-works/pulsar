@@ -1,7 +1,7 @@
 """The Orbit exec backend (``surfaces/orbit_tool.py``) and the plugin manifest around it.
 
-These run the backend in-process; ``orbit plugin test .`` runs the same goldens
-(``tests/conformance/``) through Orbit and its sandbox.
+These run the backend in-process; ``orbit plugin test <clean export> --grant fs,network``
+runs the same goldens (``tests/conformance/``) through Orbit and its sandbox.
 """
 
 import asyncio
@@ -17,7 +17,7 @@ import pytest
 import yaml
 
 from pulsar.core.paths import Paths
-from pulsar.surfaces import orbit_tool
+from pulsar.surfaces import ops, orbit_tool
 from pulsar.surfaces.cli import main as cli_main
 from pulsar.surfaces.ops import publish_report
 
@@ -28,12 +28,13 @@ from .test_server import SECRET_PARAM
 ROOT = Path(__file__).resolve().parent.parent
 MANIFEST = yaml.safe_load((ROOT / "plugin.yaml").read_text())
 GOLDENS = yaml.safe_load((ROOT / "tests" / "conformance" / "pulsar.yaml").read_text())["tests"]
+assert GOLDENS, "tests/conformance/pulsar.yaml has no cases"
 
 
 @pytest.fixture
 def state(tmp_path, monkeypatch) -> Path:
-    # PULSAR_HOME must not win over the plugin state; point it somewhere wrong.
-    monkeypatch.setenv("PULSAR_HOME", str(tmp_path / "not-this-home"))
+    # Orbit's backend environment: no PULSAR_HOME (a different one is refused).
+    monkeypatch.delenv("PULSAR_HOME", raising=False)
     return tmp_path / "plugin-state"
 
 
@@ -125,10 +126,14 @@ def test_no_request_schema_takes_a_credential():
 def test_launcher_and_skill_ship_in_the_tree():
     launcher = ROOT / MANIFEST["spec"]["backend"]["command"]
     assert launcher.is_file() and os.access(launcher, os.X_OK)
-    assert "pulsar.surfaces.orbit_tool" in launcher.read_text()
+    assert "pulsar.surfaces.orbit_tool" in launcher.read_text(), (
+        "the manifest's backend command must exec the Orbit backend module"
+    )
     for skill in MANIFEST["spec"]["skills"]:
         text = (ROOT / skill / "SKILL.md").read_text()
-        assert re.search(r"(?m)^name: pulsar-", text)
+        assert re.search(r"(?m)^name: pulsar-", text), (
+            "Orbit installs a plugin skill only under the plugin's own name prefix"
+        )
     # The plugin installer refuses symlinks anywhere in the tree.
     assert not (ROOT / "CLAUDE.md").is_symlink()
 
@@ -177,8 +182,8 @@ def test_an_unexpected_failure_is_still_one_envelope(state, workspace, monkeypat
     monkeypatch.setitem(orbit_tool.TOOLS, "status", boom)
     response = run(state, workspace, "status")
     assert response["error"] == {
-        "code": "api_error",
-        "message": "unexpected RuntimeError",
+        "code": "internal",
+        "message": "internal error: RuntimeError",
         "retryable": False,
     }
 
@@ -193,7 +198,41 @@ def test_cli_orbit_tool_reads_stdin(paths, monkeypatch, capsys):
     monkeypatch.delenv("ORBIT_PLUGIN_STATE", raising=False)
     monkeypatch.setattr("sys.stdin", io.StringIO('{"schema_version": 1, "tool": "pulsar.history"}'))
     assert cli_main(["orbit-tool"]) == 0
-    assert json.loads(capsys.readouterr().out) == {"ok": True, "output": {"rows": []}}
+    assert json.loads(capsys.readouterr().out) == {
+        "ok": True,
+        "output": {"rows": [], "total": 0, "truncated": False},
+    }
+
+
+def test_a_different_pulsar_home_under_orbit_is_refused_before_any_work(state):
+    elsewhere = state.parent / "elsewhere"
+    environ = {"ORBIT_PLUGIN_STATE": str(state), "PULSAR_HOME": str(elsewhere)}
+    response = orbit_tool.handle({"schema_version": 1, "tool": "pulsar.history"}, environ)
+    assert response["ok"] is False and response["error"]["code"] == "invalid_config"
+    assert response["error"]["detail"] == {
+        "pulsar_home": str(elsewhere),
+        "plugin_home": str(state / "home"),
+    }
+    assert not state.exists() and not elsewhere.exists()
+
+
+def test_pulsar_home_naming_the_plugin_home_is_accepted(state):
+    environ = {"ORBIT_PLUGIN_STATE": str(state), "PULSAR_HOME": str(state / "home")}
+    response = orbit_tool.handle({"schema_version": 1, "tool": "pulsar.history"}, environ)
+    assert response["ok"] is True
+
+
+@pytest.mark.parametrize("tool", sorted(orbit_tool.TOOLS))
+def test_each_tool_accepts_exactly_its_schema_properties(tool):
+    schema = json.loads((ROOT / "schemas" / f"{tool}.request.json").read_text())
+    assert orbit_tool.INPUTS[tool] == set(schema["properties"])
+
+
+def test_an_unknown_input_key_is_refused(state, workspace):
+    response = run(state, workspace, "history", {"limt": 5})
+    assert response["error"]["code"] == "invalid_argument"
+    assert "`limt`" in response["error"]["message"]
+    assert response["error"]["detail"] == {"unknown": ["limt"], "accepted": ["account", "limit"]}
 
 
 # -- tools ----------------------------------------------------------------------------
@@ -213,7 +252,29 @@ def test_status_asks_for_a_login_when_the_token_is_gone(state, home, workspace):
     register(home, None, ALIAS)
     out = run(state, workspace, "status")["output"]
     assert out["healthy"] is False
-    assert out["attention"] == [f"{ALIAS}: re-authorization required (`pulsar auth login`)"]
+    assert out["attention"] == [
+        f"{ALIAS}: re-authorization required (`PULSAR_HOME={home.home} pulsar auth login "
+        f"--account {ALIAS}`)"
+    ]
+    [account] = out["accounts"]
+    assert account["health"] == "unhealthy"
+
+
+def test_status_says_when_offline_health_is_unverified(state, home, bundle, workspace):
+    register(home, bundle, ALIAS)  # bound, identity never looked up
+    out = run(state, workspace, "status")["output"]
+    [account] = out["accounts"]
+    assert account["health"] == "unverified" and account["healthy"] is False
+    assert out["healthy"] is False
+    assert "--live" in out["attention"][0]
+
+
+def test_status_changes_nothing_on_disk(state, home, bundle, workspace):
+    register(home, bundle, ALIAS, handle="constworks", provider_user_id="1")
+    before = {p: p.stat().st_mtime_ns for p in home.home.rglob("*")}
+    run(state, workspace, "status")
+    run(state, workspace, "history")
+    assert {p: p.stat().st_mtime_ns for p in home.home.rglob("*")} == before
 
 
 def test_history_and_status_see_what_was_published(
@@ -222,11 +283,15 @@ def test_history_and_status_see_what_was_published(
     register(home, bundle, ALIAS, handle="constworks", provider_user_id="1")
     plan = tmp_path / "plan.yaml"
     plan.write_text('account: x:constworks\nposts: [{text: "one"}, {text: "two"}]\n')
-    receipt, code = asyncio.run(publish_report(home, plan, yes=True, transport=fake_x.transport()))
+    receipt, code = asyncio.run(
+        publish_report(home, plan, confirm=True, transport=fake_x.transport())
+    )
     assert code == 0
     requests = len(fake_x.requests)
 
-    [row] = run(state, workspace, "history", {"limit": 5})["output"]["rows"]
+    history = run(state, workspace, "history", {"limit": 5})["output"]
+    assert (history["total"], history["truncated"]) == (1, False)
+    [row] = history["rows"]
     assert row["account"] == ALIAS and row["state"] == "published"
     assert (row["posts"], row["published"]) == (2, 2)
     assert row["cost_usd"] == pytest.approx(0.03)
@@ -308,7 +373,37 @@ def test_validate_source_needs_a_workspace(state):
     assert response["error"]["code"] == "invalid_argument"
 
 
-def test_validate_restores_the_working_directory(state, workspace):
-    before = os.getcwd()
-    run(state, workspace, "validate", {"plan": {"account": ALIAS, "text": "hi"}})
-    assert os.getcwd() == before
+def test_validate_never_changes_the_working_directory(state, workspace, monkeypatch):
+    (workspace / "banner.png").write_bytes(PNG)
+
+    def refuse(_path):
+        raise AssertionError("the backend must not chdir")
+
+    monkeypatch.setattr(os, "chdir", refuse)
+    plan = {"account": ALIAS, "text": "hi", "media": [{"path": "banner.png", "alt": "B"}]}
+    out = run(state, workspace, "validate", {"plan": plan})["output"]
+    assert out["valid"] is True, "relative media resolves against the workspace"
+
+
+def test_validate_refuses_a_source_that_is_a_directory_or_the_workspace(state, workspace):
+    (workspace / "plans").mkdir()
+    for source in ("plans", "."):
+        response = run(state, workspace, "validate", {"source": source})
+        assert response["error"]["code"] == "invalid_argument", source
+
+
+def test_validate_answers_a_bad_plan_as_a_verdict_and_a_bad_account_as_an_error(state, workspace):
+    bad_plan = run(state, workspace, "validate", {"plan": {"account": "x:constworks", "posts": []}})
+    assert bad_plan["ok"] is True and bad_plan["output"]["valid"] is False
+    plan = {"account": "x:constworks", "posts": [{"text": "hi"}]}
+    unknown = run(state, workspace, "validate", {"plan": plan, "account": "x:nobody"})
+    assert unknown["ok"] is False and unknown["error"]["code"] == "unknown_account"
+
+
+def test_the_history_schema_advertises_the_limits_the_code_enforces():
+    limit = _schema("history", "request").schema["properties"]["limit"]
+    assert (limit["minimum"], limit["maximum"], limit["default"]) == (
+        1,
+        ops.HISTORY_LIMIT_MAX,
+        ops.HISTORY_LIMIT_DEFAULT,
+    )

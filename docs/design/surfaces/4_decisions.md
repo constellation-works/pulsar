@@ -73,7 +73,10 @@ to fix it. Orbit 0.24 passes only `code` and `message` of a plugin error on ([OR
 ### Decision
 
 `pulsar.validate` returns `{valid: false, error: {code, message, retryable, detail}}` for a
-plan that fails validation; bad tool input (no plan, unreadable source) stays a tool error.
+plan that fails validation (`invalid_plan`, `invalid_text`, `invalid_media`,
+`secret_detected`, `unsupported`: `orbit_tool.PLAN_VERDICTS`). Bad tool input (no plan, an
+unreadable source, an `account` that is not bound or not the plan's) and a broken home
+(`insecure_storage`, `invalid_config`, `lock_timeout`) stay tool errors.
 
 ### Consequences
 
@@ -125,10 +128,245 @@ Python with `PYTHONPATH` at the plugin's `src/`.
 - Cost: the first call after an install or upgrade needs network and about 10 s, and a
   dependency not in `uv.lock` is simply missing.
 
+## The CLI keeps its verb-first grammar
+
+**Recorded:** 2026-09-26 · [ORB-13138]
+**Deviates from:** STD-01@2 §R1, §R2
+**Code anchors:** `src/pulsar/surfaces/cli.py::build_parser`
+
+### Context
+
+STD-01 wants one order, `<tool> <noun> <verb>`, and verbs from a shared vocabulary. pulsar
+mixes `pulsar auth login` (noun, verb) with `pulsar publish` and `pulsar reconcile` (verb
+only), and its verbs (`publish`, `reconcile`, `import-posted`, `migrate`) are not `add`,
+`list` or `show`. Routines, the skill and the operator's shell history already use them.
+
+### Decision
+
+Keep the tree as it is. The operator verbs act on the one ledger, which has no second noun to
+tell apart; `auth` is the only resource with verbs of its own. New commands go under a noun.
+
+### Consequences
+
+- No caller breaks, and the command names say what they cost (`publish` posts).
+- Cost: two orders in one tool; if a second resource grows verbs, regroup under nouns with
+  the old names kept as aliases for a release (§R35).
+
+## The CLI prints JSON only
+
+**Recorded:** 2026-09-26 · [ORB-13138]
+**Deviates from:** STD-01@2 §R8, §R14, §R17
+**Code anchors:** `src/pulsar/surfaces/cli.py::_out`
+
+### Context
+
+STD-01 wants a human rendering on a terminal and a piped form otherwise, with tables and
+color rules. pulsar's callers are routines and agents; its one human command, `auth login`,
+prints a short JSON receipt.
+
+### Decision
+
+Every command prints one JSON document on stdout, terminal or not. `--json` is accepted
+everywhere as a no-op so callers written against the standard work. Errors are one JSON
+object on stderr (§R19); notices are prose lines on stderr. There is no mode to resolve
+(§R8), no table (§R14) and no color decision (§R17). Two outputs are argparse's, not
+pulsar's: `--help` is wrapped to `COLUMNS` (the help goldens pin it to 100), and `--version`
+prints the version as plain text.
+
+### Consequences
+
+- One output mode, so nothing to resolve, color or truncate; §R6, §R7, §R15, §R16 and
+  §R18 hold trivially. §R9's piped form is JSON rather than its SHOULD of tab-separated
+  lines.
+- Cost: an operator reads JSON at the terminal (`| jq` helps).
+
+## `pulsar orbit-tool` exits 0 when it answered
+
+**Recorded:** 2026-09-26 · [ORB-13138]
+**Deviates from:** STD-01@2 §R20
+**Code anchors:** `src/pulsar/surfaces/orbit_tool.py::main`
+
+### Context
+
+Orbit's exec protocol reads the outcome from the response envelope (`ok`); a non-zero exit
+means the backend crashed and its output is discarded.
+
+### Decision
+
+`orbit-tool` exits 0 whenever it wrote a response, including `{ok: false, error}`.
+
+### Consequences
+
+- Orbit shows the caller the pulsar error code and message instead of a crash.
+- Cost: a shell caller of `pulsar orbit-tool` must read `ok`, not the exit status.
+
+## Renamed flags stay for one release
+
+**Recorded:** 2026-09-26 · [ORB-13138]
+**Code anchors:** `src/pulsar/surfaces/cli.py::_publish`, `src/pulsar/surfaces/cli.py::_auth_status`
+
+### Context
+
+STD-01@2 §R5 names `--confirm` as the one confirmation spelling; `publish` used `--yes`.
+`auth status` became offline by default (§R31), which left `--offline` with nothing to do.
+
+### Decision
+
+Per §R35, `publish --yes` stays as an alias of `--confirm` and `auth status --offline` as a
+no-op, each warning on stderr, for one release; then both become usage errors. `auth logout`
+and `import-posted --confirm` are new requirements, not renames, and have no alias.
+
+### Consequences
+
+- Existing routines keep working and are told what to change.
+- Cost: two spellings of confirmation for a release, the one §R5 exception.
+
+## A POST without an Origin is an MCP client, not a browser
+
+**Recorded:** 2026-09-26 · [ORB-13138]
+**Deviates from:** STD-05@1 §R17
+**Code anchors:** `src/pulsar/surfaces/mcp.py::loopback_security`, `tests/test_server.py::test_http_accepts_only_its_own_loopback_authority`
+
+### Context
+
+§R17 refuses every state-changing request unless it carries a loopback `Origin` matching the
+`Host`. MCP's streamable HTTP transport is a `POST` per message, and the clients that speak it
+(Claude Code, Codex, SDK clients) are not browsers and send no `Origin`. Held to the letter,
+`pulsar serve --transport http` could serve no client at all.
+
+### Decision
+
+A request with no `Origin` is accepted when its `Host` is one of the bound server's loopback
+authorities (`127.0.0.1`, `localhost` or `::1` at the bound port, per `--host`). A request that
+carries an `Origin` is accepted only when it is the `http` origin of one of those same
+authorities; anything else, including `null`, `https` and another port, is 403. `localhost`
+and `127.0.0.1` name the same bound socket, so an `Origin` of one with a `Host` of the other is
+accepted rather than matched character for character. The server binds
+loopback only (`--host` is a closed choice) and the `Host` allow-list is exact (421 otherwise).
+
+### Consequences
+
+- MCP clients work over HTTP; browsers, which always send `Origin` on a cross-origin `POST`,
+  are held to §R17, and DNS rebinding fails the `Host` check.
+- Cost: a local non-browser process can drive the server without an `Origin`, as it could over
+  stdio. The server holds no credential it returns, and every write still passes the ledger,
+  the policy and the secret scanner.
+
+## No supply-chain gate beyond the lock and dependabot
+
+**Recorded:** 2026-09-26 · [ORB-13138]
+**Deviates from:** STD-02@2 §R23
+**Code anchors:** `Makefile` (`lint`: `uv lock --check`), `.github/dependabot.yml`, `uv.lock`
+
+### Context
+
+§R23 asks CI to run `cargo deny check`: deny yanked packages, open advisories and unknown
+sources, and allow-list licenses. pulsar is Python; its equivalent would be an advisory audit
+and a license check of `uv.lock`. `make check` must also run offline, and an advisory audit
+needs the network.
+
+### Decision
+
+For now the gate is: every dependency pinned with hashes in `uv.lock` from PyPI only,
+`uv lock --check` in `make check` so the lock cannot drift from `pyproject.toml`, and
+dependabot proposing updates and security fixes. A Python audit gate (advisories, yanked
+releases, licenses, with dated exceptions) is follow-up work.
+
+### Consequences
+
+- A lock that drifted from `pyproject.toml` fails `make check`, and every install is the
+  hashed, PyPI-sourced set in `uv.lock` (`uv sync --frozen`).
+- Cost: a known-vulnerable or yanked pin is caught only when dependabot raises it, and licenses
+  are not checked. Re-review when the audit gate lands.
+
+## The launcher's sync is bounded only where timeout(1) runs
+
+**Recorded:** 2026-09-26 · [ORB-13138]
+**Deviates from:** STD-03@2 §R13, §R22
+**Code anchors:** `bin/pulsar` (the `uv sync` step), `tests/test_launcher.py`
+
+### Context
+
+The first plugin call after an install or upgrade runs `uv sync`, which fetches dependencies.
+§R22 wants that bounded. The launcher is POSIX `sh`; stock macOS ships no `timeout(1)`, and
+a watchdog written in `sh` would need its own process-group handling that the host already
+does.
+
+### Decision
+
+Where `timeout` runs (it is probed, not trusted), the sync is `timeout -k 10 600`: TERM at
+600 s, KILL 10 s later. Where it does not, the sync runs under the Orbit host's per-call
+timeout alone, which ends the backend's process tree. The launcher waits for `uv` and
+reports a failed or timed-out sync as `dependency_sync`, but does not sweep `uv`'s process
+group after a clean exit (§R13): `sh` has no portable way to, and the host's per-call tree
+kill reclaims anything left.
+
+### Consequences
+
+- Linux hosts, where pulsar runs today, are bounded by the launcher itself.
+- Cost: on a Mac without coreutils a stalled sync holds the call until the host gives up.
+
+## CLI output fields renamed before the first release
+
+**Recorded:** 2026-09-26 · [ORB-13138]
+**Deviates from:** STD-01@2 §R10, §R35
+**Code anchors:** `src/pulsar/surfaces/ops.py::validate_report`, `src/pulsar/surfaces/ops.py::publish_report`, `tests/goldens/cli/`
+
+### Context
+
+Aligning the CLI with STD-01 changed some of its JSON. `validate` and a `publish` preview
+answered `{ok: true, accounts}`; they now answer `{valid, published, accounts, note}`. A
+`publish` result entry for an account that failed before sending spread the error's `code`
+and `message` across the entry; it now has a receipt's keys plus `error: {code, message,
+retryable, detail}`. §R10 makes that a breaking change, and §R35 keeps a renamed field for
+a release, with a warning.
+
+### Decision
+
+No alias period. pulsar has never been released (0.1.0, no tag), and nothing in the
+constellation parses these commands' output. The Orbit plugin and the MCP server have their
+own schemas and changed only by adding fields. The new shapes are pinned by `tests/goldens/cli/`, and
+the next rename follows §R35.
+
+### Consequences
+
+- One shape per record from the first release on.
+- Cost: a script written against the pre-release output breaks without a warning.
+
+## Reconcile and first-use migration apply without `--confirm`
+
+**Recorded:** 2026-09-26 · [ORB-13138]
+**Deviates from:** STD-01@2 §R5
+**Code anchors:** `src/pulsar/surfaces/ops.py::reconcile_report`, `src/pulsar/surfaces/cli.py::_migrate_quietly`, `src/pulsar/surfaces/runtime.py::Runtime.writer`
+
+### Context
+
+§R5 makes a bulk or cleanup command report by default and apply only with `--confirm`.
+`publish`, `auth logout`, `import-posted`, `migrate` and `auth migrate` do. Two effects do
+not. `pulsar reconcile` settles every unknown row of an account from X's timeline, and the
+timeline read is billed per post returned. The first write command or tool call on a phase 1
+home also moves its credentials into the account layout.
+
+### Decision
+
+`reconcile` applies what it finds: a report-only run would pay for the same timeline read and
+then a second one to apply it. It records only what the timeline proves (a row is marked
+absent only with a complete listing, a grace period and a fingerprint) and never sends or
+deletes. First-use migration stays automatic, so a routine keeps working across the upgrade.
+It renames within the home, refuses to overwrite credentials, and is what `pulsar migrate
+--confirm` would do. Reports never migrate.
+
+### Consequences
+
+- An operator runs one paid read to settle an account, and upgrades need no manual step.
+- Cost: reconcile gives no preview, and a phase 1 home is changed by its first write command
+  without being asked.
+
 ## Task References
 
 - [ORB-12124] — built the MCP server.
 - [ORB-13029] — built the Orbit plugin.
 - [ORB-13114] — Orbit: structured plugin errors (ws_orbit).
+- [ORB-13138] — aligned the surfaces with the constellation standards.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

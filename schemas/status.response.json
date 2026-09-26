@@ -16,7 +16,7 @@
     },
     "healthy": {
       "type": "boolean",
-      "description": "Every account is authorized with nothing unresolved."
+      "description": "Every account is healthy (not merely unverified) with nothing unresolved."
     },
     "attention": {
       "type": "array",
@@ -33,6 +33,8 @@
           "status",
           "authorized",
           "reauth_required",
+          "health",
+          "reason",
           "healthy",
           "unresolved",
           "last_published"
@@ -67,6 +69,21 @@
               "integer",
               "null"
             ]
+          },
+          "health": {
+            "enum": [
+              "healthy",
+              "unverified",
+              "unhealthy"
+            ],
+            "description": "unverified: nothing is known to be wrong, but local state cannot settle it (no cached identity, or an expired token whose refresh was not exercised); `pulsar auth status --live` settles it."
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the account is not healthy; null when it is."
           },
           "healthy": {
             "type": "boolean"

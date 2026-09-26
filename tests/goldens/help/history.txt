@@ -1,0 +1,10 @@
+usage: pulsar history [-h] [--json] [--account ACCOUNT] [--limit LIMIT]
+
+the newest ledger rows (offline)
+
+options:
+  -h, --help         show this help message and exit
+  --json             machine output (the default and only mode: every command prints JSON)
+  --account ACCOUNT  only this account's rows (an alias, provider:handle such as x:<handle>);
+                     default: all
+  --limit LIMIT      rows to show, 1..100; default: 20

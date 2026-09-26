@@ -1,0 +1,17 @@
+usage: pulsar auth login [-h] [--json] [--account ACCOUNT] [--client-id CLIENT_ID] [--no-browser]
+
+bind an account: OAuth 2.0 PKCE in a browser, then verify the handle with X
+
+options:
+  -h, --help            show this help message and exit
+  --json                machine output (the default and only mode: every command prints JSON)
+  --account ACCOUNT     the account to bind (an alias, provider:handle such as x:<handle>);
+                        default: default_account in config.toml, else the only bound account
+  --client-id CLIENT_ID
+                        the X app's OAuth 2.0 client id; default: the one remembered from the last
+                        login
+  --no-browser          print the authorization URL on stderr instead of opening a browser
+
+Examples:
+  pulsar auth login --account x:<handle> --client-id <CLIENT_ID>
+  pulsar auth login --account x:<handle> --no-browser   # over SSH

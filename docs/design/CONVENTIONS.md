@@ -124,7 +124,7 @@ Either way the entry names a real alternative and a non-trivial `Cost:`. Format:
 ## 6. Links and Task IDs
 
 - Relative links only, with a `./` or `../` prefix. Code links go from the doc to the file
-  (`../../../src/pulsar/core/ledger.py`).
+  (`../../../src/pulsar/core/publisher.py`).
 - Task ids are plain bracketed text, never links: `[ORB-13028]`. pulsar's tasks live in
   Orbit workspace `ws_pulsar` on the posting host; Orbit-side gaps live in `ws_orbit`. Both use
   `ORB-` ids.
@@ -136,8 +136,10 @@ Either way the entry names a real alternative and a non-trivial `Cost:`. Format:
 
 - A behaviour change updates its design doc (and the README, if the front door changed) in the
   same commit.
-- `make check` does not lint docs. Review is the mechanism: a reviewer treats this file as a
-  checklist, the author decides whether a deviation is justified.
+- `make check` checks what a machine can: relative links resolve, design docs carry their
+  frontmatter, and every documented `pulsar` command parses (`tests/test_docs.py`). The rest
+  is review: a reviewer treats this file as a checklist, the author decides whether a
+  deviation is justified.
 - A retired feature's folder is deleted in the retiring change; git keeps the history.
 
 ---

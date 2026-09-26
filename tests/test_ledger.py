@@ -96,6 +96,7 @@ async def test_same_key_twice_posts_once_and_replays(session, authed, flaky_x, r
         "post_id": "101",
         "url": "https://x.com/constworks/status/101",
         "text": "first light",
+        "replayed": False,
     }
     assert second == {**first, "replayed": True}
     row = rt.ledger.get("launch-2026-09-26")
@@ -108,7 +109,7 @@ async def test_default_key_dedupes_identical_requests(session, authed, flaky_x):
     again = await call(session, "create_post", {"text": "same words"})
     assert again["replayed"] is True and len(flaky_x.posts()) == 1
     other = await call(session, "create_post", {"text": "same words", "reply_to_post_id": "9"})
-    assert "replayed" not in other and len(flaky_x.posts()) == 2
+    assert other["replayed"] is False and len(flaky_x.posts()) == 2
 
 
 async def test_same_key_different_text_is_a_conflict(session, authed, flaky_x):
@@ -180,7 +181,7 @@ async def test_connect_error_is_a_retryable_failure_and_retry_posts(
     assert rt.ledger.get("k-connect").state == FAILED
 
     ok = await call(session, "create_post", args)
-    assert ok["ok"] is True and "replayed" not in ok
+    assert ok["ok"] is True and ok["replayed"] is False
     assert len(flaky_x.posts()) == 1
     row = rt.ledger.get("k-connect")
     assert row.state == PUBLISHED and row.attempts == 2 and row.error_code is None
@@ -328,7 +329,13 @@ async def test_two_runtimes_on_one_home_cannot_both_post(paths, authed, flaky_x)
 async def test_repeated_delete_replays_the_receipt(session, authed, flaky_x, rt, paths):
     first = await call(session, "delete_post", {"post_id": "101"})
     second = await call(session, "delete_post", {"post_id": "101"})
-    assert first == {"ok": True, "post_id": "101", "deleted": True}
+    assert first == {
+        "ok": True,
+        "account": "x:constworks",
+        "post_id": "101",
+        "deleted": True,
+        "replayed": False,
+    }
     assert second == {**first, "replayed": True}
     assert len(flaky_x.calls("DELETE")) == 1
     row = rt.ledger.get("delete:101")
@@ -348,6 +355,21 @@ async def test_failed_delete_is_recorded_and_retryable(session, authed, flaky_x,
     flaky_x.refresh_status = 200
     ok = await call(session, "delete_post", {"post_id": "202"})
     assert ok["ok"] is True and rt.ledger.get("delete:202").attempts == 2
+
+
+async def test_a_failing_settle_write_never_replaces_the_tool_error(
+    session, authed, flaky_x, rt, monkeypatch
+):
+    await call(session, "whoami", {})
+    flaky_x.fail_auth_once = True
+    flaky_x.refresh_status = 401
+
+    def locked(*args, **kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(rt.ledger, "fail", locked)
+    out = await call(session, "delete_post", {"post_id": "203"})
+    assert out["code"] == "auth_expired", "the send's error, not the ledger's"
 
 
 async def test_upload_rows_record_media_facts_not_bytes(session, authed, flaky_x, rt, paths):
@@ -378,10 +400,14 @@ async def test_schemas_mark_caller_advisory_and_document_the_key(session):
     by_name = {t.name: t for t in (await session.list_tools()).tools}
     for name in ("create_post", "upload_media", "delete_post"):
         props = by_name[name].input_schema["properties"]
-        assert "not identity" in props["caller"]["description"]
+        assert "not identity" in props["caller"]["description"], (
+            "caller is self-asserted (STD-05 §R2); the schema must not let agents read it as auth"
+        )
     for name in ("create_post", "delete_post"):
         props = by_name[name].input_schema["properties"]
-        assert "replayed" in props["idempotency_key"]["description"]
+        assert "replayed" in props["idempotency_key"]["description"], (
+            "agents must learn that re-sending a key replays, not reposts (a paid duplicate)"
+        )
 
 
 async def test_jsonl_export_keeps_legacy_fields(session, authed, paths, monkeypatch):

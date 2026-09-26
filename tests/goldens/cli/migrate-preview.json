@@ -1,0 +1,15 @@
+{
+  "applied": false,
+  "credentials": {
+    "adopted": [],
+    "alias": null,
+    "message": null,
+    "state": "none"
+  },
+  "home": "<home>",
+  "ledger": {
+    "from_version": 0,
+    "to_version": 2
+  },
+  "note": "pass --confirm to apply"
+}

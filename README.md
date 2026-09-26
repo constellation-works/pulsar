@@ -22,11 +22,11 @@ Create an X app with OAuth 2.0, type *Native app*, callback `http://127.0.0.1:89
 Then, on the posting host (over SSH, forward the callback with `ssh -L 8976:127.0.0.1:8976`):
 
 ```sh
-uv run pulsar auth login --account x:constworks --client-id <CLIENT_ID>
+uv run pulsar auth login --account x:<handle> --client-id <CLIENT_ID>
 uv run pulsar auth status            # add --live to prove the refresh works
 ```
 
-pulsar checks with X that the token belongs to `@constworks` before storing it, encrypted,
+pulsar checks with X that the token belongs to `@<handle>` before storing it, encrypted,
 in the pulsar home (`PULSAR_HOME`, default `~/.config/pulsar`).
 
 ## Configure
@@ -39,16 +39,19 @@ day. See [the config reference](docs/design/publishing/references/config.md).
 
 ```sh
 uv run pulsar validate plan.yaml          # what would be posted, its cost and digest; offline
-uv run pulsar publish plan.yaml --yes     # post it (idempotent: re-running replays the receipt)
+uv run pulsar publish plan.yaml --confirm # post it (idempotent: re-running replays the receipt)
 uv run pulsar status                      # budget and cap use, unresolved writes
 uv run pulsar reconcile                   # settle posts whose outcome is unknown
 uv run pulsar serve                       # MCP server (stdio)
+uv run pulsar migrate --confirm           # after an upgrade: bring the home up to date
 ```
+
+Output is JSON on stdout; errors are JSON on stderr (exit 1, or 2 for a usage error).
 
 A plan:
 
 ```yaml
-account: x:constworks
+account: x:<handle>
 posts:
   - text: "Orbit v0.26 is out"
     media: [{path: releases/v0.26/banner.png, alt: "The v0.26 banner"}]
@@ -69,7 +72,8 @@ The plugin's home is `~/.orbit/state/plugins/pulsar/home`; point the CLI at it w
 
 ## Documentation
 
-Design docs live in [docs/design](docs/design/) ([conventions](docs/design/CONVENTIONS.md)):
+Design docs live in [docs/design](docs/design/) ([conventions](docs/design/CONVENTIONS.md),
+[architecture](docs/design/ARCHITECTURE.md), [standards conformance](docs/design/CONFORMANCE.md)):
 
 - [Accounts](docs/design/accounts/1_overview.md): login, token storage, refresh.
 - [Publishing](docs/design/publishing/1_overview.md): plans, the ledger, idempotency, policy,
@@ -81,7 +85,7 @@ Design docs live in [docs/design](docs/design/) ([conventions](docs/design/CONVE
 ## Development
 
 ```sh
-make check    # ruff, basedpyright strict, pytest (no network: a fake X transport)
+make check    # standards check, uv lock --check, ruff, basedpyright strict, pytest (offline)
 ```
 
 `src/pulsar/core` is provider-neutral and imports no HTTP; `providers/x` is the X adapter;

@@ -1,0 +1,34 @@
+{
+  "accounts": [
+    {
+      "account": "x:constworks",
+      "digest": "sha256:58c8d57f19a5123520d316de9d3166304c8f481188edd318c2611a270cc377cf",
+      "estimated_cost_usd": 0.215,
+      "not_before": null,
+      "posts": [
+        {
+          "estimated_cost_usd": 0.015,
+          "has_url": false,
+          "length": 18,
+          "max_length": 280,
+          "media": [],
+          "text": "Orbit v0.26 is out"
+        },
+        {
+          "estimated_cost_usd": 0.2,
+          "has_url": true,
+          "length": 30,
+          "max_length": 280,
+          "media": [],
+          "text": "Notes: https://example.com/notes"
+        }
+      ],
+      "pricing_note": "from the configured price table; verify on the provider's portal",
+      "provider": "x",
+      "quote": null,
+      "reply_to": null
+    }
+  ],
+  "published": false,
+  "valid": true
+}

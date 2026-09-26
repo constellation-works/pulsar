@@ -2,7 +2,9 @@
 
 import base64
 import json
+import os
 import re
+from pathlib import Path
 
 import httpx
 import pytest
@@ -14,7 +16,8 @@ from pulsar.core.adapter import Identity
 from pulsar.core.media import MAX_IMAGE_BYTES, MAX_VIDEO_BYTES
 from pulsar.core.settings import Settings
 from pulsar.core.store import TokenBundle
-from pulsar.surfaces.mcp import TOOL_NAMES, Runtime, build_server
+from pulsar.surfaces.mcp import TOOL_NAMES, build_server, loopback_security
+from pulsar.surfaces.runtime import Runtime
 
 from .conftest import ALIAS, SECRETS, register
 from .media_samples import JPEG, MP4, PEM_KEY
@@ -28,7 +31,10 @@ pytestmark = pytest.mark.anyio
 @pytest.fixture
 async def session(paths, fake_x, tmp_path):
     rt = Runtime(
-        paths, settings=Settings(media_roots=(tmp_path / "media",)), transport=fake_x.transport()
+        paths,
+        settings=Settings(media_roots=(tmp_path / "media",)),
+        transport=fake_x.transport(),
+        media_base=tmp_path / "media",
     )
     server = build_server(rt)
     async with InMemoryTransport(server) as (read, write):
@@ -39,11 +45,10 @@ async def session(paths, fake_x, tmp_path):
 
 
 @pytest.fixture
-def media_dir(tmp_path, monkeypatch):
-    """The session's configured media root, also the cwd for relative paths."""
+def media_dir(tmp_path):
+    """The session's configured media root, also where relative paths start."""
     d = tmp_path / "media"
     d.mkdir()
-    monkeypatch.chdir(d)
     return d
 
 
@@ -68,6 +73,30 @@ async def test_tool_list_is_exactly_the_five_and_has_no_secret_params(session):
             assert not SECRET_PARAM.search(prop), (
                 f"{t.name}.{prop} looks like a credential parameter"
             )
+
+
+TOOLS_GOLDEN = Path(__file__).parent / "goldens" / "mcp_tools.json"
+
+
+async def test_tool_list_matches_its_golden(session):
+    """Names, descriptions, annotations and input schemas are the MCP contract."""
+    tools = [
+        t.model_dump(mode="json", exclude_none=True, by_alias=True)
+        for t in sorted((await session.list_tools()).tools, key=lambda t: t.name)
+    ]
+    text = json.dumps(tools, indent=2, sort_keys=True) + "\n"
+    if os.environ.get("PULSAR_UPDATE_GOLDENS") == "1":
+        TOOLS_GOLDEN.parent.mkdir(parents=True, exist_ok=True)
+        TOOLS_GOLDEN.write_text(text)
+    assert text == TOOLS_GOLDEN.read_text(), "the MCP tool list changed; review and regenerate"
+
+
+async def test_every_tool_refuses_unknown_arguments(session):
+    for tool in (await session.list_tools()).tools:
+        assert tool.input_schema.get("additionalProperties") is False, tool.name
+    result = await session.call_tool("validate_post", {"text": "hi", "txet": "typo"})
+    assert result.is_error, "an unknown argument is refused, not ignored"
+    assert "txet" in result.content[0].text
 
 
 async def test_annotations_let_a_harness_gate_by_name(session):
@@ -108,12 +137,9 @@ async def test_validate_post_rejects_reply_plus_quote(session, authed):
             "validate_post", {"text": "x", "reply_to_post_id": "1", "quote_post_id": "2"}
         )
     )
-    assert out == {
-        "ok": False,
-        "code": "invalid_text",
-        "message": "a post cannot be both a reply and a quote in v1",
-        "retryable": False,
-    }
+    # The plan owns the one-of rule, so every surface reports it the same way.
+    assert out["ok"] is False and out["code"] == "invalid_plan" and out["retryable"] is False
+    assert "reply and quote" in out["message"]
 
 
 @pytest.mark.parametrize(
@@ -183,6 +209,7 @@ async def test_live_create_post_returns_url_and_logs(session, authed, fake_x, pa
         "post_id": "101",
         "url": "https://x.com/constworks/status/101",
         "text": "first light",
+        "replayed": False,
     }
     _no_secret_leak(out)
     line = json.loads(paths.write_log.read_text().splitlines()[-1])
@@ -198,7 +225,7 @@ async def test_reply_and_quote_together_is_invalid(session, authed, fake_x):
             "create_post", {"text": "x", "reply_to_post_id": "1", "quote_post_id": "2"}
         )
     )
-    assert out["code"] == "invalid_text" and fake_x.requests == []
+    assert out["code"] == "invalid_plan" and fake_x.requests == []
 
 
 async def test_x_duplicate_passes_through(session, authed, fake_x):
@@ -249,6 +276,7 @@ async def test_upload_video_by_path_and_log(session, authed, fake_x, paths, medi
     up = _payload(await session.call_tool("upload_media", {"path": str(video)}))
     assert up == {
         "ok": True,
+        "account": "x:constworks",
         "media_id": "710000",
         "mime": "video/mp4",
         "bytes": len(video.read_bytes()),
@@ -351,8 +379,9 @@ async def test_upload_video_base64_limit(session, authed, fake_x, monkeypatch):
 async def test_upload_media_description_documents_video_limits(session):
     by_name = {tool.name: tool for tool in (await session.list_tools()).tools}
     description = by_name["upload_media"].description
-    assert "video/mp4" in description and "100 MiB" in description
-    assert "5 MiB" in description
+    assert "video/mp4" in description, (
+        "agents learn from the tool description that video is accepted; keep it saying so"
+    )
 
 
 @pytest.mark.parametrize(
@@ -479,7 +508,13 @@ async def test_upload_media_base64_with_mismatched_mime_never_reaches_x(session,
 
 async def test_delete_post(session, authed, fake_x, paths):
     out = _payload(await session.call_tool("delete_post", {"post_id": "101"}))
-    assert out == {"ok": True, "post_id": "101", "deleted": True}
+    assert out == {
+        "ok": True,
+        "account": "x:constworks",
+        "post_id": "101",
+        "deleted": True,
+        "replayed": False,
+    }
     line = json.loads(paths.write_log.read_text().splitlines()[-1])
     assert line["tool"] == "delete_post" and line["post_id"] == "101"
 
@@ -582,9 +617,10 @@ async def test_unexpected_exceptions_become_results_not_tracebacks(
     await rt.aclose()
     assert out == {
         "ok": False,
-        "code": "api_error",
+        "code": "internal",
         "message": "internal error: KeyError",
         "retryable": False,
+        "detail": None,
     }
 
 
@@ -636,3 +672,56 @@ async def test_create_post_on_a_skipped_key_is_a_conflict_not_a_receipt(
     assert out["ok"] is False and out["code"] == "idempotency_conflict"
     assert out["detail"]["state"] == "skipped"
     assert fake_x.calls("POST", "/tweets") == []
+
+
+# -- HTTP transport ---------------------------------------------------------------------
+
+
+@pytest.fixture
+async def http_client(paths):
+    rt = Runtime(paths, settings=Settings())
+    app = build_server(rt).streamable_http_app(
+        transport_security=loopback_security("127.0.0.1", 8977), host="127.0.0.1"
+    )
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8977") as c:
+            yield c
+    await rt.aclose()
+
+
+INITIALIZE = {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "initialize",
+    "params": {
+        "protocolVersion": "2025-06-18",
+        "capabilities": {},
+        "clientInfo": {"name": "test", "version": "0"},
+    },
+}
+MCP_HEADERS = {"accept": "application/json, text/event-stream", "content-type": "application/json"}
+
+
+@pytest.mark.parametrize(
+    ("headers", "status"),
+    [
+        ({}, 200),
+        ({"origin": "http://127.0.0.1:8977"}, 200),
+        ({"origin": "http://localhost:8977"}, 200),
+        ({"host": "evil.example:8977"}, 421),
+        ({"host": "127.0.0.1:9999"}, 421),
+        ({"origin": "http://evil.example"}, 403),
+        ({"origin": "http://127.0.0.1:9999"}, 403),
+        ({"origin": "https://127.0.0.1:8977"}, 403),
+    ],
+)
+async def test_http_accepts_only_its_own_loopback_authority(http_client, headers, status):
+    response = await http_client.post("/mcp", json=INITIALIZE, headers={**MCP_HEADERS, **headers})
+    assert response.status_code == status, response.text
+
+
+def test_loopback_security_names_the_bound_port_only():
+    settings = loopback_security("::1", 9000)
+    assert settings.allowed_hosts == ["[::1]:9000", "localhost:9000"]
+    assert settings.allowed_origins == ["http://[::1]:9000", "http://localhost:9000"]

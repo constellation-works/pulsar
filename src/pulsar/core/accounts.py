@@ -27,10 +27,12 @@ one short read-modify-write of a home file (``accounts.json``, or
 ``client.json`` through ``locked_update``). Every wait is bounded
 (``lock_timeout`` naming the holder).
 
-``accounts.json`` carries a ``version``. A registry written by a newer pulsar
-(a higher version) can still be read to resolve an account, but this pulsar
-refuses to write it (``invalid_config``), because its rewrite would drop what
-the newer one added (STD-03 §R10).
+``accounts.json`` carries a ``version`` and the oldest version that still reads
+it correctly, ``min_reader_version``. A registry written by a newer pulsar (a
+higher version) is read to resolve an account only when it declares this
+version a reader; otherwise it is refused (``invalid_config``). This pulsar
+never writes a newer registry, because its rewrite would drop what the newer
+one added (STD-03 §R10).
 """
 
 from __future__ import annotations
@@ -66,13 +68,17 @@ REAUTH_REQUIRED = "reauth_required"
 REVOKED = "revoked"
 STATUSES = frozenset({ACTIVE, REAUTH_REQUIRED, REVOKED})
 REGISTRY_VERSION = 1
+# The oldest registry version that reads what this one writes. A version that
+# only adds fields older readers ignore keeps it; one that removes, renames or
+# reinterprets a field raises it to itself.
+MIN_READER_VERSION = 1
 # accounts.lock guards one short file rewrite, never a network call.
 ACCOUNTS_LOCK_WAIT_SECONDS = 15.0
 
 # The phase 1 layout held one X account at the home root.
 LEGACY_PROVIDER = "x"
 LEGACY_NEEDS_ALIAS = (
-    "legacy credentials need an alias: run `pulsar auth migrate --account x:<handle>`"
+    "legacy credentials need an alias: run `pulsar auth migrate --account x:<handle> --confirm`"
 )
 
 
@@ -151,6 +157,20 @@ class MigrationResult:
     alias: str | None = None
     message: str | None = None
     adopted: tuple[str, ...] = field(default=())
+
+
+def _require_readable(path: Path, version: int, min_reader: object) -> None:
+    """``invalid_config`` unless a newer registry declares this pulsar a reader."""
+    if isinstance(min_reader, int) and not isinstance(min_reader, bool):
+        if 1 <= min_reader <= REGISTRY_VERSION:
+            return
+    raise PulsarError(
+        INVALID_CONFIG,
+        f"{path} is registry version {version} and does not declare version "
+        f"{REGISTRY_VERSION} a reader (min_reader_version {min_reader!r}); nothing was read. "
+        "Upgrade pulsar on this host",
+        detail={"path": str(path), "version": version, "supported": REGISTRY_VERSION},
+    )
 
 
 def _corrupt(path: Path, problem: str) -> PulsarError:
@@ -259,6 +279,8 @@ class AccountRegistry:
         version = data.get("version", REGISTRY_VERSION)
         if isinstance(version, bool) or not isinstance(version, int) or version < 1:
             raise _corrupt(path, f"`version` is {version!r}, not a positive integer")
+        if version > REGISTRY_VERSION:
+            _require_readable(path, version, data.get("min_reader_version"))
         out: dict[str, Account] = {}
         for alias, row in rows.items():
             try:
@@ -290,6 +312,7 @@ class AccountRegistry:
         self.paths.ensure()
         doc = {
             "version": REGISTRY_VERSION,
+            "min_reader_version": MIN_READER_VERSION,
             "accounts": {alias: rows[alias].to_json() for alias in sorted(rows)},
         }
         write_private_atomic(
@@ -505,7 +528,7 @@ class AccountRegistry:
         return (
             f"legacy credentials at {self.paths.token_file} were not migrated "
             "because accounts are already registered; run "
-            "`pulsar auth migrate --account x:<handle>` to adopt them"
+            "`pulsar auth migrate --account x:<handle> --confirm` to adopt them"
         )
 
     def _migration_target(
@@ -550,7 +573,10 @@ class AccountRegistry:
         if not legacy:
             return MigrationResult(
                 "pending",
-                message="an interrupted migration is unfinished; `pulsar auth migrate` finishes it",
+                message=(
+                    "an interrupted migration is unfinished; "
+                    "`pulsar auth migrate --confirm` finishes it"
+                ),
                 adopted=adopted,
             )
         if (rows or adopted) and target is None:
@@ -563,7 +589,7 @@ class AccountRegistry:
             alias=found,
             message=(
                 f"legacy credentials at {self.paths.token_file} are not migrated yet; "
-                f"`pulsar auth migrate` moves them to {found}"
+                f"`pulsar auth migrate --confirm` moves them to {found}"
             ),
             adopted=adopted,
         )

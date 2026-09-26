@@ -66,6 +66,15 @@ class Ledger:
         self._clock = clock
         self._ready = False
 
+    def reader(self) -> Ledger:
+        """A read-only view of the same file: for checks that must not create,
+        migrate or write it (a dry run, a report)."""
+        if self.read_only:
+            return self
+        return Ledger(
+            self.paths, busy_timeout_ms=self._busy_timeout_ms, clock=self._clock, read_only=True
+        )
+
     def _stamp(self) -> str:
         return iso(self._clock()) if self._clock is not None else _now()
 
@@ -144,6 +153,15 @@ class Ledger:
             conn.close()
         self._ready = True
         return versions
+
+    def schema_versions(self) -> tuple[int, int]:
+        """``(the file's version, this pulsar's)`` without changing anything:
+        0 for a missing file or one no schema was applied to. What ``migrate``
+        would do, for a command that reports before it acts."""
+        current = connection.read_only(
+            self.paths.ledger_db, self._busy_timeout_ms, user_version, missing=0
+        )
+        return current, SCHEMA_VERSION
 
     # -- reads --------------------------------------------------------------
 

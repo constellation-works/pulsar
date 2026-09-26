@@ -73,6 +73,7 @@ from .fsutil import (
     require_private,
     write_private_atomic,
 )
+from .guard import register_live_secret
 from .jsonx import as_object, obj
 from .paths import Paths, alias_from_slug
 
@@ -160,10 +161,21 @@ class CredentialConflict(PulsarError):
         )
 
 
+def home_command(home: Path, command: str) -> str:
+    """``pulsar <command>`` pinned to ``home``, so a remedy shown by the Orbit
+    plugin acts on the plugin's home, not the operator's default (STD-02 §R26)."""
+    return f"PULSAR_HOME={shlex.quote(str(home))} pulsar {command}"
+
+
+def _register(bundle: TokenBundle) -> None:
+    """Mask this bundle's tokens in every log line and stored text (STD-05 §R14)."""
+    register_live_secret(bundle.access_token)
+    register_live_secret(bundle.refresh_token)
+
+
 def login_command(home: Path, alias: str | None) -> str:
     """The command a human runs to (re)bind ``alias`` in ``home``."""
-    account = alias or "x:<handle>"
-    return f"PULSAR_HOME={shlex.quote(str(home))} pulsar auth login --account {account}"
+    return home_command(home, f"auth login --account {alias or 'x:<handle>'}")
 
 
 class CredentialStore(Protocol):
@@ -272,7 +284,10 @@ class FernetFileStore:
 
     def _read_key(self) -> Fernet:
         try:
-            return Fernet(self.paths.key_file.read_bytes().strip())
+            raw = self.paths.key_file.read_bytes().strip()
+            key = Fernet(raw)
+            register_live_secret(raw.decode("ascii", "replace"))
+            return key
         except ValueError as exc:
             # Never echo the key bytes; the path and the recovery are enough.
             raise PulsarError(
@@ -350,6 +365,7 @@ class FernetFileStore:
                 f"restore it from backup, or remove it and "
                 f"{self.reauth_hint().removeprefix('a human runs ')}",
             )
+        _register(bundle)
         return bundle
 
     def save(self, bundle: TokenBundle, *, expected_previous: TokenBundle | None = None) -> None:
@@ -358,6 +374,7 @@ class FernetFileStore:
         self._prepare_home()
         if expected_previous is not None and self.load() != expected_previous:
             raise CredentialConflict()
+        _register(bundle)
         blob = self._fernet(create=True).encrypt(json.dumps(asdict(bundle)).encode())
         write_private_atomic(self.token_file, blob)
 
@@ -412,7 +429,3 @@ class FernetFileStore:
         self._prepare_home()
         with hold_lock(self.lock_file, **self._lock_args(timeout, purpose)):
             yield
-
-
-# The old name. Only tests/conftest.py still imports it; delete it once that switches.
-TokenStore = FernetFileStore

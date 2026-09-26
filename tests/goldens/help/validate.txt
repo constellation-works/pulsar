@@ -1,0 +1,12 @@
+usage: pulsar validate [-h] [--json] [--account ACCOUNT] plan
+
+check a plan offline: per account, what would post, its digest and cost
+
+positional arguments:
+  plan               plan file (YAML)
+
+options:
+  -h, --help         show this help message and exit
+  --json             machine output (the default and only mode: every command prints JSON)
+  --account ACCOUNT  one of the plan's accounts, or the one to bind a plan that names none;
+                     default: default_account in config.toml, else the only bound account

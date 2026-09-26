@@ -74,20 +74,21 @@ class PulsarError(Exception):
         return {"ok": False, "error": error}
 
     def to_result(self) -> dict[str, Any]:
-        out: dict[str, Any] = {
+        # One shape whatever the error: ``detail`` is null, never absent (STD-01 §R11).
+        return {
             "ok": False,
             "code": self.code,
             "message": self.message,
             "retryable": self.retryable,
+            "detail": self.detail,
         }
-        if self.detail is not None:
-            out["detail"] = self.detail
-        return out
 
 
 class AuthExpired(PulsarError):
     def __init__(
-        self, message: str = "X authorization expired; a human must re-run `pulsar auth login`"
+        self,
+        message: str = "authorization expired; a human must re-run "
+        "`pulsar auth login --account <alias>`",
     ) -> None:
         super().__init__(AUTH_EXPIRED, message)
 

@@ -5,10 +5,11 @@ from pathlib import Path
 
 import pytest
 
+from pulsar.core.accounts import AccountRegistry
+from pulsar.core.errors import OutcomeUnknown, PulsarError
 from pulsar.core.ledger import Ledger
-from pulsar.surfaces.cli import main
-from pulsar.surfaces.mcp import Runtime
 from pulsar.surfaces.ops import (
+    HISTORY_LIMIT_MAX,
     budget_report,
     history_report,
     import_report,
@@ -16,9 +17,10 @@ from pulsar.surfaces.ops import (
     reconcile_report,
     validate_report,
 )
+from pulsar.surfaces.runtime import Runtime
 
-from .conftest import ALIAS, SECRETS
-from .test_ledger import call, open_session
+from .conftest import ALIAS, SECRETS, register
+from .test_ledger import call, claim_plan, open_session
 
 pytestmark = pytest.mark.anyio
 
@@ -70,40 +72,49 @@ async def test_validate_binds_a_plan_without_accounts_to_the_default(paths, auth
 
 
 async def test_validate_refuses_an_account_outside_the_plan(paths, authed, tmp_path):
-    register_other = _plan(tmp_path, 'account: x:constworks\ntext: "hi"')
-    from .conftest import register
-
+    plan = _plan(tmp_path, 'account: x:constworks\ntext: "hi"')
     register(paths, None, "x:other")
-    out, code = await validate_report(paths, register_other, account="x:other")
-    assert code == 1 and out["code"] == "invalid_argument"
+    with pytest.raises(PulsarError) as exc:
+        await validate_report(paths, plan, account="x:other")
+    assert exc.value.code == "invalid_argument"
 
 
 async def test_validate_reports_plan_errors(paths, authed, tmp_path):
-    out, code = await validate_report(paths, _plan(tmp_path, "posts: []"))
-    assert code == 1 and out["code"] == "invalid_plan"
+    with pytest.raises(PulsarError) as exc:
+        await validate_report(paths, _plan(tmp_path, "posts: []"))
+    assert exc.value.code == "invalid_plan"
 
 
-async def test_publish_without_yes_only_validates(paths, authed, fake_x, tmp_path):
+async def test_a_missing_plan_file_names_the_path(paths, tmp_path):
+    with pytest.raises(PulsarError) as exc:
+        await validate_report(paths, tmp_path / "nope.yaml")
+    assert exc.value.code == "invalid_argument" and exc.value.detail == {
+        "plan": str(tmp_path / "nope.yaml")
+    }
+
+
+async def test_publish_without_confirm_only_validates(paths, authed, fake_x, tmp_path):
     out, code = await publish_report(paths, _plan(tmp_path), transport=fake_x.transport())
-    assert code == 0 and out["published"] is False and "--yes" in out["note"]
+    assert code == 0 and out["published"] is False and "--confirm" in out["note"]
     assert fake_x.requests == []
     assert Ledger(paths).history() == []
 
 
 async def test_publish_posts_a_thread_once_then_replays(paths, authed, fake_x, tmp_path):
     plan = _plan(tmp_path)
-    out, code = await publish_report(paths, plan, yes=True, transport=fake_x.transport())
+    out, code = await publish_report(paths, plan, confirm=True, transport=fake_x.transport())
     _clean(out)
-    assert code == 0
+    assert code == 0 and out["published"] is True
     [receipt] = out["results"]
     assert receipt["ok"] and receipt["state"] == "published" and not receipt["replayed"]
+    assert receipt["error"] is None
     first, second = receipt["items"]
     posts = fake_x.calls("POST", "/tweets")
     assert len(posts) == 2
     assert json.loads(posts[1].content)["reply"] == {"in_reply_to_tweet_id": first["post_id"]}
     assert second["url"] == f"https://x.com/constworks/status/{second['post_id']}"
 
-    again, code = await publish_report(paths, plan, yes=True, transport=fake_x.transport())
+    again, code = await publish_report(paths, plan, confirm=True, transport=fake_x.transport())
     assert code == 0 and again["results"][0]["replayed"] is True
     assert len(fake_x.calls("POST", "/tweets")) == 2
 
@@ -114,19 +125,28 @@ async def test_publish_posts_a_thread_once_then_replays(paths, authed, fake_x, t
 
 
 async def test_publish_refuses_a_key_for_several_accounts(paths, authed, fake_x, tmp_path):
-    from .conftest import register
-
     register(paths, None, "x:other")
     plan = _plan(tmp_path, 'accounts: [x:constworks, x:other]\ntext: "hi"')
-    out, code = await publish_report(
-        paths, plan, yes=True, idempotency_key="k", transport=fake_x.transport()
-    )
-    assert code == 1 and out["code"] == "invalid_argument"
+    with pytest.raises(PulsarError) as exc:
+        await publish_report(
+            paths, plan, confirm=True, idempotency_key="k", transport=fake_x.transport()
+        )
+    assert exc.value.code == "invalid_argument"
     assert fake_x.requests == []
 
 
+async def test_publish_prepares_every_account_before_sending_any(paths, authed, fake_x, tmp_path):
+    register(paths, None, "x:other")  # bound in the registry, no credentials
+    plan = _plan(tmp_path, 'accounts: [x:constworks, x:other]\ntext: "hi"')
+    with pytest.raises(PulsarError) as exc:
+        await publish_report(paths, plan, confirm=True, transport=fake_x.transport())
+    assert exc.value.code == "auth_expired" and "x:other" in exc.value.message
+    assert fake_x.calls("POST", "/tweets") == [], "the first account did not post either"
+    assert Ledger(paths).history() == []
+
+
 async def test_status_counts_what_the_ledger_committed(paths, authed, fake_x, tmp_path):
-    await publish_report(paths, _plan(tmp_path), yes=True, transport=fake_x.transport())
+    await publish_report(paths, _plan(tmp_path), confirm=True, transport=fake_x.transport())
     requests = len(fake_x.requests)
     out, code = budget_report(paths)
     assert code == 0 and len(fake_x.requests) == requests, "status is offline"
@@ -140,36 +160,73 @@ async def test_status_counts_what_the_ledger_committed(paths, authed, fake_x, tm
 
 async def test_reconcile_with_nothing_unresolved_makes_no_call(paths, authed, fake_x):
     out, code = await reconcile_report(paths, transport=fake_x.transport())
-    assert code == 0 and out == {"account": ALIAS, "results": []}
+    assert code == 0 and out == {"account": ALIAS, "home": str(paths.home), "results": []}
     assert fake_x.requests == []
 
 
-async def test_import_posted_is_idempotent_and_blocks_reposts(paths, authed, fake_x, tmp_path):
+async def test_import_without_confirm_reports_and_writes_nothing(paths, authed, fake_x):
     out, code = await import_report(paths, FIXTURE, transport=fake_x.transport())
-    assert code == 0 and out["account"] == ALIAS
+    assert code == 0 and out["applied"] is False and "--confirm" in out["note"]
+    assert out["imported_published"] + out["imported_skipped"] > 0
+    assert fake_x.requests == [] and Ledger(paths).history() == []
+
+
+async def test_import_posted_is_idempotent_and_blocks_reposts(paths, authed, fake_x, tmp_path):
+    out, code = await import_report(paths, FIXTURE, confirm=True, transport=fake_x.transport())
+    assert code == 0 and out["account"] == ALIAS and out["applied"] is True
     assert out["imported_published"] + out["imported_skipped"] > 0
     assert fake_x.calls("POST", "/tweets") == []
-    again, code = await import_report(paths, FIXTURE, transport=fake_x.transport())
+    again, code = await import_report(paths, FIXTURE, confirm=True, transport=fake_x.transport())
     assert code == 0 and again["imported_published"] == again["imported_skipped"] == 0
     assert again["already_present"] == out["imported_published"] + out["imported_skipped"]
 
 
 async def test_import_refuses_a_missing_file(paths, authed, fake_x, tmp_path):
-    out, code = await import_report(paths, tmp_path / "nope.jsonl", transport=fake_x.transport())
-    assert code == 1 and out["code"] == "invalid_argument"
+    with pytest.raises(PulsarError) as exc:
+        await import_report(
+            paths, tmp_path / "nope.jsonl", confirm=True, transport=fake_x.transport()
+        )
+    assert exc.value.code == "invalid_argument"
 
 
-def test_cli_validate_prints_json(paths, authed, tmp_path, capsys):
-    assert main(["validate", str(_plan(tmp_path))]) == 0
-    out = json.loads(capsys.readouterr().out)
-    assert out["accounts"][0]["account"] == ALIAS
+async def test_history_reports_total_and_truncated(paths, authed, fake_x, tmp_path):
+    for n in range(3):
+        plan = _plan(tmp_path, f'account: x:constworks\ntext: "post {n}"')
+        await publish_report(paths, plan, confirm=True, transport=fake_x.transport())
+    out, code = history_report(paths, limit=2)
+    assert code == 0 and len(out["writes"]) == 2
+    assert out["total"] == 3 and out["truncated"] is True
+    out, _ = history_report(paths, limit=3)
+    assert out["total"] == 3 and out["truncated"] is False
 
 
-def test_cli_status_and_history(paths, authed, capsys):
-    assert main(["status"]) == 0
-    assert json.loads(capsys.readouterr().out)["accounts"][0]["alias"] == ALIAS
-    assert main(["history", "--limit", "5"]) == 0
-    assert json.loads(capsys.readouterr().out) == {"writes": []}
+@pytest.mark.parametrize("limit", [0, -1, HISTORY_LIMIT_MAX + 1, True])
+def test_history_refuses_an_out_of_range_limit(paths, limit):
+    with pytest.raises(PulsarError) as exc:
+        history_report(paths, limit=limit)
+    assert exc.value.code == "invalid_argument", "a limit is refused, never clamped"
+
+
+def _tree_modes(root: Path, dirs: int, files: int) -> None:
+    for path in [root, *root.rglob("*")]:
+        path.chmod(dirs if path.is_dir() else files)
+
+
+async def test_reports_run_against_a_read_only_home(paths, bundle, fake_x, tmp_path):
+    register(paths, bundle, handle="constworks", provider_user_id=fake_x.user_id)
+    await publish_report(paths, _plan(tmp_path), confirm=True, transport=fake_x.transport())
+    before = {p: p.stat().st_mtime_ns for p in paths.home.rglob("*")}
+    _tree_modes(paths.home, 0o500, 0o400)
+    try:
+        status, code = budget_report(paths)
+        assert code == 0 and status["accounts"][0]["posts"]["used"] == 2
+        history, code = history_report(paths)
+        assert code == 0 and history["total"] == 1
+        valid, code = await validate_report(paths, _plan(tmp_path))
+        assert code == 0 and valid["published"] is False
+    finally:
+        _tree_modes(paths.home, 0o700, 0o600)
+    assert {p: p.stat().st_mtime_ns for p in paths.home.rglob("*")} == before
 
 
 # -- policy on the legacy tool ------------------------------------------------------
@@ -213,3 +270,18 @@ async def test_validate_plan_tool_is_offline(paths, authed, fake_x):
     assert out["ok"] is True and fake_x.requests == []
     [report] = out["accounts"]
     assert report["account"] == ALIAS and len(report["posts"]) == 2
+
+
+async def test_reconcile_marks_the_account_when_its_credentials_expired(paths, bundle, fake_x):
+    register(paths, bundle, handle="constworks", provider_user_id="1234567890")
+    ledger = Ledger(paths)
+    claim_plan(ledger, "lost", n=1)
+    ledger.begin_item("lost", 0)
+    ledger.item_unknown("lost", 0, OutcomeUnknown("ReadTimeout"))
+    ledger.finish("lost")
+    fake_x.fail_auth_once = True
+    fake_x.refresh_status = 401
+    with pytest.raises(PulsarError) as exc:
+        await reconcile_report(paths, transport=fake_x.transport())
+    assert exc.value.code == "auth_expired"
+    assert AccountRegistry(paths).get(ALIAS).status == "reauth_required"

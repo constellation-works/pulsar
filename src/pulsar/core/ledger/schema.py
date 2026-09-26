@@ -184,7 +184,7 @@ def needs_migration(path: Path, version: int) -> PulsarError:
     return PulsarError(
         INVALID_CONFIG,
         f"ledger {path} has schema v{version} and this pulsar reads v{SCHEMA_VERSION}; "
-        "run `pulsar migrate` to upgrade it",
+        "run `pulsar migrate --confirm` to upgrade it",
         detail={"path": str(path), "schema_version": version, "supported": SCHEMA_VERSION},
     )
 

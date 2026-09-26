@@ -14,7 +14,7 @@ publish (not read-only, not destructive), and ``delete_post`` is
 that predate ``validate_post``, but a harness cannot tell it apart from a
 live post by name — prefer ``validate_post``.
 
-Every live write is claimed in the ledger (``ledger.py``) before its request
+Every live write is claimed in the ledger (``core/ledger/``) before its request
 leaves and settled after, so a repeat with the same idempotency key replays
 the receipt instead of posting (and paying) twice, and a write whose outcome
 is unknowable is reported as ``outcome_unknown`` rather than a retryable
@@ -29,51 +29,37 @@ the right name cannot post.
 
 from __future__ import annotations
 
-import contextlib
+import asyncio
 import hashlib
 import json
 import logging
 import uuid
-from collections.abc import Awaitable, Callable, Generator
+from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from typing import Annotated, Any
 
-import httpx
 from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.tools import Tool
+from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import ToolAnnotations
-from pydantic import Field
+from pydantic import ConfigDict, Field
 
 from .. import __version__
-from ..core.accounts import (
-    ACTIVE,
-    REAUTH_REQUIRED,
-    REVOKED,
-    Account,
-    AccountRegistry,
-    require_expected,
-)
-from ..core.adapter import Identity
 from ..core.errors import (
     API_ERROR,
     IDEMPOTENCY_CONFLICT,
-    INVALID_ARGUMENT,
-    INVALID_TEXT,
-    UNSUPPORTED,
-    AuthExpired,
+    INTERNAL,
     OutcomeUnknown,
     PulsarError,
 )
-from ..core.ledger import PUBLISHED, SKIPPED, Ledger, check_key, request_digest
-from ..core.media import load_media
-from ..core.paths import Paths, default_paths
-from ..core.plan import Plan, alias_provider
-from ..core.publisher import Bound, Outcome, Prepared, Publisher
-from ..core.settings import Prices, Settings, load_settings
-from ..core.store import FernetFileStore
-from ..core.writelog import WriteLog, resolve_caller
-from ..providers.x.adapter import XChannel
-from ..providers.x.client import MediaProcessingError, XClient, check_x_id
+from ..core.ledger import PUBLISHED, SKIPPED, check_key, request_digest
+from ..core.media import MAX_IMAGE_BYTES, MAX_VIDEO_BYTES, load_media
+from ..core.plan import Plan
+from ..core.publisher import STALE_SUBMITTING, Bound, Outcome, Prepared
+from ..core.settings import Prices
+from ..providers.x.client import MediaProcessingError, check_x_id
 from ..providers.x.text import validate_text
+from .runtime import Runtime
 
 log = logging.getLogger(__name__)
 
@@ -85,6 +71,14 @@ TOOL_NAMES = (
     "upload_media",
     "delete_post",
 )
+
+# The names a loopback HTTP server answers to, by bind address (STD-05 §R19:
+# `pulsar serve` binds nothing else).
+LOOPBACK_NAMES: dict[str, tuple[str, ...]] = {
+    "127.0.0.1": ("127.0.0.1", "localhost"),
+    "localhost": ("127.0.0.1", "localhost"),
+    "::1": ("[::1]", "localhost"),
+}
 
 # Hints a policy layer can gate on without knowing anything pulsar-specific.
 READ_ONLY = ToolAnnotations(read_only_hint=True, destructive_hint=False, idempotent_hint=True)
@@ -128,191 +122,64 @@ AccountArg = Annotated[
     str | None,
     Field(
         description=(
-            "Alias of a bound account, provider:handle (e.g. x:constworks). Default: "
+            "Alias of a bound account, provider:handle (e.g. x:<handle>). Default: "
             "default_account from the operator's config, else the only bound account."
         )
     ),
 ]
 
-
-class Runtime:
-    """Everything the tools need, built once per process (or per test).
-
-    Accounts are resolved per call, not at start-up: a login, logout or
-    migration while the server runs takes effect on the next call. Each
-    account gets its own ``XClient`` over its own credential store, so
-    accounts refresh independently.
-    """
-
-    def __init__(
-        self,
-        paths: Paths | None = None,
-        *,
-        settings: Settings | None = None,
-        transport: httpx.AsyncBaseTransport | None = None,
-        **client_kwargs: Any,
-    ) -> None:
-        self.paths = paths or default_paths()
-        self.settings = settings or load_settings(self.paths)
-        self.registry = AccountRegistry(self.paths)
-        self.log = WriteLog(self.paths)
-        self.ledger = Ledger(self.paths, export=self.log.export)
-        self.publisher = Publisher(
-            ledger=self.ledger, settings=self.settings, deny=(self.paths.home,)
-        )
-        self._transport = transport
-        self._client_kwargs = client_kwargs
-        self._clients: dict[str, XClient] = {}
-        self._migrated = False
-
-    # -- accounts -----------------------------------------------------------
-
-    def account(self, alias: str | None = None) -> Account:
-        """The account a call acts as (``AccountRegistry.resolve``).
-
-        The first call migrates a phase 1 single-account home, if there is one.
-        """
-        if not self._migrated:
-            self.registry.migrate_legacy(self.settings)
-            self._migrated = True
-        return self.registry.resolve(alias, self.settings)
-
-    def client_for(self, alias: str) -> XClient:
-        client = self._clients.get(alias)
-        if client is None:
-            client = XClient(
-                self.registry.store(alias), transport=self._transport, **self._client_kwargs
-            )
-            self._clients[alias] = client
-        return client
-
-    @property
-    def client(self) -> XClient:
-        """The default account's client."""
-        return self.client_for(self.account().alias)
-
-    @property
-    def store(self) -> FernetFileStore:
-        """The default account's credential store."""
-        return self.registry.store(self.account().alias)
-
-    async def aclose(self) -> None:
-        clients, self._clients = list(self._clients.values()), {}
-        for client in clients:
-            await client.aclose()
-
-    @contextlib.contextmanager
-    def watch_expiry(self, alias: str) -> Generator[None]:
-        """Mark ``alias`` ``reauth_required`` when what runs inside ends in ``auth_expired``."""
-        try:
-            yield
-        except AuthExpired:
-            row = self.registry.accounts().get(alias)
-            if row is not None and row.status == ACTIVE:
-                self.registry.mark_status(alias, REAUTH_REQUIRED)
-            raise
-
-    async def identity(self, alias: str | None = None, *, live: bool = False) -> Account:
-        """The account, with its identity trusted for the stored binding.
-
-        Read from the registry row while that row describes the stored
-        bundle's binding; otherwise (or when ``live``) asked of X and
-        recorded. A lookup that raced a re-login records the old binding, so
-        it is never trusted afterwards.
-        """
-        account = self.account(alias)
-        name = account.alias
-        with self.watch_expiry(name):
-            if account.status == REVOKED:
-                raise AuthExpired(
-                    f"{name} was logged out; a human runs `pulsar auth login --account {name}`"
-                )
-            client = self.client_for(name)
-            bundle = client.store.load()
-            if bundle is None:
-                raise AuthExpired(
-                    f"no credentials stored for {name}; a human runs "
-                    f"`pulsar auth login --account {name}`"
-                )
-            if not live and (trusted := self.registry.trusted_identity(account, bundle)):
-                return replace(
-                    account, handle=trusted.handle, provider_user_id=trusted.provider_user_id
-                )
-            me = await client.me()
-        found = Identity(provider_user_id=me["user_id"], handle=me["username"].lower())
-        self.registry.mark_verified(name, found, bundle.binding_id)
-        return replace(account, handle=found.handle, provider_user_id=found.provider_user_id)
-
-    async def whoami(self, alias: str | None = None, *, live: bool = False) -> dict[str, str]:
-        """``{user_id, username}`` of the account: cached after the first call."""
-        return _me(await self.identity(alias, live=live))
-
-    async def writer(self, alias: str | None) -> tuple[Account, XClient, dict[str, str]]:
-        """The account to write as, its client and ledger identity.
-
-        ``account_mismatch`` when the bound handle is not the alias's or the
-        configured ``expected_handle``: checked before every write.
-        """
-        account = await self.identity(alias)
-        require_expected(account, self.settings)
-        return account, self.client_for(account.alias), _me(account)
-
-    # -- channels -------------------------------------------------------------
-
-    def channel(self, alias: str, *, user_id: str, handle: str) -> XChannel:
-        provider = alias_provider(alias)
-        if provider != "x":
-            raise PulsarError(UNSUPPORTED, f"no channel for provider {provider!r} yet")
-        return XChannel(self.client_for(alias), user_id=user_id, handle=handle)
-
-    def offline_bound(self, alias: str) -> Bound:
-        """``alias`` bound for offline validation: no credentials needed, no network."""
-        row = self.registry.accounts().get(alias)
-        handle = (row.handle if row else None) or alias.partition(":")[2]
-        user_id = (row.provider_user_id if row else None) or ""
-        return Bound(
-            alias=alias,
-            provider=alias_provider(alias),
-            user_id=user_id,
-            handle=handle,
-            channel=self.channel(alias, user_id=user_id, handle=handle),
-        )
-
-    async def bound(self, alias: str | None) -> Bound:
-        """The account to publish as, identity checked (``writer``), with its channel."""
-        account, _client, me = await self.writer(alias)
-        return Bound(
-            alias=account.alias,
-            provider=account.provider,
-            user_id=me["user_id"],
-            handle=me["username"],
-            channel=self.channel(account.alias, user_id=me["user_id"], handle=me["username"]),
-        )
-
-    def plan_targets(self, plan: Plan, account: str | None) -> tuple[Plan, list[str]]:
-        """The plan bound to explicit accounts, and the ones this call acts for.
-
-        A plan without accounts is bound to ``account`` (else the default), so
-        its digest names who it is for. ``account`` on a plan that names
-        accounts selects one of them.
-        """
-        if not plan.accounts:
-            chosen = self.account(account).alias
-            return plan.with_accounts((chosen,)), [chosen]
-        if account is None:
-            return plan, list(plan.accounts)
-        chosen = self.account(account).alias
-        if chosen not in plan.accounts:
-            raise PulsarError(
-                INVALID_ARGUMENT,
-                f"{chosen} is not one of the plan's accounts",
-                detail={"accounts": list(plan.accounts)},
-            )
-        return plan, [chosen]
-
-
-def _me(account: Account) -> dict[str, str]:
-    return {"user_id": account.provider_user_id or "", "username": account.handle or ""}
+PostText = Annotated[
+    str,
+    Field(
+        description="The post's text: at most 280 weighted characters (a URL counts 23, CJK "
+        "and emoji 2), no control characters, nothing that looks like a credential."
+    ),
+]
+ReplyTo = Annotated[
+    str | None,
+    Field(description="Id of the post this one replies to (digits). Not with quote_post_id."),
+]
+QuoteOf = Annotated[
+    str | None,
+    Field(description="Id of the post this one quotes (digits). Not with reply_to_post_id."),
+]
+MediaIds = Annotated[
+    list[str] | None,
+    Field(description="Media ids from upload_media, uploaded as the same account; at most 4."),
+]
+DryRun = Annotated[
+    bool,
+    Field(
+        description="Legacy: validate and check policy only, send and record nothing. "
+        "Prefer validate_post."
+    ),
+]
+PostId = Annotated[str, Field(description="Id of the post to delete (digits).")]
+MediaPath = Annotated[
+    str | None,
+    Field(
+        description="A file under the operator's configured media roots; a relative path "
+        "starts at the server's working directory. Exactly one of path or base64."
+    ),
+]
+MediaBase64 = Annotated[
+    str | None,
+    Field(description="The file's bytes, base64-encoded. Exactly one of path or base64."),
+]
+MediaMime = Annotated[
+    str | None,
+    Field(
+        description="image/png, image/jpeg, image/gif, image/webp or video/mp4. Default: "
+        "sniffed from the bytes; when given it must agree with them."
+    ),
+]
+PlanArg = Annotated[
+    dict[str, Any],
+    Field(
+        description="A plan: {account | accounts, text | posts[{text, media[{path, alt}]}], "
+        "reply_to | quote, variants, not_before}."
+    ),
+]
 
 
 def _guarded(
@@ -330,7 +197,7 @@ def _guarded(
             # because nothing says a repeat would go differently.
             log.exception("pulsar: unexpected error in %s", fn.__name__)
             return PulsarError(
-                API_ERROR, f"internal error: {exc.__class__.__name__}", retryable=False
+                INTERNAL, f"internal error: {exc.__class__.__name__}", retryable=False
             ).to_result()
 
     wrapper.__name__ = fn.__name__
@@ -340,12 +207,41 @@ def _guarded(
     return wrapper
 
 
+def _strict(tool: Tool) -> Tool:
+    """Refuse arguments the tool does not declare (STD-01 §R29).
+
+    The SDK's argument models ignore unknown keys, so a misspelt ``acount``
+    would post as the default account. Forbidding extras makes it a
+    validation error, and ``additionalProperties: false`` advertises that.
+    """
+    base = tool.fn_metadata.arg_model
+    tool.fn_metadata.arg_model = type(
+        base.__name__,
+        (base,),
+        {"model_config": ConfigDict(arbitrary_types_allowed=True, extra="forbid")},
+    )
+    tool.parameters = {**tool.parameters, "additionalProperties": False}
+    return tool
+
+
+def _one_post_plan(account: str | None, text: str, reply_to: str | None, quote: str | None) -> Plan:
+    """A tool call's post as a plan, so the plan's own rules (one of reply or
+    quote, the text checks) are the only definition of them."""
+    return Plan.from_mapping(
+        {
+            **({"account": account} if account else {}),
+            "text": text,
+            "reply_to": reply_to,
+            "quote": quote,
+        }
+    )
+
+
 def _validate(
     text: str, reply_to_post_id: str | None, quote_post_id: str | None, prices: Prices
 ) -> dict[str, Any]:
+    _one_post_plan(None, text, reply_to_post_id, quote_post_id)
     report = validate_text(text, prices)
-    if reply_to_post_id and quote_post_id:
-        raise PulsarError(INVALID_TEXT, "a post cannot be both a reply and a quote in v1")
     if reply_to_post_id:
         check_x_id(reply_to_post_id, "reply_to_post_id")
     if quote_post_id:
@@ -362,77 +258,36 @@ def _validate(
 
 def build_server(runtime: Runtime | None = None) -> MCPServer:
     rt = runtime or Runtime()
-    server = MCPServer(name="pulsar", version=__version__, instructions=INSTRUCTIONS)
 
-    @server.tool(
-        description=(
-            "Return the X account behind `account` (default: the operator's default "
-            "account): {user_id, username}. Local after the first call."
-        ),
-        annotations=READ_ONLY,
-    )
     @_guarded
     async def whoami(account: AccountArg = None) -> dict[str, Any]:
         me = await rt.whoami(account)
         return {"ok": True, **me}
 
-    @server.tool(
-        description=(
-            "Validate post text without publishing: weighted length (<=280), URL detection, "
-            "credential scan, reply/quote conflict, and an estimated_cost_usd. Never touches "
-            "the network. Safe to call freely; use it before create_post."
-        ),
-        annotations=READ_ONLY,
-    )
     @_guarded
     async def validate_post(
-        text: str,
-        reply_to_post_id: str | None = None,
-        quote_post_id: str | None = None,
+        text: PostText,
+        reply_to_post_id: ReplyTo = None,
+        quote_post_id: QuoteOf = None,
     ) -> dict[str, Any]:
         return _validate(text, reply_to_post_id, quote_post_id, rt.settings.prices)
 
-    @server.tool(
-        description=(
-            "Validate a plan without publishing: {account|accounts, text | posts[{text, "
-            "media[{path, alt}]}], reply_to|quote, variants{provider: {posts}}, not_before}. "
-            "Checks each post against the account's provider (length, media type, size and "
-            "count, alt text, credential scan), loads media under the operator's media roots, "
-            "and returns per account the digest and estimated_cost_usd. Never touches the "
-            "network. `account` picks one of the plan's accounts, or binds a plan that "
-            "names none (default: the operator's default account)."
-        ),
-        annotations=READ_ONLY,
-    )
     @_guarded
-    async def validate_plan(plan: dict[str, Any], account: AccountArg = None) -> dict[str, Any]:
-        parsed, targets = rt.plan_targets(Plan.from_mapping(plan), account)
-        reports = [rt.publisher.prepare(parsed, rt.offline_bound(a)).report() for a in targets]
-        return {"ok": True, "accounts": reports}
+    async def validate_plan(plan: PlanArg, account: AccountArg = None) -> dict[str, Any]:
+        def check() -> list[dict[str, Any]]:
+            parsed, targets = rt.plan_targets(Plan.from_mapping(plan), account)
+            return [rt.publisher.prepare(parsed, rt.offline_bound(a)).report() for a in targets]
 
-    @server.tool(
-        description=(
-            "Create a post on X as `account` (default: the operator's default account); "
-            "refused with account_mismatch if its credentials belong to another handle. "
-            "Requires explicit user intent in the "
-            "calling chat or an owner-enabled routine. Text is validated (<=280 weighted chars, "
-            "no credential-looking strings) before any network call. Idempotent per "
-            "idempotency_key: a repeat returns the stored receipt with replayed=true and does "
-            "not post. On outcome_unknown the post may be live: do not retry. dry_run=true is "
-            "the legacy validate-only path; prefer validate_post, which a policy layer can gate "
-            "separately. The operator's policy applies: budget_exceeded, daily_cap or "
-            "quiet_hours come back before anything is sent, with detail.retry_after. "
-            "`caller` is an advisory audit label, not identity."
-        ),
-        annotations=PUBLISHES,
-    )
+        # Media reads and hashing are blocking; keep them off the event loop.
+        return {"ok": True, "accounts": await asyncio.to_thread(check)}
+
     @_guarded
     async def create_post(
-        text: str,
-        reply_to_post_id: str | None = None,
-        quote_post_id: str | None = None,
-        media_ids: list[str] | None = None,
-        dry_run: bool = False,
+        text: PostText,
+        reply_to_post_id: ReplyTo = None,
+        quote_post_id: QuoteOf = None,
+        media_ids: MediaIds = None,
+        dry_run: DryRun = False,
         caller: Caller = None,
         idempotency_key: IdempotencyKey = None,
         account: AccountArg = None,
@@ -440,14 +295,30 @@ def build_server(runtime: Runtime | None = None) -> MCPServer:
         validated = _validate(text, reply_to_post_id, quote_post_id, rt.settings.prices)
         media_ids = [check_x_id(m, "media_ids") for m in media_ids or []] or None
         key = check_key(idempotency_key)
+        who = rt.caller(caller)
         if dry_run:
-            # Not a write: nothing reaches the ledger or writes.jsonl.
+            # Not a write: nothing reaches the ledger or writes.jsonl. The same
+            # offline checks as the live call, in the same order (STD-02
+            # §R34): the account, the plan, the policy.
+            alias = (await asyncio.to_thread(rt.account, account)).alias
+            prepared = await asyncio.to_thread(
+                _legacy_post,
+                rt,
+                rt.offline_bound(alias),
+                text,
+                reply_to_post_id,
+                quote_post_id,
+                media_ids or [],
+            )
+            await asyncio.to_thread(rt.publisher.preflight, prepared, idempotency_key=key)
             return {**validated, "dry_run": True}
         bound = await rt.bound(account)
-        prepared = _legacy_post(rt, bound, text, reply_to_post_id, quote_post_id, media_ids or [])
-        with rt.watch_expiry(bound.alias):
+        prepared = await asyncio.to_thread(
+            _legacy_post, rt, bound, text, reply_to_post_id, quote_post_id, media_ids or []
+        )
+        async with rt.watch_expiry(bound.alias):
             outcome = await rt.publisher.publish(
-                prepared, idempotency_key=key, caller=resolve_caller(caller), tool="create_post"
+                prepared, idempotency_key=key, caller=who, tool="create_post"
             )
         if outcome.error is not None:
             raise outcome.error
@@ -459,44 +330,41 @@ def build_server(runtime: Runtime | None = None) -> MCPServer:
             )
         return _legacy_receipt(outcome, prepared)
 
-    @server.tool(
-        description=(
-            "Upload an image (png/jpeg/gif/webp, <=5 MiB) or MP4 video "
-            "(video/mp4, <=100 MiB) for a later create_post. Pass `path` (a regular file "
-            "inside the operator's configured media roots; relative paths are from the "
-            "server's cwd; refused as invalid_config when no roots are set) or `base64`. "
-            "The type is sniffed from the content; a `mime` or extension that "
-            "disagrees is refused. Video waits for X processing to succeed. Returns {media_id}. "
-            "Upload as the same `account` that will post the media. "
-            "`caller` is an advisory audit label, not identity."
-        ),
-        annotations=PUBLISHES,
-    )
     @_guarded
     async def upload_media(
-        path: str | None = None,
-        base64: str | None = None,
-        mime: str | None = None,
+        path: MediaPath = None,
+        base64: MediaBase64 = None,
+        mime: MediaMime = None,
         caller: Caller = None,
         account: AccountArg = None,
     ) -> dict[str, Any]:
-        data, resolved_mime = load_media(
-            path, base64, mime, roots=rt.settings.media_roots, deny=(rt.paths.home,)
+        who = rt.caller(caller)
+        data, resolved_mime = await asyncio.to_thread(
+            load_media,
+            path,
+            base64,
+            mime,
+            roots=rt.settings.media_roots,
+            deny=(rt.paths.home,),
+            base=rt.publisher.media_base,
         )
         acct, client, me = await rt.writer(account)
         facts = {"mime": resolved_mime, "bytes": len(data)}
         # Uploads are not deduplicated: an orphaned media id is harmless and
         # expires, so every call is its own ledger row.
         key = f"upload:{uuid.uuid4().hex}"
-        rt.ledger.claim(
+        await asyncio.to_thread(
+            rt.ledger.claim,
             key=key,
             tool="upload_media",
+            # A row left submitting by a process that died is re-armed after this.
+            stale_after=STALE_SUBMITTING,
             digest=request_digest("upload_media", **facts, sha256=hashlib.sha256(data).hexdigest()),
             account=me,
-            caller=resolve_caller(caller),
+            caller=who,
             meta=facts,
         )
-        with rt.watch_expiry(acct.alias):
+        async with rt.watch_expiry(acct.alias):
             media_id, processing_state = await _settle_on_error(
                 rt,
                 key,
@@ -509,46 +377,159 @@ def build_server(runtime: Runtime | None = None) -> MCPServer:
                 },
             )
         _record_success(rt, key, media_id=media_id, meta={"processing_state": processing_state})
-        return {"ok": True, "media_id": media_id, "mime": resolved_mime, "bytes": len(data)}
+        return {
+            "ok": True,
+            "account": acct.alias,
+            "media_id": media_id,
+            "mime": resolved_mime,
+            "bytes": len(data),
+        }
 
-    @server.tool(
-        description=(
-            "Delete a post by its numeric X id, as `account` (default: the operator's default "
-            "account); only that account's own posts can be deleted. "
-            "Repeating a delete that already succeeded returns the stored receipt "
-            "(replayed: true). `caller` is an advisory audit label, not identity."
-        ),
-        annotations=DESTRUCTIVE,
-    )
     @_guarded
     async def delete_post(
-        post_id: str,
+        post_id: PostId,
         caller: Caller = None,
         idempotency_key: IdempotencyKey = None,
         account: AccountArg = None,
     ) -> dict[str, Any]:
         post_id = check_x_id(post_id, "post_id")
         key = check_key(idempotency_key) or f"delete:{post_id}"
+        who = rt.caller(caller)
         acct, client, me = await rt.writer(account)
-        record = rt.ledger.claim(
+        record = await asyncio.to_thread(
+            rt.ledger.claim,
             key=key,
             tool="delete_post",
+            # A row left submitting by a process that died is re-armed after this.
+            stale_after=STALE_SUBMITTING,
             digest=request_digest("delete_post", post_id=post_id),
             account=me,
-            caller=resolve_caller(caller),
+            caller=who,
         )
         if record.state == PUBLISHED:
             deleted = record.meta.get("deleted", True)
-            return {"ok": True, "post_id": post_id, "deleted": deleted, "replayed": True}
+            return {
+                "ok": True,
+                "account": acct.alias,
+                "post_id": post_id,
+                "deleted": deleted,
+                "replayed": True,
+            }
         # DELETE is idempotent at X, so transport failures stay retryable.
-        with rt.watch_expiry(acct.alias):
+        async with rt.watch_expiry(acct.alias):
             deleted = await _settle_on_error(
                 rt, key, lambda: client.delete_post(post_id), ambiguous=False
             )
         _record_success(rt, key, post_id=post_id, meta={"deleted": deleted})
-        return {"ok": True, "post_id": post_id, "deleted": deleted}
+        return {
+            "ok": True,
+            "account": acct.alias,
+            "post_id": post_id,
+            "deleted": deleted,
+            "replayed": False,
+        }
 
-    return server
+    tools = [
+        Tool.from_function(
+            whoami,
+            description=(
+                "Return the X account behind `account` (default: the operator's default "
+                "account): {user_id, username}. Local after the first call."
+            ),
+            annotations=READ_ONLY,
+        ),
+        Tool.from_function(
+            validate_post,
+            description=(
+                "Validate post text without publishing: weighted length (<=280), URL "
+                "detection, credential scan, reply/quote conflict, and an "
+                "estimated_cost_usd. Never touches the network. Safe to call freely; use it "
+                "before create_post."
+            ),
+            annotations=READ_ONLY,
+        ),
+        Tool.from_function(
+            validate_plan,
+            description=(
+                "Validate a plan without publishing: {account|accounts, text | posts[{text, "
+                "media[{path, alt}]}], reply_to|quote, variants{provider: {posts}}, "
+                "not_before}. Checks each post against the account's provider (length, media "
+                "type, size and count, alt text, credential scan), loads media under the "
+                "operator's media roots, and returns per account the digest and "
+                "estimated_cost_usd. Never touches the network. `account` picks one of the "
+                "plan's accounts, or binds a plan that names none (default: the operator's "
+                "default account)."
+            ),
+            annotations=READ_ONLY,
+        ),
+        Tool.from_function(
+            create_post,
+            description=(
+                "Create a post on X as `account` (default: the operator's default account); "
+                "refused with account_mismatch if its credentials belong to another handle. "
+                "Requires explicit user intent in the calling chat or an owner-enabled "
+                "routine. Text is validated (<=280 weighted chars, no credential-looking "
+                "strings) before any network call. Idempotent per idempotency_key: a repeat "
+                "returns the stored receipt with replayed=true and does not post. On "
+                "outcome_unknown the post may be live: do not retry. dry_run=true is the "
+                "legacy validate-only path (same offline checks, nothing sent); prefer "
+                "validate_post, which a policy layer can gate separately. The operator's "
+                "policy applies: budget_exceeded, daily_cap or quiet_hours come back before "
+                "anything is sent, with detail.retry_after. `caller` is an advisory audit "
+                "label, not identity."
+            ),
+            annotations=PUBLISHES,
+        ),
+        Tool.from_function(
+            upload_media,
+            description=(
+                f"Upload an image (png/jpeg/gif/webp, <={_mib(MAX_IMAGE_BYTES)} MiB) or MP4 "
+                f"video (video/mp4, <={_mib(MAX_VIDEO_BYTES)} MiB) for a later create_post. "
+                "Pass `path` (a regular file inside the operator's configured media roots; "
+                "relative paths are from the server's cwd; refused as invalid_config when no "
+                "roots are set) or `base64`. The type is sniffed from the content; a `mime` or "
+                "extension that disagrees is refused. Video waits for X processing to "
+                "succeed. Returns {media_id}. Upload as the same `account` that will post the "
+                "media. `caller` is an advisory audit label, not identity."
+            ),
+            annotations=PUBLISHES,
+        ),
+        Tool.from_function(
+            delete_post,
+            description=(
+                "Delete a post by its numeric X id, as `account` (default: the operator's "
+                "default account); only that account's own posts can be deleted. Repeating a "
+                "delete that already succeeded returns the stored receipt (replayed: true). "
+                "`caller` is an advisory audit label, not identity."
+            ),
+            annotations=DESTRUCTIVE,
+        ),
+    ]
+    return MCPServer(
+        name="pulsar",
+        version=__version__,
+        instructions=INSTRUCTIONS,
+        tools=[_strict(t) for t in tools],
+    )
+
+
+def _mib(limit: int) -> int:
+    return limit // (1024 * 1024)
+
+
+def loopback_security(host: str, port: int) -> TransportSecuritySettings:
+    """Host and Origin checks for the loopback HTTP transport (STD-05 §R16, §R17).
+
+    Only the exact authority the server is bound to, and an ``http`` Origin
+    naming that same authority, are accepted; the SDK's own default allows
+    any port.
+    """
+    authorities = [f"{name}:{port}" for name in LOOPBACK_NAMES[host]]
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=authorities,
+        allowed_origins=[f"http://{a}" for a in authorities],
+    )
 
 
 def _legacy_post(
@@ -586,7 +567,7 @@ def _legacy_post(
 
 
 def _legacy_receipt(outcome: Outcome, prepared: Prepared) -> dict[str, Any]:
-    """The phase 1 receipt shape, unchanged for existing callers."""
+    """The phase 1 receipt shape, plus ``replayed`` (always present, STD-01 §R11)."""
     live = outcome.live.get(0)
     item = outcome.record.items[0]
     out: dict[str, Any] = {
@@ -594,9 +575,8 @@ def _legacy_receipt(outcome: Outcome, prepared: Prepared) -> dict[str, Any]:
         "post_id": live.post_id if live else item.post_id,
         "url": live.url if live else item.url,
         "text": live.text if live else prepared.posts[0].check.text,
+        "replayed": outcome.replayed,
     }
-    if outcome.replayed:
-        out["replayed"] = True
     return out
 
 
@@ -619,7 +599,7 @@ async def _settle_on_error[T](
     try:
         return await call()
     except PulsarError as exc:
-        rt.ledger.fail(key, exc, meta=error_meta(exc) if error_meta else None)
+        _settle_failure(rt, key, exc, error_meta)
         if isinstance(exc, OutcomeUnknown):
             exc.detail = {**(exc.detail or {}), "idempotency_key": key}
         raise
@@ -632,10 +612,25 @@ async def _settle_on_error[T](
             if ambiguous
             else PulsarError(API_ERROR, f"unexpected {name}", retryable=True)
         )
-        rt.ledger.fail(key, err, meta=error_meta(err) if error_meta else None)
+        _settle_failure(rt, key, err, error_meta)
         if isinstance(exc, Exception):
             raise err from exc
         raise
+
+
+def _settle_failure(
+    rt: Runtime,
+    key: str,
+    err: PulsarError,
+    error_meta: Callable[[PulsarError], dict[str, Any]] | None,
+) -> None:
+    """Record a failed or unknown outcome. Runs inside an ``except``: a ledger
+    failure here is logged, never raised over the error (or cancellation) the
+    caller must see (STD-03 §R4); the row stays ``submitting`` for reconcile."""
+    try:
+        rt.ledger.fail(key, err, meta=error_meta(err) if error_meta else None)
+    except Exception:
+        log.exception("ledger: could not record %s as %s; row stays submitting", key, err.code)
 
 
 def _record_success(rt: Runtime, key: str, **fields: Any) -> None:

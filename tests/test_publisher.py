@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import sqlite3
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, time, timedelta
 
@@ -19,7 +20,7 @@ from pulsar.core.adapter import (
     RecentPosts,
     RemotePost,
 )
-from pulsar.core.errors import OutcomeUnknown, PulsarError
+from pulsar.core.errors import AuthExpired, OutcomeUnknown, PulsarError
 from pulsar.core.ledger import ItemIntent, Ledger
 from pulsar.core.plan import Plan, PostSpec
 from pulsar.core.publisher import RECONCILE_GRACE, STALE_SUBMITTING, Bound, Publisher
@@ -380,17 +381,22 @@ class GatedChannel(FakeChannel):
     def __init__(self, *, clock, hold=(), gate_uploads=False):
         super().__init__(clock=clock)
         self.release = asyncio.Event()
+        self.waiting = asyncio.Event()  # set once a call is parked on ``release``
         self.hold = set(hold)
         self.gate_uploads = gate_uploads
 
+    async def _park(self):
+        self.waiting.set()
+        await self.release.wait()
+
     async def upload(self, media):
         if self.gate_uploads:
-            await self.release.wait()
+            await self._park()
         return await super().upload(media)
 
     async def create(self, text, **kw):
         if text in self.hold:
-            await self.release.wait()
+            await self._park()
         return await super().create(text, **kw)
 
 
@@ -404,7 +410,7 @@ async def test_a_thread_in_progress_reserves_its_unsent_posts(paths, clock, medi
     channel = GatedChannel(clock=clock, hold={"a1"})
     bound = bound_to(channel)
     a = asyncio.create_task(pub.publish(pub.prepare(thread("a1", "a2"), bound), caller="A"))
-    await asyncio.sleep(0.05)  # A claimed: a1 submitting, a2 pending
+    await channel.waiting.wait()  # A claimed: a1 submitting, a2 pending
     with pytest.raises(PulsarError) as exc:
         await pub.publish(pub.prepare(thread("b1"), bound), caller="B")
     assert exc.value.code == "budget_exceeded"
@@ -490,7 +496,7 @@ async def test_reconcile_during_a_slow_upload_cannot_double_post(paths, clock, m
     first = asyncio.create_task(
         pub.publish(pub.prepare(plan, bound_to(slow)), caller="A", idempotency_key="k")
     )
-    await asyncio.sleep(0.05)  # item 0 submitting, its upload still running
+    await slow.waiting.wait()  # item 0 submitting, its upload still running
     clock[0] = NOW + STALE_SUBMITTING + timedelta(minutes=1)
     [report] = await pub.reconcile(bound_to(slow))
     assert report["items"][0]["resolved"] == "absent"  # true: nothing was posted yet
@@ -519,3 +525,114 @@ async def test_core_scans_post_text_whatever_the_channel_does(publisher, bound):
         await publisher.publish(prepared, caller=token)
     assert exc.value.code == "secret_detected"
     assert publisher.ledger.history() == []
+
+
+# -- preflight (dry runs) and reconcile isolation -------------------------------------
+
+
+async def test_preflight_refuses_what_publish_would_and_writes_nothing(paths, clock, media_root):
+    pub = make_publisher(paths, clock, media_root, daily_budget_usd=0.01)
+    channel = FakeChannel(clock=clock)
+    bound = bound_to(channel)
+    pub.preflight(pub.prepare(thread("one"), bound))  # admitted: nothing raised
+    await pub.publish(pub.prepare(thread("one"), bound), caller="t")
+    rows = pub.ledger.history()
+    with pytest.raises(PulsarError) as exc:
+        pub.preflight(pub.prepare(thread("two"), bound))
+    assert exc.value.code == "budget_exceeded"
+    assert pub.ledger.history() == rows and len(channel.creates) == 1
+    # A replay of what was already published costs nothing, so it is admitted.
+    pub.preflight(pub.prepare(thread("one"), bound))
+
+
+async def test_preflight_refuses_a_plan_that_is_not_due(publisher, bound):
+    later = (NOW + timedelta(hours=1)).isoformat()
+    with pytest.raises(PulsarError) as exc:
+        publisher.preflight(publisher.prepare(thread("soon", not_before=later), bound))
+    assert exc.value.code == "not_due"
+
+
+class FlakyTimeline(FakeChannel):
+    """A timeline read that is rate limited once, then works."""
+
+    reads: int = 0
+
+    async def recent_posts(self, since: datetime) -> RecentPosts:
+        self.reads += 1
+        if self.reads == 1:
+            raise PulsarError("rate_limited", "slow down", retryable=True)
+        return await super().recent_posts(since)
+
+
+async def test_reconcile_reports_a_failing_row_and_settles_the_rest(paths, clock, media_root):
+    pub = make_publisher(paths, clock, media_root)
+    channel = FlakyTimeline(clock=clock, fail_on={0: "unknown-lost", 1: "unknown-lost"})
+    bound = bound_to(channel)
+    for key, text in (("k1", "first"), ("k2", "second")):
+        out = await pub.publish(pub.prepare(thread(text), bound), caller="t", idempotency_key=key)
+        assert out.record.state == "unknown"
+    clock[0] = NOW + RECONCILE_GRACE + timedelta(minutes=1)
+    results = await pub.reconcile(bound)
+    assert [set(r) for r in results] == [set(results[0])] * 2, "one shape per result"
+    failed, settled = results
+    assert failed["error"]["code"] == "rate_limited" and failed["state"] == "unknown"
+    assert pub.ledger.get_plan(failed["idempotency_key"]).state == "unknown", "left as it was"
+    assert settled["error"] is None and settled["state"] == "failed"
+
+
+class ExpiredTimeline(FakeChannel):
+    """A timeline read whose credentials are gone."""
+
+    reads: int = 0
+
+    async def recent_posts(self, since: datetime) -> RecentPosts:
+        self.reads += 1
+        raise AuthExpired("refresh token rejected")
+
+
+class BrokenTimeline(FakeChannel):
+    """A timeline read that hits a bug (not a provider failure)."""
+
+    async def recent_posts(self, since: datetime) -> RecentPosts:
+        raise ValueError("bad timestamp")
+
+
+async def test_reconcile_stops_at_auth_expired_instead_of_reporting_each_row(
+    paths, clock, media_root
+):
+    pub = make_publisher(paths, clock, media_root)
+    channel = ExpiredTimeline(clock=clock, fail_on={0: "unknown-lost", 1: "unknown-lost"})
+    bound = bound_to(channel)
+    for key, text in (("k1", "first"), ("k2", "second")):
+        await pub.publish(pub.prepare(thread(text), bound), caller="t", idempotency_key=key)
+    with pytest.raises(AuthExpired):
+        await pub.reconcile(bound)
+    assert channel.reads == 1, "no call per remaining row"
+
+
+async def test_a_bug_in_reconcile_is_internal_not_a_provider_error(paths, clock, media_root):
+    pub = make_publisher(paths, clock, media_root)
+    channel = BrokenTimeline(clock=clock, fail_on={0: "unknown-lost"})
+    bound = bound_to(channel)
+    await pub.publish(pub.prepare(thread("one"), bound), caller="t", idempotency_key="k1")
+    (result,) = await pub.reconcile(bound)
+    assert result["error"]["code"] == "internal" and result["error"]["retryable"] is False
+
+
+class FailingLedger(Ledger):
+    """A ledger whose settle writes fail, as under a held lock or a full disk."""
+
+    def item_unknown(self, *args, **kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    def item_failed(self, *args, **kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+
+async def test_a_failing_settle_write_never_replaces_the_send_error(paths, clock, media_root):
+    pub = make_publisher(paths, clock, media_root)
+    pub.ledger = FailingLedger(paths)
+    channel = FakeChannel(clock=clock, fail_on={0: "unknown-lost"})
+    out = await pub.publish(pub.prepare(thread("one"), bound_to(channel)), caller="t",
+                            idempotency_key="k1")  # fmt: skip
+    assert out.error is not None and out.error.code == "outcome_unknown"

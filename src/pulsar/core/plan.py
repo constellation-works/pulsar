@@ -75,7 +75,7 @@ def normalize_alias(value: str) -> str:
     provider, sep, handle = value.strip().partition(":")
     handle = handle.strip().removeprefix("@")
     if not sep or not provider.strip() or not handle:
-        raise _invalid(f"account {value!r} must be provider:handle, e.g. x:constworks", "account")
+        raise _invalid(f"account {value!r} must be provider:handle, e.g. x:<handle>", "account")
     return f"{provider.strip().lower()}:{handle.lower()}"
 
 

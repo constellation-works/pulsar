@@ -1,0 +1,13 @@
+usage: pulsar serve [-h] [--json] [--transport {stdio,http}] [--host {127.0.0.1,localhost,::1}]
+                    [--port PORT]
+
+run the MCP server
+
+options:
+  -h, --help            show this help message and exit
+  --json                machine output (the default and only mode: every command prints JSON)
+  --transport {stdio,http}
+                        stdio, or streamable HTTP on a loopback port; default: stdio
+  --host {127.0.0.1,localhost,::1}
+                        loopback address for --transport http; default: 127.0.0.1
+  --port PORT           port for --transport http; default: 8977

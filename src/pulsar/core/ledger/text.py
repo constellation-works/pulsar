@@ -13,6 +13,7 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import Any, cast
 
+from ..guard import redact
 from ..jsonx import as_object
 
 # ``table.column`` for every column written through ``persisted_text``.
@@ -31,13 +32,17 @@ def persisted_text(value: str | None) -> str | None:
     Callers look this up on the module at call time (``text.persisted_text``)
     so the one hook covers every writer.
     """
-    # TODO(redact): return pulsar.core.guard.redact(value) once guard grows it.
-    return value
+    return None if value is None else redact(value)
 
 
 def persisted_meta(meta: Mapping[str, Any]) -> str:
     """``meta_json`` for ``meta``, every string in it through ``persisted_text``."""
     return json.dumps(_redact_strings(dict(meta)), sort_keys=True)
+
+
+def redact_strings(value: object) -> object:
+    """``value`` with every string in it, at any depth, through ``persisted_text``."""
+    return _redact_strings(value)
 
 
 def _redact_strings(value: object) -> object:

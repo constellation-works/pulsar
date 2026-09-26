@@ -1,0 +1,10 @@
+usage: pulsar migrate [-h] [--json] [--confirm]
+
+upgrade the home in place: the ledger schema, then phase 1 credentials; reports only without --confirm
+
+options:
+  -h, --help  show this help message and exit
+  --json      machine output (the default and only mode: every command prints JSON)
+  --confirm   actually upgrade the home
+
+An upgraded ledger is refused by older pulsar versions; moved credentials stay moved.

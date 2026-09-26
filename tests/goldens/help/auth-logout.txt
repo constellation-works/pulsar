@@ -1,0 +1,10 @@
+usage: pulsar auth logout [-h] [--json] [--account ACCOUNT] [--confirm]
+
+delete an account's tokens (the account is kept as revoked); needs --confirm
+
+options:
+  -h, --help         show this help message and exit
+  --json             machine output (the default and only mode: every command prints JSON)
+  --account ACCOUNT  the account to log out; default: default_account in config.toml, else the
+                     only bound account
+  --confirm          actually delete the tokens

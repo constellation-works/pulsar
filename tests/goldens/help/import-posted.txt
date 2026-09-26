@@ -1,0 +1,13 @@
+usage: pulsar import-posted [-h] [--json] [--account ACCOUNT] [--confirm] source
+
+import a retired routine's posted.jsonl into the ledger (idempotent); reports only without --confirm
+
+positional arguments:
+  source             path to posted.jsonl
+
+options:
+  -h, --help         show this help message and exit
+  --json             machine output (the default and only mode: every command prints JSON)
+  --account ACCOUNT  the account those posts were made as; default: default_account in
+                     config.toml, else the only bound account
+  --confirm          actually write the rows
