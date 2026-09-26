@@ -1,15 +1,20 @@
-usage: pulsar auth [-h] [--json] VERB ...
+usage: pulsar auth [OPTIONS] COMMAND ...
 
-manage the account authorizations on this host
+bind, check and log out the accounts on this host
 
-positional arguments:
-  VERB
-    login     bind an account: OAuth 2.0 PKCE in a browser, then verify the handle with X
-    status    each bound account and its health, from local state (no network)
-    logout    delete an account's tokens (the account is kept as revoked); needs --confirm
-    migrate   move single-account (phase 1) credentials into the account layout; reports only
-              without --confirm
+Commands:
+  login          bind an account: OAuth 2.0 PKCE in a browser, then verify the handle with X
+  status         each bound account and its health, from local state (no network)
+  logout         delete an account's tokens (the account is kept as revoked); needs --confirm
+  migrate        move single-account (phase 1) credentials into the account layout; reports only
+                 without --confirm
 
-options:
-  -h, --help  show this help message and exit
-  --json      machine output (the default and only mode: every command prints JSON)
+Options:
+  -h, --help     show this help message and exit
+  --format MODE  output: auto (a table on a terminal, tab-separated lines when piped), table or
+                 json; default: $PULSAR_FORMAT, else auto
+  --json         shorthand for --format json
+
+Examples:
+  pulsar auth login --account x:<handle> --no-browser
+  pulsar auth status --live

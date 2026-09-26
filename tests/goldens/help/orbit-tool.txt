@@ -1,7 +1,9 @@
-usage: pulsar orbit-tool [-h] [--json]
+usage: pulsar orbit-tool [-h] [--format MODE] [--json]
 
 answer one Orbit plugin request (envelope on stdin, response on stdout)
 
 options:
-  -h, --help  show this help message and exit
-  --json      machine output (the default and only mode: every command prints JSON)
+  -h, --help     show this help message and exit
+  --format MODE  output: auto (a table on a terminal, tab-separated lines when piped), table or
+                 json; default: $PULSAR_FORMAT, else auto
+  --json         shorthand for --format json

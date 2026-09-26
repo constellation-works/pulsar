@@ -1,10 +1,12 @@
-usage: pulsar auth migrate [-h] [--json] [--account ACCOUNT] [--confirm]
+usage: pulsar auth migrate [-h] [--format MODE] [--json] [--account ACCOUNT] [--confirm]
 
 move single-account (phase 1) credentials into the account layout; reports only without --confirm
 
 options:
   -h, --help         show this help message and exit
-  --json             machine output (the default and only mode: every command prints JSON)
+  --format MODE      output: auto (a table on a terminal, tab-separated lines when piped), table
+                     or json; default: $PULSAR_FORMAT, else auto
+  --json             shorthand for --format json
   --account ACCOUNT  the alias they belong to, x:<handle>; default: default_account, else the
                      handle whoami.json recorded
   --confirm          actually move them

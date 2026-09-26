@@ -37,8 +37,9 @@ def _verified(paths, bundle, alias=ALIAS, handle="constworks", user_id="12345678
     return register(paths, bundle, alias, handle=handle, provider_user_id=user_id, **row)
 
 
-def _run(capsys, argv, **kwargs):
-    code = main(argv, **kwargs)
+def _run(capsys, argv, *, json_mode=True, **kwargs):
+    """Run ``pulsar``; the contract tests read its JSON mode unless told otherwise."""
+    code = main(["--json", *argv] if json_mode else argv, **kwargs)
     captured = capsys.readouterr()
     return code, captured.out, captured.err
 
@@ -72,7 +73,7 @@ def test_a_failed_command_writes_json_to_stderr_and_nothing_to_stdout(paths, bun
 )
 def test_a_parse_error_is_the_same_json_error_and_exits_2(capsys, argv, says):
     with pytest.raises(SystemExit) as exc:
-        main(argv)
+        main([*argv, "--json"])
     assert exc.value.code == 2
     captured = capsys.readouterr()
     assert captured.out == ""
@@ -107,7 +108,7 @@ def test_a_closed_stdout_exits_0(paths, authed, monkeypatch):
     stream = os.fdopen(write_end, "w")
     monkeypatch.setattr(sys, "stdout", stream)
     try:
-        assert main(["status"]) == 0
+        assert main(["status", "--json"]) == 0
     finally:
         os.dup2(saved, 1)
         os.close(saved)
@@ -122,6 +123,83 @@ def test_an_empty_result_says_so_on_stderr(paths, capsys):
     code, out, err = _run(capsys, ["history"])
     assert code == 0 and json.loads(out) == {"writes": [], "total": 0, "truncated": False}
     assert "no ledger rows" in err
+
+
+# -- human output (STD-01 §R7-§R9, §R16, §R19) --------------------------------------
+
+
+@pytest.mark.parametrize(("argv", "section"), [([], "Publish:"), (["auth"], "Commands:")])
+def test_a_command_level_alone_prints_its_help_and_exits_2(capsys, argv, section):
+    code = main(argv)
+    captured = capsys.readouterr()
+    assert code == 2 and captured.out == ""
+    assert captured.err.startswith("usage: pulsar") and section in captured.err
+    assert "{" not in captured.err.splitlines()[0]
+
+
+def test_the_version_has_a_short_flag(capsys):
+    with pytest.raises(SystemExit) as exc:
+        main(["-V"])
+    assert exc.value.code == 0 and capsys.readouterr().out.startswith("pulsar ")
+
+
+def test_a_failure_is_a_plain_error_line_outside_json(paths, bundle, capsys):
+    _verified(paths, bundle)
+    code, out, err = _run(capsys, ["auth", "status", "--account", "x:nobody"], json_mode=False)
+    assert code == 1 and out == ""
+    assert err.startswith("error: no account x:nobody") and err.count("\n") == 1
+
+
+def test_a_parse_error_outside_json_names_the_input_and_the_help(capsys):
+    with pytest.raises(SystemExit) as exc:
+        main(["history", "--limit", "0"])
+    assert exc.value.code == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    first, _, rest = captured.err.partition("\n")
+    assert first.startswith("error: argument --limit: must be 1..100")
+    assert "usage: pulsar history" in rest and "try 'pulsar history --help'" in rest
+
+
+def test_json_and_a_different_format_is_a_usage_error(paths, capsys):
+    code, out, err = _run(capsys, ["status", "--format", "table"])
+    assert code == 2 and out == ""
+    assert "--json conflicts with --format table" in _error(err)["error"]
+
+
+def test_piped_output_is_one_tab_separated_line_per_record(paths, authed, capsys):
+    code, out, _ = _run(capsys, ["status"], json_mode=False)
+    assert code == 0
+    [line] = out.splitlines()
+    assert line.split("\t")[0] == ALIAS and "\x1b" not in out
+
+
+def test_the_table_has_a_header_and_one_line_per_record(paths, authed, capsys):
+    code, out, _ = _run(capsys, ["status", "--format", "table"], json_mode=False)
+    assert code == 0
+    header, row = out.splitlines()
+    assert header.split()[:3] == ["ACCOUNT", "POSTS", "CAP"] and row.startswith(ALIAS)
+
+
+def test_the_environment_picks_json_and_a_flag_overrides_it(paths, authed, capsys, monkeypatch):
+    monkeypatch.setenv("PULSAR_FORMAT", "json")
+    code, out, _ = _run(capsys, ["status"], json_mode=False)
+    assert code == 0 and json.loads(out)["accounts"][0]["alias"] == ALIAS
+    code, out, _ = _run(capsys, ["status", "--format", "table"], json_mode=False)
+    assert code == 0 and out.startswith("ACCOUNT")
+
+
+def test_a_human_view_shows_every_post_and_says_the_note_on_stderr(paths, bundle, tmp_path, capsys):
+    _verified(paths, bundle)
+    code, out, err = _run(capsys, ["publish", _plan(tmp_path)], json_mode=False)
+    assert code == 0
+    assert "Orbit v0.26 is out" in out and "Notes: https://example.com/notes" in out
+    assert "re-run with --confirm to publish" in err and "re-run" not in out
+
+
+def test_an_empty_list_prints_nothing_on_stdout_outside_json(paths, capsys):
+    code, out, err = _run(capsys, ["history"], json_mode=False)
+    assert code == 0 and out == "" and "no ledger rows" in err
 
 
 # -- auth ----------------------------------------------------------------------------
@@ -352,10 +430,11 @@ def test_import_posted_needs_confirm_to_write(paths, authed, fake_x, capsys):
     assert Ledger(paths).history() != []
 
 
-def test_serve_binds_only_loopback():
+def test_serve_binds_only_loopback(capsys):
     with pytest.raises(SystemExit) as exc:
-        build_parser().parse_args(["serve", "--transport", "http", "--host", "0.0.0.0"])
+        main(["serve", "--transport", "http", "--host", "0.0.0.0"])
     assert exc.value.code == 2
+    assert "invalid choice: '0.0.0.0'" in capsys.readouterr().err
 
 
 # -- help (STD-01 §R24) -------------------------------------------------------------

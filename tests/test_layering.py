@@ -54,8 +54,10 @@ def test_layer_imports_stay_inside_their_boundary(layer):
 # dispatcher, so nothing imports it.
 SURFACE_RANK = {
     "runtime": 0,
+    "output": 0,
     "health": 1,
     "ops": 1,
+    "views": 1,
     "mcp": 2,
     "orbit_tool": 2,
     "cli": 3,

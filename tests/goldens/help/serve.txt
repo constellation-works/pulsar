@@ -1,11 +1,13 @@
-usage: pulsar serve [-h] [--json] [--transport {stdio,http}] [--host {127.0.0.1,localhost,::1}]
-                    [--port PORT]
+usage: pulsar serve [-h] [--format MODE] [--json] [--transport {stdio,http}]
+                    [--host {127.0.0.1,localhost,::1}] [--port PORT]
 
 run the MCP server
 
 options:
   -h, --help            show this help message and exit
-  --json                machine output (the default and only mode: every command prints JSON)
+  --format MODE         output: auto (a table on a terminal, tab-separated lines when piped),
+                        table or json; default: $PULSAR_FORMAT, else auto
+  --json                shorthand for --format json
   --transport {stdio,http}
                         stdio, or streamable HTTP on a loopback port; default: stdio
   --host {127.0.0.1,localhost,::1}

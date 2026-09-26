@@ -75,14 +75,35 @@ authenticates it.
 [cli.py](../../../src/pulsar/surfaces/cli.py), verbs in [ops.py](../../../src/pulsar/surfaces/ops.py),
 health in [health.py](../../../src/pulsar/surfaces/health.py).
 
-- **Output.** One JSON document on stdout; `--json` is accepted anywhere and changes nothing
-  (the CLI is JSON-only, a recorded deviation). Notices (an empty result, a deprecated flag)
-  are prose lines on stderr.
-- **Errors.** One JSON object on stderr, `{error, code, retryable, detail}`, with nothing on
-  stdout; argparse's own errors take the same shape (`invalid_argument`, `detail.usage`).
-  Exit 0 success, 1 the command failed or reported something not healthy or not settled, 2 a
-  usage error. An unexpected exception is `internal`. A closed stdout
-  (`pulsar history | head -1`) exits 0.
+- **Help.** `pulsar` or `pulsar auth` alone prints that level's help on stderr and exits 2.
+  The root help lists the commands in groups (Accounts, Publish, Observe, Maintenance,
+  Services), built from each command's own declaration. `-V` prints the version.
+- **Output.** Each command builds one payload. [output.py](../../../src/pulsar/surfaces/output.py)
+  resolves the mode once: `--format auto|table|json` or `--json`, accepted before or after
+  the command; else `PULSAR_FORMAT`; else `auto`. An unknown `PULSAR_FORMAT` counts as
+  `auto`, and `--json` with another `--format` is a usage error.
+  - `auto` means `table` on a terminal and the piped form otherwise.
+  - `table` renders the command's view ([views.py](../../../src/pulsar/surfaces/views.py)):
+    borderless tables with one line per record, `-` for absent values and right-aligned
+    numbers, plus key-value fields for single results.
+    - Values are cut with `…` only to fit a known width (`COLUMNS`, else the terminal's).
+    - Color only on a terminal, never with `NO_COLOR` or `TERM=dumb` (`CLICOLOR_FORCE`
+      overrides the latter). It marks states and never carries meaning alone.
+  - The piped form prints tables as tab-separated lines with no header and fields as
+    `label: value` lines, with no escapes and no truncation.
+  - `json` prints the payload as one document; these documents are the machine contract
+    (goldens in `tests/goldens/cli`).
+  - Notices go to stderr in every mode: an empty result, a deprecated flag, the payload's
+    `note`, an account's remedy.
+- **Errors.** Nothing on stdout.
+  - On stderr, `error: <message>`; in JSON mode, one object `{error, code, retryable,
+    detail}` instead.
+  - A usage error adds the usage line and a `--help` pointer. It is JSON (`invalid_argument`,
+    `detail.usage`) when the arguments or `PULSAR_FORMAT` ask for JSON.
+  - Exit codes: 0 success; 1 when the command failed or reported something not healthy or
+    not settled; 2 for a usage error.
+  - An unexpected exception is `internal`. A closed stdout (`pulsar history | head -1`)
+    exits 0.
 - **Effects.** The reports (`status`, `history`, `validate`, `auth status`) read the home
   without writing, creating or migrating anything. A write command upgrades the ledger schema
   and moves phase 1 credentials on first use; `pulsar migrate --confirm` does it on purpose.

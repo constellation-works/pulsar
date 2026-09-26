@@ -46,7 +46,9 @@ uv run pulsar serve                       # MCP server (stdio)
 uv run pulsar migrate --confirm           # after an upgrade: bring the home up to date
 ```
 
-Output is JSON on stdout; errors are JSON on stderr (exit 1, or 2 for a usage error).
+Output is a table on a terminal and tab-separated lines when piped; add `--json` (or set
+`PULSAR_FORMAT=json`) for one JSON document. Errors go to stderr (exit 1, or 2 for a usage
+error). `pulsar` alone lists the commands.
 
 A plan:
 

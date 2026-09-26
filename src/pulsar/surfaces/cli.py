@@ -1,12 +1,16 @@
 """``pulsar`` command line: human auth management, operator verbs (``ops.py``)
 and the MCP server.
 
-Output contract (STD-01): every command writes one JSON document to stdout
-on success, and on failure one JSON object ``{error, code, retryable,
-detail}`` to stderr with nothing on stdout. Exit codes: 0 success, 1 the
+Output contract (STD-01): every command builds one payload and prints it on
+stdout in the mode ``output.resolve_mode`` picks: a table or key-value view
+on a terminal, tab-separated lines when piped, or the payload as one JSON
+document (``--json``, ``--format json``, ``PULSAR_FORMAT=json``). A failure
+prints nothing on stdout and ``error: <message>`` on stderr, or in JSON mode
+one object ``{error, code, retryable, detail}``. Exit codes: 0 success, 1 the
 command failed (or reported something not settled or not healthy), 2 a
-usage error. Notices (empty results, deprecations) go to stderr. A closed
-stdout ends the process quietly with 0.
+usage error. Notices (empty results, deprecations, notes) go to stderr. A
+closed stdout ends the process quietly with 0. ``pulsar`` or ``pulsar auth``
+alone prints that level's help on stderr and exits 2.
 """
 
 from __future__ import annotations
@@ -29,8 +33,20 @@ from ..core.errors import INTERNAL, INVALID_ARGUMENT, PulsarError
 from ..core.paths import Paths
 from ..core.settings import Settings, load_settings
 from ..providers.x.auth import load_client_id, login
-from . import ops
-from .health import auth_report
+from . import ops, views
+from .health import attention, auth_report
+from .output import (
+    FORMAT_ENV,
+    FORMATS,
+    Mode,
+    ModeConflict,
+    Terminal,
+    View,
+    json_requested,
+    render,
+    resolve_mode,
+    resolve_terminal,
+)
 from .runtime import configure_logging, default_paths
 
 log = logging.getLogger(__name__)
@@ -49,37 +65,79 @@ class UsageError(PulsarError):
         super().__init__(INVALID_ARGUMENT, message, detail=detail, retryable=False)
 
 
-class JsonArgumentParser(argparse.ArgumentParser):
-    """argparse whose usage errors are the same JSON object as every other
-    error (STD-01 §R19): ``{error, code, retryable, detail}`` on stderr, exit 2.
+class _ParseError(Exception):
+    """A usage error argparse found; ``main`` prints it in the requested mode."""
+
+    def __init__(self, message: str, usage: str, prog: str) -> None:
+        super().__init__(message)
+        self.message, self.usage, self.prog = message, usage, prog
+
+
+class CommandParser(argparse.ArgumentParser):
+    """argparse that leaves printing a usage error to ``main`` (STD-01 §R19),
+    and lists its subcommands in titled groups the way ``orbit`` does. The
+    group listing is built from each subcommand's own declaration (§R25).
     Subparsers inherit the class."""
 
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.command_groups: dict[str, list[str]] = {}
+
     def error(self, message: str) -> NoReturn:
-        body = {
-            "error": f"{self.prog}: {message}",
-            "code": INVALID_ARGUMENT,
-            "retryable": False,
-            "detail": {"usage": self.format_usage().strip()},
-        }
-        sys.stderr.write(json.dumps(body, ensure_ascii=False) + "\n")
-        sys.stderr.flush()
-        raise SystemExit(EXIT_USAGE)
+        raise _ParseError(message, self.format_usage().strip(), self.prog)
+
+    def format_help(self) -> str:
+        if not self.command_groups:
+            return super().format_help()
+        listed: dict[str, argparse.Action] = {}
+        for action in self._actions:
+            if isinstance(action, argparse._SubParsersAction):  # pyright: ignore[reportPrivateUsage]
+                pseudo = action._get_subactions()  # pyright: ignore[reportPrivateUsage]
+                listed = {str(a.metavar): a for a in pseudo}
+        fmt = self._get_formatter()
+        fmt.add_usage(self.usage, self._actions, self._mutually_exclusive_groups)
+        fmt.add_text(self.description)
+        for title, names in self.command_groups.items():
+            fmt.start_section(title)
+            fmt.add_arguments([listed[name] for name in names])
+            fmt.end_section()
+        fmt.start_section("Options")
+        fmt.add_arguments([a for a in self._actions if a.option_strings])
+        fmt.end_section()
+        fmt.add_text(self.epilog)
+        return fmt.format_help()
 
 
 class Context:
     """What a command needs besides its arguments: the home, resolved once per
-    invocation, and the transport (tests pass a fake one)."""
+    invocation, the output mode and terminal, and the transport (tests pass a
+    fake one)."""
 
-    def __init__(self, paths: Paths, transport: httpx.AsyncBaseTransport | None) -> None:
+    def __init__(
+        self,
+        paths: Paths,
+        transport: httpx.AsyncBaseTransport | None,
+        mode: Mode = "json",
+        term: Terminal | None = None,
+    ) -> None:
         self.paths = paths
         self.transport = transport
+        self.mode: Mode = mode
+        self.term = term or Terminal()
 
 
 # -- output ---------------------------------------------------------------------------
 
 
-def _out(payload: dict[str, Any]) -> None:
-    sys.stdout.write(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+def _out(payload: dict[str, Any], ctx: Context, view: View) -> None:
+    if ctx.mode == "json":
+        text = json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
+    else:
+        note = payload.get(views.NOTE)
+        if isinstance(note, str) and note:
+            _notice(note)
+        text = render(view(payload), ctx.mode, ctx.term)
+    sys.stdout.write(text)
     sys.stdout.flush()
 
 
@@ -87,20 +145,40 @@ def _notice(message: str) -> None:
     print(f"pulsar: {message}", file=sys.stderr)
 
 
-def _error(exc: PulsarError) -> None:
-    body: dict[str, Any] = {
-        "error": exc.message,
-        "code": exc.code,
-        "retryable": exc.retryable,
-        "detail": exc.detail,
-    }
-    sys.stderr.write(json.dumps(body, ensure_ascii=False) + "\n")
+def _error(exc: PulsarError, json_mode: bool) -> None:
+    if json_mode:
+        body: dict[str, Any] = {
+            "error": exc.message,
+            "code": exc.code,
+            "retryable": exc.retryable,
+            "detail": exc.detail,
+        }
+        line = json.dumps(body, ensure_ascii=False)
+    else:
+        line = f"error: {exc.message}"
+    sys.stderr.write(line + "\n")
     sys.stderr.flush()
 
 
-def _emit(report: tuple[dict[str, Any], int]) -> int:
+def _usage_error(exc: _ParseError, json_mode: bool) -> None:
+    if json_mode:
+        body = {
+            "error": f"{exc.prog}: {exc.message}",
+            "code": INVALID_ARGUMENT,
+            "retryable": False,
+            "detail": {"usage": exc.usage},
+        }
+        text = json.dumps(body, ensure_ascii=False) + "\n"
+    else:
+        hint = f"For more information, try '{exc.prog} --help'."
+        text = f"error: {exc.message}\n\n{exc.usage}\n\n{hint}\n"
+    sys.stderr.write(text)
+    sys.stderr.flush()
+
+
+def _emit(report: tuple[dict[str, Any], int], ctx: Context, view: View = views.detail) -> int:
     out, code = report
-    _out(out)
+    _out(out, ctx, view)
     return code
 
 
@@ -142,7 +220,8 @@ def _auth_login(args: argparse.Namespace, ctx: Context) -> int:
                 "home": str(paths.home),
             },
             EXIT_OK,
-        )
+        ),
+        ctx,
     )
 
 
@@ -154,7 +233,13 @@ def _auth_status(args: argparse.Namespace, ctx: Context) -> int:
     )
     if not out["accounts"]:
         _notice("no account is bound; a human runs `pulsar auth login --account x:<handle>`")
-    return _emit((out, code))
+    if out["legacy"] is not None and out["legacy"]["message"]:
+        _notice(out["legacy"]["message"])
+    for entry in out["accounts"]:
+        remedy = attention(entry, ctx.paths.home)
+        if remedy is not None:
+            _notice(remedy)
+    return _emit((out, code), ctx, views.auth_status)
 
 
 def _auth_logout(args: argparse.Namespace, ctx: Context) -> int:
@@ -182,7 +267,8 @@ def _auth_logout(args: argparse.Namespace, ctx: Context) -> int:
                 "status": "revoked",
             },
             EXIT_OK,
-        )
+        ),
+        ctx,
     )
 
 
@@ -208,7 +294,7 @@ def _auth_migrate(args: argparse.Namespace, ctx: Context) -> int:
         "home": str(paths.home),
     }
     done = ("migrated", "none") if args.confirm else ("pending", "none")
-    return _emit((out, EXIT_OK if result.state in done else EXIT_FAILED))
+    return _emit((out, EXIT_OK if result.state in done else EXIT_FAILED), ctx)
 
 
 # -- operator verbs -------------------------------------------------------------------
@@ -218,7 +304,7 @@ def _status(args: argparse.Namespace, ctx: Context) -> int:
     out, code = ops.budget_report(ctx.paths, account=args.account)
     if not out["accounts"]:
         _notice("no account is bound; nothing to report")
-    return _emit((out, code))
+    return _emit((out, code), ctx, views.status)
 
 
 def _history(args: argparse.Namespace, ctx: Context) -> int:
@@ -227,11 +313,15 @@ def _history(args: argparse.Namespace, ctx: Context) -> int:
         _notice("no ledger rows" + (f" for {args.account}" if args.account else ""))
     elif out["truncated"]:
         _notice(f"showing {len(out['writes'])} of {out['total']} rows; raise --limit for more")
-    return _emit((out, code))
+    return _emit((out, code), ctx, views.history)
 
 
 def _validate(args: argparse.Namespace, ctx: Context) -> int:
-    return _emit(asyncio.run(ops.validate_report(ctx.paths, args.plan, account=args.account)))
+    return _emit(
+        asyncio.run(ops.validate_report(ctx.paths, args.plan, account=args.account)),
+        ctx,
+        views.plan_report,
+    )
 
 
 def _publish(args: argparse.Namespace, ctx: Context) -> int:
@@ -248,13 +338,17 @@ def _publish(args: argparse.Namespace, ctx: Context) -> int:
                 confirm=args.confirm or args.yes,
                 transport=ctx.transport,
             )
-        )
+        ),
+        ctx,
+        views.publish,
     )
 
 
 def _reconcile(args: argparse.Namespace, ctx: Context) -> int:
     return _emit(
-        asyncio.run(ops.reconcile_report(ctx.paths, account=args.account, transport=ctx.transport))
+        asyncio.run(ops.reconcile_report(ctx.paths, account=args.account, transport=ctx.transport)),
+        ctx,
+        views.reconcile,
     )
 
 
@@ -268,12 +362,14 @@ def _import_posted(args: argparse.Namespace, ctx: Context) -> int:
                 confirm=args.confirm,
                 transport=ctx.transport,
             )
-        )
+        ),
+        ctx,
+        views.import_posted,
     )
 
 
 def _migrate(args: argparse.Namespace, ctx: Context) -> int:
-    return _emit(ops.migrate_report(ctx.paths, confirm=args.confirm))
+    return _emit(ops.migrate_report(ctx.paths, confirm=args.confirm), ctx)
 
 
 def _orbit_tool(_args: argparse.Namespace, _ctx: Context) -> int:
@@ -343,18 +439,33 @@ ACCOUNT_DEFAULT = "default: default_account in config.toml, else the only bound 
 
 def build_parser() -> argparse.ArgumentParser:
     """The whole command tree; the one declaration help and goldens come from."""
+    # Global flags (STD-01 §R4): declared once, accepted before and after the
+    # subcommand. SUPPRESS keeps a subcommand from resetting the root's value.
     common = argparse.ArgumentParser(add_help=False)
+    common.add_argument(
+        "--format",
+        choices=FORMATS,
+        default=argparse.SUPPRESS,
+        metavar="MODE",
+        help="output: auto (a table on a terminal, tab-separated lines when piped), table or "
+        f"json; default: ${FORMAT_ENV}, else auto",
+    )
     common.add_argument(
         "--json",
         action="store_true",
         default=argparse.SUPPRESS,
-        help="machine output (the default and only mode: every command prints JSON)",
+        help="shorthand for --format json",
     )
 
     def sub_parser(
-        parent: Any, name: str, *, help: str, epilog: str | None = None
-    ) -> argparse.ArgumentParser:
-        parser: argparse.ArgumentParser = parent.add_parser(
+        parent: Any,
+        name: str,
+        *,
+        help: str,
+        epilog: str | None = None,
+        group: tuple[CommandParser, str] | None = None,
+    ) -> CommandParser:
+        parser: CommandParser = parent.add_parser(
             name,
             help=help,
             description=help,
@@ -362,24 +473,44 @@ def build_parser() -> argparse.ArgumentParser:
             parents=[common],
             formatter_class=argparse.RawDescriptionHelpFormatter,
         )
+        if group is not None:
+            owner, title = group
+            owner.command_groups.setdefault(title, []).append(name)
         return parser
 
-    parser = JsonArgumentParser(
+    parser = CommandParser(
         prog="pulsar",
-        description="Social write connector for the constellation: publish to X as accounts "
+        usage="%(prog)s [OPTIONS] COMMAND ...",
+        description="Social write connector for the constellation: publish to X as accounts\n"
         "a human bound on this host, through one ledger and policy.",
-        epilog="Output is JSON on stdout; errors are JSON on stderr. "
-        "Exit codes: 0 ok, 1 failed or not settled, 2 usage error.",
+        epilog="Exit codes: 0 ok, 1 failed or not settled, 2 usage error.\n"
+        "Run `pulsar COMMAND --help` for a command's own options and examples.",
         parents=[common],
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--version", action="version", version=f"pulsar {__version__}")
-    sub = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
+    parser.add_argument("-V", "--version", action="version", version=f"pulsar {__version__}")
+    parser.set_defaults(func=None, help_parser=parser)
+    sub = parser.add_subparsers(dest="command", metavar="COMMAND", prog="pulsar")
+    root = parser
+    # The root help's sections, in this order; each command names its own.
+    for title in ("Accounts", "Publish", "Observe", "Maintenance", "Services"):
+        root.command_groups[title] = []
 
-    auth = sub_parser(sub, "auth", help="manage the account authorizations on this host")
-    auth_sub = auth.add_subparsers(dest="auth_command", required=True, metavar="VERB")
+    auth = sub_parser(
+        sub,
+        "auth",
+        help="bind, check and log out the accounts on this host",
+        group=(root, "Accounts"),
+        epilog="Examples:\n  pulsar auth login --account x:<handle> --no-browser\n"
+        "  pulsar auth status --live",
+    )
+    auth.usage = "pulsar auth [OPTIONS] COMMAND ..."
+    auth.set_defaults(func=None, help_parser=auth)
+    auth_sub = auth.add_subparsers(dest="auth_command", metavar="COMMAND", prog="pulsar auth")
     p_login = sub_parser(
         auth_sub,
         "login",
+        group=(auth, "Commands"),
         help="bind an account: OAuth 2.0 PKCE in a browser, then verify the handle with X",
         epilog="Examples:\n  pulsar auth login --account x:<handle> --client-id <CLIENT_ID>\n"
         "  pulsar auth login --account x:<handle> --no-browser   # over SSH",
@@ -401,6 +532,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_status = sub_parser(
         auth_sub,
         "status",
+        group=(auth, "Commands"),
         help="each bound account and its health, from local state (no network)",
         epilog="Exit 0 only when every reported account is healthy.",
     )
@@ -421,6 +553,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_logout = sub_parser(
         auth_sub,
         "logout",
+        group=(auth, "Commands"),
         help="delete an account's tokens (the account is kept as revoked); needs --confirm",
     )
     p_logout.add_argument("--account", help=f"the account to log out; {ACCOUNT_DEFAULT}")
@@ -430,6 +563,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_migrate = sub_parser(
         auth_sub,
         "migrate",
+        group=(auth, "Commands"),
         help="move single-account (phase 1) credentials into the account layout; "
         "reports only without --confirm",
     )
@@ -442,12 +576,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_migrate.set_defaults(func=_auth_migrate)
 
     p_st = sub_parser(
-        sub, "status", help="budgets, today's posts, quiet hours and unresolved writes (offline)"
+        sub,
+        "status",
+        help="budgets, today's posts, quiet hours and unresolved writes (offline)",
+        group=(root, "Observe"),
     )
     p_st.add_argument("--account", help=f"report only this account ({ACCOUNT_HELP}); default: all")
     p_st.set_defaults(func=_status)
 
-    p_hist = sub_parser(sub, "history", help="the newest ledger rows (offline)")
+    p_hist = sub_parser(
+        sub, "history", help="the newest ledger rows (offline)", group=(root, "Observe")
+    )
     p_hist.add_argument(
         "--account", help=f"only this account's rows ({ACCOUNT_HELP}); default: all"
     )
@@ -462,6 +601,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_val = sub_parser(
         sub,
         "validate",
+        group=(root, "Publish"),
         help="check a plan offline: per account, what would post, its digest and cost",
     )
     p_val.add_argument("plan", type=Path, help="plan file (YAML)")
@@ -475,6 +615,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_pub = sub_parser(
         sub,
         "publish",
+        group=(root, "Publish"),
         help="publish a plan through the ledger and policy; validates only without --confirm",
         epilog="Examples:\n"
         "  pulsar publish plan.yaml            # what would post, and its cost\n"
@@ -502,6 +643,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_rec = sub_parser(
         sub,
         "reconcile",
+        group=(root, "Publish"),
         help="settle writes whose outcome is unknown from the account's timeline "
         "(reads X only when something is unresolved)",
         epilog="Exit 0 only when every row it looked at is settled.",
@@ -512,6 +654,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_imp = sub_parser(
         sub,
         "import-posted",
+        group=(root, "Maintenance"),
         help="import a retired routine's posted.jsonl into the ledger (idempotent); "
         "reports only without --confirm",
     )
@@ -523,6 +666,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_mig = sub_parser(
         sub,
         "migrate",
+        group=(root, "Maintenance"),
         help="upgrade the home in place: the ledger schema, then phase 1 credentials; "
         "reports only without --confirm",
         epilog="An upgraded ledger is refused by older pulsar versions; moved credentials "
@@ -531,7 +675,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_mig.add_argument("--confirm", action="store_true", help="actually upgrade the home")
     p_mig.set_defaults(func=_migrate)
 
-    serve = sub_parser(sub, "serve", help="run the MCP server")
+    serve = sub_parser(sub, "serve", help="run the MCP server", group=(root, "Services"))
     serve.add_argument(
         "--transport",
         choices=("stdio", "http"),
@@ -555,6 +699,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_orbit = sub_parser(
         sub,
         "orbit-tool",
+        group=(root, "Services"),
         help="answer one Orbit plugin request (envelope on stdin, response on stdout)",
     )
     p_orbit.set_defaults(func=_orbit_tool)
@@ -564,16 +709,38 @@ def build_parser() -> argparse.ArgumentParser:
 def main(
     argv: Sequence[str] | None = None, *, transport: httpx.AsyncBaseTransport | None = None
 ) -> int:
-    args = build_parser().parse_args(argv)
-    configure_logging()
-    handler: Handler = args.func
+    raw = list(sys.argv[1:] if argv is None else argv)
+    wants_json = json_requested(raw, os.environ)
     try:
-        return handler(args, Context(default_paths(), transport))
+        args = build_parser().parse_args(raw)
+    except _ParseError as exc:
+        _usage_error(exc, wants_json)
+        raise SystemExit(EXIT_USAGE) from None
+    handler: Handler | None = args.func
+    if handler is None:
+        # `pulsar` or `pulsar auth` alone: that level's help, as a usage error.
+        args.help_parser.print_help(sys.stderr)
+        return EXIT_USAGE
+    try:
+        mode = resolve_mode(
+            getattr(args, "format", None),
+            getattr(args, "json", False),
+            os.environ,
+            sys.stdout.isatty(),
+        )
+    except ModeConflict as exc:
+        _error(UsageError(str(exc)), wants_json)
+        return EXIT_USAGE
+    configure_logging()
+    ctx = Context(default_paths(), transport, mode, resolve_terminal(sys.stdout, os.environ))
+    json_mode = mode == "json"
+    try:
+        return handler(args, ctx)
     except UsageError as exc:
-        _error(exc)
+        _error(exc, json_mode)
         return EXIT_USAGE
     except PulsarError as exc:
-        _error(exc)
+        _error(exc, json_mode)
         return EXIT_FAILED
     except BrokenPipeError:
         # `pulsar history | head -1`: the reader left; that is not a failure.
@@ -582,7 +749,8 @@ def main(
         return EXIT_OK
     except Exception as exc:
         log.exception("pulsar %s: unexpected error", args.command)
-        _error(PulsarError(INTERNAL, f"internal error: {exc.__class__.__name__}", retryable=False))
+        bug = PulsarError(INTERNAL, f"internal error: {exc.__class__.__name__}", retryable=False)
+        _error(bug, json_mode)
         return EXIT_FAILED
 
 

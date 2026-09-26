@@ -1,10 +1,12 @@
-usage: pulsar auth status [-h] [--json] [--account ACCOUNT] [--live | --offline]
+usage: pulsar auth status [-h] [--format MODE] [--json] [--account ACCOUNT] [--live | --offline]
 
 each bound account and its health, from local state (no network)
 
 options:
   -h, --help         show this help message and exit
-  --json             machine output (the default and only mode: every command prints JSON)
+  --format MODE      output: auto (a table on a terminal, tab-separated lines when piped), table
+                     or json; default: $PULSAR_FORMAT, else auto
+  --json             shorthand for --format json
   --account ACCOUNT  report only this account (an alias, provider:handle such as x:<handle>);
                      default: all
   --live             prove each binding: force a token refresh (rotates the pair), then GET

@@ -7,7 +7,7 @@ status: Accepted
 feature: surfaces
 doc_role: decisions
 type: design
-summary: Exec backend over mcp, one settings source, plan errors as results, workspace-confined plugin media, and the launcher's shape.
+summary: Exec backend over mcp, one settings source, plan errors as results, workspace-confined plugin media, the launcher's shape, and CLI output modes.
 tags: [surfaces, orbit-plugin, mcp]
 paths: ["plugin.yaml", "bin/pulsar", "src/pulsar/surfaces/orbit_tool.py", "src/pulsar/surfaces/mcp.py"]
 related_features: [publishing, accounts]
@@ -155,6 +155,7 @@ tell apart; `auth` is the only resource with verbs of its own. New commands go u
 ## The CLI prints JSON only
 
 **Recorded:** 2026-09-26 · [ORB-13138]
+**Superseded by:** [The CLI renders for its reader, as orbit's does](#the-cli-renders-for-its-reader-as-orbits-does)
 **Deviates from:** STD-01@2 §R8, §R14, §R17
 **Code anchors:** `src/pulsar/surfaces/cli.py::_out`
 
@@ -179,6 +180,39 @@ prints the version as plain text.
   §R18 hold trivially. §R9's piped form is JSON rather than its SHOULD of tab-separated
   lines.
 - Cost: an operator reads JSON at the terminal (`| jq` helps).
+
+## The CLI renders for its reader, as orbit's does
+
+**Recorded:** 2026-09-26 · [ORB-13248]
+**Deviates from:** STD-01@2 §R17
+**Code anchors:** `src/pulsar/surfaces/output.py::resolve_mode`, `src/pulsar/surfaces/output.py::resolve_terminal`, `src/pulsar/surfaces/views.py`, `src/pulsar/surfaces/cli.py::CommandParser`
+
+### Context
+
+The JSON-only CLI answered a bare `pulsar` with a JSON usage error. Daniel judged that bad
+UX for the operator at a terminal and asked for the CLI to behave like orbit's. pulsar has
+not been released, and nothing parses its CLI output but its own tests. The skill and the
+plugin go through `orbit-tool` and MCP.
+
+### Decision
+
+- Follow STD-01's output rules the way orbit does:
+  - one payload per command;
+  - a table or key-value view on a terminal, tab-separated lines when piped, and JSON on
+    request (`--json`, `--format json` or `PULSAR_FORMAT=json`);
+  - plain `error:` lines outside JSON;
+  - grouped help, which a bare `pulsar` or `pulsar auth` prints, exiting 2.
+- The JSON documents are unchanged and remain the machine contract.
+- One exception remains: argparse wraps `--help` to the terminal width it looks up itself,
+  outside `resolve_terminal`. The help goldens pin `COLUMNS=100`.
+
+### Consequences
+
+- An operator reads a table, and an agent or script passes `--json`, as with orbit.
+- Cost:
+  - a caller that relied on piped JSON must now pass `--json`;
+  - every command needs a view in `views.py`, and a new payload field shows up in the human
+    form only when its view shows it (fields views show every scalar).
 
 ## `pulsar orbit-tool` exits 0 when it answered
 
@@ -368,5 +402,6 @@ It renames within the home, refuses to overwrite credentials, and is what `pulsa
 - [ORB-13029] — built the Orbit plugin.
 - [ORB-13114] — Orbit: structured plugin errors (ws_orbit).
 - [ORB-13138] — aligned the surfaces with the constellation standards.
+- [ORB-13248] — human output, grouped help and plain errors for the CLI.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
