@@ -37,8 +37,16 @@ uv sync
 3. Check the binding:
 
    ```sh
-   uv run pulsar auth status
+   uv run pulsar auth status            # cached account, no X call once cached
+   uv run pulsar auth status --live     # prove it: forced refresh + GET /2/users/me
+   uv run pulsar auth status --offline  # stored state only, never calls X
    ```
+
+   The default reads `whoami.json`, so it names the account even when the
+   refresh token is already dead; it says so (`verified: false` and a `note`,
+   `token_state: expired` when the access token has lapsed). `--live` is the
+   proof: it rotates the token pair through the refresh lock, fetches the
+   account from X, and rewrites the cache. It costs one `/users/me` read.
 
 Refresh happens automatically. When a refresh fails (token revoked, app reset),
 tools return `auth_expired` and a human re-runs `auth login`.

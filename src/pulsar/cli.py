@@ -7,12 +7,16 @@ import asyncio
 import json
 import sys
 import time
+from typing import Any
+
+import httpx
 
 from . import __version__
 from .auth import load_client_id, login
-from .config import CALLBACK_HOST, default_paths
+from .config import CALLBACK_HOST, Paths, default_paths
 from .errors import PulsarError
 from .store import TokenStore
+from .xapi import REFRESH_AHEAD_SECONDS
 
 
 def _auth_login(args: argparse.Namespace) -> int:
@@ -34,48 +38,105 @@ def _auth_login(args: argparse.Namespace) -> int:
         f"token bundle stored under {paths.home}"
     )
     # Always probe live here: the whole point is to show which account the
-    # human just bound, not what a previous login cached.
-    args.offline = False
-    return _auth_status(args)
+    # human just bound, not what a previous login cached. No forced refresh:
+    # the token is minutes old, so /users/me alone proves it.
+    out, code = asyncio.run(status_report(paths))
+    print(json.dumps(out, indent=2))
+    return code
 
 
-def _auth_status(args: argparse.Namespace) -> int:
-    paths = default_paths()
+def _token_state(expires_in_s: int) -> str:
+    if expires_in_s <= 0:
+        return "expired"
+    return "expiring" if expires_in_s <= REFRESH_AHEAD_SECONDS else "valid"
+
+
+async def status_report(
+    paths: Paths,
+    *,
+    live: bool = False,
+    offline: bool = False,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> tuple[dict[str, Any], int]:
+    """What ``pulsar auth status`` prints, and its exit code.
+
+    The default reads the cached account: it costs nothing, but says nothing
+    about whether the refresh token still works (an expired access token is
+    reported as ``verified: false``). ``live`` proves it: a forced refresh,
+    which rotates the token pair, then ``GET /2/users/me`` bypassing the
+    cache. ``offline`` makes no network call at all.
+    """
     store = TokenStore(paths)
     try:
         bundle = store.load()
     except PulsarError as exc:  # insecure_storage: a chmod away, not a re-login
-        print(json.dumps({"home": str(paths.home), "error": exc.to_result()}, indent=2))
-        return 1
-    out = {
+        return {"home": str(paths.home), "error": exc.to_result()}, 1
+    out: dict[str, Any] = {
         "home": str(paths.home),
         "client_id": load_client_id(paths),
         "authorized": bundle is not None,
         "reauth_required": bundle is None or not bundle.refresh_token,
-        "access_token_expires_in_s": None
-        if bundle is None
-        else int(bundle.expires_at - time.time()),
-        "scope": None if bundle is None else bundle.scope,
+        "access_token_expires_in_s": None,
+        "token_state": None,
+        "scope": None,
         "account": None,
+        "account_source": None,
+        "verified": False,
     }
-    if bundle is not None and not getattr(args, "offline", False):
+    if bundle is None:
+        return out, 1
+    expires_in = int(bundle.expires_at - time.time())
+    out.update(
+        access_token_expires_in_s=expires_in,
+        token_state=_token_state(expires_in),
+        scope=bundle.scope,
+    )
+    if offline:
+        if paths.whoami_cache.exists():
+            out["account"] = json.loads(paths.whoami_cache.read_text())
+            out["account_source"] = "cache"
+    else:
         from .server import Runtime
 
-        rt = Runtime(paths)
-
-        async def probe() -> None:
-            try:
+        rt = Runtime(paths, transport=transport)
+        try:
+            if live:
+                cached = paths.whoami_cache.exists()
+                fresh = await rt.client.refresh(bundle)
+                out["refreshed"] = True
+                out["access_token_expires_in_s"] = int(fresh.expires_at - time.time())
+                out["token_state"] = _token_state(out["access_token_expires_in_s"])
+                out["account"] = await rt.whoami(live=True)
+                out["account_source"] = "live"
+                out["verified"] = True
+                out["whoami_cache"] = "refreshed" if cached else "created"
+            else:
+                had_cache = paths.whoami_cache.exists()
                 out["account"] = await rt.whoami()
-            except PulsarError as exc:
-                out["error"] = exc.to_result()
-                if exc.code == "auth_expired":
-                    out["reauth_required"] = True
-            finally:
-                await rt.client.aclose()
+                out["account_source"] = "cache" if had_cache else "live"
+                out["verified"] = not had_cache
+        except PulsarError as exc:
+            out["error"] = exc.to_result()
+            if exc.code == "auth_expired":
+                out["reauth_required"] = True
+        finally:
+            await rt.client.aclose()
+    if not out["verified"] and not out["reauth_required"]:
+        out["note"] = (
+            "account read from cache; refresh not exercised"
+            + (" and the access token has expired" if out["token_state"] == "expired" else "")
+            + " — run `pulsar auth status --live` to prove the binding"
+        )
+    ok = out["authorized"] and not out["reauth_required"] and "error" not in out
+    return out, 0 if ok else 1
 
-        asyncio.run(probe())
+
+def _auth_status(args: argparse.Namespace) -> int:
+    out, code = asyncio.run(
+        status_report(default_paths(), live=args.live, offline=getattr(args, "offline", False))
+    )
     print(json.dumps(out, indent=2))
-    return 0 if out["authorized"] and not out["reauth_required"] else 1
+    return code
 
 
 def _auth_logout(_: argparse.Namespace) -> int:
@@ -113,8 +174,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_login.set_defaults(func=_auth_login)
     p_status = auth_sub.add_parser("status", help="show the bound account and token health")
-    p_status.add_argument(
+    status_mode = p_status.add_mutually_exclusive_group()
+    status_mode.add_argument(
         "--offline", action="store_true", help="do not call X; report stored state only"
+    )
+    status_mode.add_argument(
+        "--live",
+        action="store_true",
+        help="prove the binding: force a token refresh (rotates the pair), then GET /users/me",
     )
     p_status.set_defaults(func=_auth_status)
     auth_sub.add_parser("logout", help="delete the stored token bundle").set_defaults(

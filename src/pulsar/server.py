@@ -68,9 +68,10 @@ class Runtime:
         self.client = XClient(self.store, transport=transport, **client_kwargs)
         self.log = WriteLog(self.paths)
 
-    async def whoami(self) -> dict[str, str]:
+    async def whoami(self, *, live: bool = False) -> dict[str, str]:
+        """The bound account: cached after the first call, from X when ``live``."""
         cache = self.paths.whoami_cache
-        if cache.exists():
+        if not live and cache.exists():
             try:
                 cached = json.loads(cache.read_text())
                 if {"user_id", "username"} <= cached.keys():
