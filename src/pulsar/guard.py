@@ -78,7 +78,7 @@ class TextReport:
     estimated_cost_usd: float
 
 
-def validate_text(text: str | None, prices: Prices | None = None) -> TextReport:
+def validate_text(text: object, prices: Prices | None = None) -> TextReport:
     """Raise PulsarError(invalid_text | secret_detected) or return a report."""
     if text is None or not isinstance(text, str):
         raise PulsarError(INVALID_TEXT, "text is required")

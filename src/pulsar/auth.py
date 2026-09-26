@@ -115,7 +115,7 @@ class _Callback(BaseHTTPRequestHandler):
             else b"pulsar: authorization failed or state mismatch; check the terminal."
         )
 
-    def log_message(self, *_: object) -> None:  # keep the terminal quiet
+    def log_message(self, format: str, *args: object) -> None:  # keep the terminal quiet
         return
 
 

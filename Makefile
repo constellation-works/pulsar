@@ -6,6 +6,7 @@ sync:
 lint:
 	uv run ruff check src tests
 	uv run ruff format --check src tests
+	uv run basedpyright
 
 test:
 	uv run pytest -q

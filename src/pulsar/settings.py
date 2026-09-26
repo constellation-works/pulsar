@@ -28,6 +28,7 @@ from typing import Any
 
 from .config import Paths
 from .errors import INVALID_CONFIG, PulsarError
+from .jsonx import as_list, as_object
 
 DEFAULT_PLAIN_POST_USD = 0.015
 DEFAULT_URL_POST_USD = 0.20
@@ -50,8 +51,8 @@ class Settings:
 
 
 def _table(data: dict[str, Any], key: str, allowed: set[str]) -> dict[str, Any]:
-    section = data.get(key, {})
-    if not isinstance(section, dict):
+    section = as_object(data.get(key, {}))
+    if section is None:
         raise PulsarError(INVALID_CONFIG, f"config.toml: [{key}] must be a table")
     unknown = set(section) - allowed
     if unknown:
@@ -88,8 +89,10 @@ def parse_settings(data: dict[str, Any]) -> Settings:
         raise PulsarError(INVALID_CONFIG, f"config.toml: unknown sections: {sorted(unknown)}")
     prices = _table(data, "prices", {"plain_post_usd", "url_post_usd"})
     media = _table(data, "media", {"roots"})
-    roots = media.get("roots", [])
-    if not isinstance(roots, list) or not all(isinstance(r, str) and r for r in roots):
+    raw_roots: object = media.get("roots", [])
+    entries = as_list(raw_roots)
+    roots = [r for r in entries if isinstance(r, str) and r]
+    if not isinstance(raw_roots, list) or len(roots) != len(entries):
         raise PulsarError(INVALID_CONFIG, "config.toml: media.roots must be a list of paths")
     return Settings(
         prices=Prices(

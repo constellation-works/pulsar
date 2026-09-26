@@ -29,7 +29,7 @@ import json
 import logging
 import sqlite3
 import unicodedata
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -117,7 +117,7 @@ def default_key(digest: str, user_id: str) -> str:
     return hashlib.sha256(f"{digest}:{user_id}".encode()).hexdigest()
 
 
-def check_key(key: str | None) -> str | None:
+def check_key(key: object) -> str | None:
     """Validate a caller-supplied idempotency key (``None`` means derive one)."""
     if key is None:
         return None
@@ -200,7 +200,7 @@ class Ledger:
     # -- connection ---------------------------------------------------------
 
     @contextlib.contextmanager
-    def _connect(self) -> Iterator[sqlite3.Connection]:
+    def _connect(self) -> Generator[sqlite3.Connection]:
         """A short-lived connection in autocommit mode; callers BEGIN explicitly.
 
         Opening per operation keeps transactions short and lets several
@@ -378,7 +378,7 @@ class Ledger:
 
 
 @contextlib.contextmanager
-def _immediate(conn: sqlite3.Connection) -> Iterator[None]:
+def _immediate(conn: sqlite3.Connection) -> Generator[None]:
     """BEGIN IMMEDIATE ... COMMIT: take the write lock up front, so two
     processes claiming one key serialize instead of both reading "absent"."""
     conn.execute("BEGIN IMMEDIATE")

@@ -27,6 +27,7 @@ from .errors import (
     OutcomeUnknown,
     PulsarError,
 )
+from .jsonx import as_list, as_object, obj
 from .store import REFRESH_LOCK_WAIT_SECONDS, CredentialConflict, CredentialStore, TokenBundle
 
 # Raised before any request byte reaches X: no connection, no pool slot, or a
@@ -76,20 +77,20 @@ def _error_detail(resp: httpx.Response) -> Any:
         body = resp.json()
     except ValueError:
         return resp.text[:500]
-    if isinstance(body, dict):
+    if (fields := as_object(body)) is not None:
         # X returns either {"title","detail","type"} or {"errors":[...]}
         return {
-            k: body[k] for k in ("title", "detail", "type", "errors", "reason") if k in body
-        } or body
+            k: fields[k] for k in ("title", "detail", "type", "errors", "reason") if k in fields
+        } or fields
     return body
 
 
 def _detail_text(detail: Any) -> str:
-    if isinstance(detail, dict):
-        parts = [str(detail.get(k, "")) for k in ("title", "detail", "reason")]
-        for err in detail.get("errors") or []:
-            if isinstance(err, dict):
-                parts.append(str(err.get("message", "")))
+    if (fields := as_object(detail)) is not None:
+        parts = [str(fields.get(k, "")) for k in ("title", "detail", "reason")]
+        for err in as_list(fields.get("errors")):
+            if (entry := as_object(err)) is not None:
+                parts.append(str(entry.get("message", "")))
         return " ".join(p for p in parts if p)
     return str(detail)
 
@@ -351,12 +352,12 @@ class XClient:
                 data={"segment_index": str(index)},
                 files={"media": (f"segment-{index}", chunk, mime)},
             )
-        fin = (await self.request("POST", f"/media/upload/{media_id}/finalize")).json()
-        info = (fin.get("data") or {}).get("processing_info")
+        fin = obj((await self.request("POST", f"/media/upload/{media_id}/finalize")).json())
+        info = as_object(obj(fin.get("data")).get("processing_info"))
         if is_video and info is not None:
             state = await self._wait_for_processing(media_id, info)
         else:
-            state = (info or {}).get("state", "succeeded")
+            state = str(obj(info).get("state", "succeeded"))
             if state not in ("succeeded", "pending", "in_progress"):
                 raise MediaProcessingError(state, f"X media processing state: {state}", detail=info)
         return media_id, state
@@ -364,12 +365,13 @@ class XClient:
     async def _wait_for_processing(self, media_id: str, info: dict[str, Any]) -> str:
         deadline = self._monotonic() + PROCESSING_TIMEOUT_SECONDS
         while True:
-            state = info.get("state")
+            state = str(info.get("state"))
             if state == "succeeded":
                 return state
             if state == "failed":
                 error = info.get("error") or info
-                message = error.get("message") if isinstance(error, dict) else str(error)
+                fields = as_object(error)
+                message = fields.get("message") if fields is not None else str(error)
                 raise MediaProcessingError(
                     state,
                     f"X media processing failed: {message or 'no detail from X'}",
@@ -390,12 +392,13 @@ class XClient:
             status = await self.request(
                 "GET", "/media/upload", params={"command": "STATUS", "media_id": media_id}
             )
-            body = status.json()
-            info = (body.get("data") or {}).get("processing_info")
-            if info is None:
+            body = obj(status.json())
+            next_info = as_object(obj(body.get("data")).get("processing_info"))
+            if next_info is None:
                 raise MediaProcessingError(
                     "unknown", "X media status has no processing_info", detail=body
                 )
+            info = next_info
 
     async def upload_image(
         self, data: bytes, mime: str, *, chunk_size: int = IMAGE_CHUNK_BYTES

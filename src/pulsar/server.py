@@ -51,9 +51,9 @@ log = logging.getLogger(__name__)
 TOOL_NAMES = ("whoami", "validate_post", "create_post", "upload_media", "delete_post")
 
 # Hints a policy layer can gate on without knowing anything pulsar-specific.
-READ_ONLY = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True)
-PUBLISHES = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False)
-DESTRUCTIVE = ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True)
+READ_ONLY = ToolAnnotations(read_only_hint=True, destructive_hint=False, idempotent_hint=True)
+PUBLISHES = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False)
+DESTRUCTIVE = ToolAnnotations(read_only_hint=False, destructive_hint=True, idempotent_hint=True)
 
 INSTRUCTIONS = (
     "pulsar posts to X as the account a human authorized on this host. "

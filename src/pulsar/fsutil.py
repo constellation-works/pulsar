@@ -22,7 +22,7 @@ DIR_MODE = 0o700
 FILE_MODE = 0o600
 
 
-def _insecure(path: Path, problem: str, fix: str) -> PulsarError:
+def _insecure(path: os.PathLike[str] | str, problem: str, fix: str) -> PulsarError:
     return PulsarError(
         INSECURE_STORAGE,
         f"{path} {problem}; pulsar will not use X credentials stored there. Fix: {fix}",

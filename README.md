@@ -326,7 +326,7 @@ facts — never post text, media bytes, or credentials.
 ## Development
 
 ```sh
-make check     # ruff lint + format check + pytest (no network; fake X transport)
+make check     # ruff lint + format check + basedpyright strict + pytest (no network; fake X transport)
 ```
 
 `tests/conftest.py` holds the scripted X API; tests drive the server through a

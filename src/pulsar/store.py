@@ -46,7 +46,7 @@ import os
 import tempfile
 import time
 import uuid
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncGenerator, Generator
 from contextlib import AbstractAsyncContextManager
 from dataclasses import asdict, dataclass
 from typing import Protocol
@@ -56,6 +56,7 @@ from cryptography.fernet import Fernet, InvalidToken
 from .config import Paths
 from .errors import API_ERROR, INSECURE_STORAGE, AuthExpired, PulsarError
 from .fsutil import FILE_MODE, require_private, write_private_atomic
+from .jsonx import as_object, obj
 
 LOCK_POLL_SECONDS = 0.05
 # Longer than one token POST (the HTTP timeout) so a waiter outlasts a live refresher.
@@ -78,26 +79,32 @@ class TokenBundle:
 
     @classmethod
     def from_token_response(
-        cls, data: dict, *, client_id: str, now: float | None = None
+        cls, data: object, *, client_id: str, now: float | None = None
     ) -> TokenBundle:
+        """Raises ``KeyError``/``ValueError`` on a response without a usable access token."""
+        fields = obj(data)
         now = time.time() if now is None else now
+        access = fields["access_token"]
+        if not isinstance(access, str) or not access:
+            raise ValueError("token response has no access_token")
+        refresh = fields.get("refresh_token")
         return cls(
-            access_token=data["access_token"],
-            refresh_token=data.get("refresh_token"),
-            expires_at=now + float(data.get("expires_in", 7200)),
-            scope=data.get("scope", ""),
+            access_token=access,
+            refresh_token=refresh if isinstance(refresh, str) and refresh else None,
+            expires_at=now + float(fields.get("expires_in", 7200)),
+            scope=str(fields.get("scope", "")),
             client_id=client_id,
-            token_type=data.get("token_type", "bearer"),
+            token_type=str(fields.get("token_type", "bearer")),
         )
 
 
 def cached_identity(paths: Paths, bundle: TokenBundle) -> dict[str, str] | None:
     """The cached ``{user_id, username}`` if it describes ``bundle``'s binding, else None."""
     try:
-        cached = json.loads(paths.whoami_cache.read_text())
+        cached = as_object(json.loads(paths.whoami_cache.read_text()))
     except (FileNotFoundError, ValueError):
         return None
-    if not isinstance(cached, dict) or not {"user_id", "username"} <= cached.keys():
+    if cached is None or not {"user_id", "username"} <= cached.keys():
         return None
     if cached.get("binding_id") != bundle.binding_id:
         return None
@@ -296,7 +303,7 @@ class FernetFileStore:
             return False
 
     @contextlib.asynccontextmanager
-    async def refresh_lock(self, timeout: float) -> AsyncIterator[None]:
+    async def refresh_lock(self, timeout: float) -> AsyncGenerator[None]:
         fd = self._lock_fd()
         try:
             deadline = time.monotonic() + timeout
@@ -310,7 +317,7 @@ class FernetFileStore:
             os.close(fd)
 
     @contextlib.contextmanager
-    def refresh_lock_sync(self, timeout: float) -> Iterator[None]:
+    def refresh_lock_sync(self, timeout: float) -> Generator[None]:
         """``refresh_lock`` for the synchronous CLI paths (login, logout)."""
         fd = self._lock_fd()
         try:
