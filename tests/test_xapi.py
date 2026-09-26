@@ -1,8 +1,10 @@
 import asyncio
 import fcntl
+import http.client
 import json
 import multiprocessing
 import os
+import threading
 import time
 from pathlib import Path
 
@@ -11,8 +13,10 @@ import pytest
 
 from pulsar.core.errors import AuthExpired, OutcomeUnknown, PulsarError
 from pulsar.core.paths import Paths
-from pulsar.core.store import TokenBundle, TokenStore
-from pulsar.providers.x.client import MediaProcessingError, XClient
+from pulsar.core.store import FernetFileStore, TokenBundle
+from pulsar.providers.x import auth
+from pulsar.providers.x.auth import CallbackServer
+from pulsar.providers.x.client import MediaProcessingError, XClient, bounded_text
 
 from .conftest import (
     ACCESS,
@@ -33,9 +37,12 @@ async def client(store, fake_x):
     await c.aclose()
 
 
-async def test_no_bundle_is_auth_expired(client):
-    with pytest.raises(AuthExpired):
+async def test_no_bundle_is_auth_expired_naming_the_account_and_home(client, paths):
+    with pytest.raises(AuthExpired) as exc:
         await client.me()
+    assert f"`PULSAR_HOME={paths.home} pulsar auth login --account x:constworks`" in (
+        exc.value.message
+    )
 
 
 async def test_me_uses_stored_token(client, authed, fake_x):
@@ -75,6 +82,8 @@ async def test_refresh_failure_is_auth_expired_not_a_stack_trace(client, authed,
     with pytest.raises(AuthExpired) as exc:
         await client.me()
     assert exc.value.code == "auth_expired"
+    assert "X refused the refresh token (HTTP 400)" in exc.value.message
+    assert "pulsar auth login --account x:constworks" in exc.value.message
 
 
 async def test_create_post_body_shape(client, authed, fake_x):
@@ -124,7 +133,7 @@ async def test_delete_post(client, authed, fake_x):
 
 async def test_upload_image_is_chunked_init_append_finalize(client, authed, fake_x):
     data = b"\x89PNG" + b"0" * (1024 * 1024 + 10)
-    assert await client.upload_image(data, "image/png") == "710000"
+    assert await client.upload_media(data, "image/png") == ("710000", "succeeded")
     paths = [r.url.path.rsplit("/2", 1)[-1] for r in fake_x.requests]
     assert paths == [
         "/media/upload/initialize",
@@ -200,6 +209,23 @@ async def test_upload_video_processing_failure_preserves_x_detail(client, authed
     assert fake_x.calls("GET", "/media/upload") == []
 
 
+async def test_provider_text_in_an_error_message_is_bounded(client, authed, fake_x):
+    essay = "codec " * 1000
+    fake_x.media_finalize_info = {"state": "failed", "error": {"message": essay}}
+    with pytest.raises(MediaProcessingError) as exc:
+        await client.upload_media(b"video", "video/mp4")
+    assert len(exc.value.message) < 700
+    assert "[truncated 5500 of 6000 characters]" in exc.value.message
+    assert exc.value.detail["error"]["message"] == essay, "the full text stays in detail"
+
+
+def test_bounded_text_marks_what_it_cuts():
+    assert bounded_text("short") == "short"
+    assert bounded_text("x" * 500) == "x" * 500
+    cut = bounded_text("y" * 501)
+    assert cut.startswith("y" * 500) and cut.endswith("[truncated 1 of 501 characters]")
+
+
 async def test_upload_video_status_failure_preserves_x_detail(store, authed, fake_x):
     fake_x.media_finalize_info = {"state": "pending", "check_after_secs": 2}
     fake_x.media_status_info = [
@@ -255,10 +281,10 @@ def _expired(bundle):
 
 
 async def test_two_clients_on_one_home_refresh_once(paths, bundle, token_endpoint):
-    TokenStore.for_account(paths, ALIAS).save(_expired(bundle))
+    FernetFileStore.for_account(paths, ALIAS).save(_expired(bundle))
     token_endpoint.delay = 0.2  # the first refresher holds the lock across this
     clients = [
-        XClient(TokenStore.for_account(paths, ALIAS), transport=token_endpoint.transport())
+        XClient(FernetFileStore.for_account(paths, ALIAS), transport=token_endpoint.transport())
         for _ in range(2)
     ]
     try:
@@ -268,14 +294,14 @@ async def test_two_clients_on_one_home_refresh_once(paths, bundle, token_endpoin
             await c.aclose()
     assert token_endpoint.calls() == 1
     assert tokens == ["access-gen1-YYYY", "access-gen1-YYYY"]
-    assert TokenStore.for_account(paths, ALIAS).load().refresh_token == "refresh-gen1-ZZZZ"
+    assert FernetFileStore.for_account(paths, ALIAS).load().refresh_token == "refresh-gen1-ZZZZ"
 
 
 def _refresh_in_child(home, state_file, barrier, results):
     async def run():
         endpoint = RotatingTokenEndpoint(state_file, delay=0.3)
         client = XClient(
-            TokenStore.for_account(Paths(Path(home)), ALIAS), transport=endpoint.transport()
+            FernetFileStore.for_account(Paths(Path(home)), ALIAS), transport=endpoint.transport()
         )
         try:
             return await client.access_token()
@@ -290,7 +316,7 @@ def _refresh_in_child(home, state_file, barrier, results):
 
 
 async def test_two_processes_on_one_home_refresh_once(paths, bundle, token_endpoint):
-    TokenStore.for_account(paths, ALIAS).save(_expired(bundle))
+    FernetFileStore.for_account(paths, ALIAS).save(_expired(bundle))
     ctx = multiprocessing.get_context("spawn")
     barrier, results = ctx.Barrier(2), ctx.Queue()
     procs = [
@@ -312,8 +338,10 @@ async def test_two_processes_on_one_home_refresh_once(paths, bundle, token_endpo
 
 async def test_refresh_waits_boundedly_for_the_lock(paths, authed, token_endpoint, monkeypatch):
     monkeypatch.setattr("pulsar.providers.x.client.REFRESH_LOCK_WAIT_SECONDS", 0.2)
-    client = XClient(TokenStore.for_account(paths, ALIAS), transport=token_endpoint.transport())
-    fd = os.open(TokenStore.for_account(paths, ALIAS).lock_file, os.O_RDWR | os.O_CREAT, 0o600)
+    client = XClient(
+        FernetFileStore.for_account(paths, ALIAS), transport=token_endpoint.transport()
+    )
+    fd = os.open(FernetFileStore.for_account(paths, ALIAS).lock_file, os.O_RDWR | os.O_CREAT, 0o600)
     fcntl.flock(fd, fcntl.LOCK_EX)  # another process mid-refresh, and stuck
     try:
         with pytest.raises(PulsarError) as exc:
@@ -321,15 +349,15 @@ async def test_refresh_waits_boundedly_for_the_lock(paths, authed, token_endpoin
     finally:
         os.close(fd)
         await client.aclose()
-    assert exc.value.code == "api_error"
-    assert exc.value.detail["retryable"] is True
+    assert exc.value.code == "lock_timeout" and exc.value.retryable is True
+    assert exc.value.detail["holder"] is None, "an fd holder that wrote no record"
     assert token_endpoint.calls() == 0
 
 
 async def test_rejected_refresh_uses_newer_bundle_from_a_lockless_process(
     paths, bundle, token_endpoint
 ):
-    store = TokenStore.for_account(paths, ALIAS)
+    store = FernetFileStore.for_account(paths, ALIAS)
     store.save(_expired(bundle))
 
     async def rogue_rotates_first(request):
@@ -351,7 +379,7 @@ async def test_rejected_refresh_uses_newer_bundle_from_a_lockless_process(
 async def test_rejected_refresh_retries_with_newer_but_expiring_bundle(
     paths, bundle, token_endpoint
 ):
-    store = TokenStore.for_account(paths, ALIAS)
+    store = FernetFileStore.for_account(paths, ALIAS)
     store.save(_expired(bundle))
 
     async def rogue_rotates_first(request):
@@ -369,7 +397,7 @@ async def test_rejected_refresh_retries_with_newer_but_expiring_bundle(
 
 
 async def test_genuinely_revoked_refresh_token_is_auth_expired(paths, bundle, token_endpoint):
-    store = TokenStore.for_account(paths, ALIAS)
+    store = FernetFileStore.for_account(paths, ALIAS)
     store.save(_expired(bundle))
     token_endpoint.rotate(REFRESH, count=False)  # spent elsewhere; nothing newer saved here
     client = XClient(store, transport=token_endpoint.transport())
@@ -383,7 +411,7 @@ async def test_genuinely_revoked_refresh_token_is_auth_expired(paths, bundle, to
 
 
 async def test_refresh_does_not_clobber_a_concurrent_login(paths, bundle, token_endpoint):
-    store = TokenStore.for_account(paths, ALIAS)
+    store = FernetFileStore.for_account(paths, ALIAS)
     store.save(_expired(bundle))
     relogin = TokenBundle(
         access_token="access-relogin-QQQQ",
@@ -407,8 +435,8 @@ async def test_refresh_does_not_clobber_a_concurrent_login(paths, bundle, token_
 
 
 async def test_insecure_storage_is_not_auth_expired(paths, authed, fake_x):
-    os.chmod(TokenStore.for_account(paths, ALIAS).token_file, 0o644)
-    client = XClient(TokenStore.for_account(paths, ALIAS), transport=fake_x.transport())
+    os.chmod(FernetFileStore.for_account(paths, ALIAS).token_file, 0o644)
+    client = XClient(FernetFileStore.for_account(paths, ALIAS), transport=fake_x.transport())
     try:
         with pytest.raises(PulsarError) as exc:
             await client.me()
@@ -515,7 +543,7 @@ async def test_401_after_another_process_rotated_retries_without_refreshing(stor
 
 
 async def test_refresh_carries_the_binding_forward(paths, bundle, fake_x):
-    store = TokenStore.for_account(paths, ALIAS)
+    store = FernetFileStore.for_account(paths, ALIAS)
     bound = store.rebind(_expired(bundle))
     client = XClient(store, transport=fake_x.transport())
     try:
@@ -530,3 +558,162 @@ async def test_client_delete_refuses_a_path_as_an_id(client, authed, fake_x):
     with pytest.raises(PulsarError) as exc:
         await client.delete_post("../users/1/retweets/555")
     assert exc.value.code == "invalid_argument" and fake_x.requests == []
+
+
+async def test_a_failed_save_after_rotation_is_internal_not_outcome_unknown(
+    store, bundle, token_endpoint, monkeypatch
+):
+    store.save(_expired(bundle))
+
+    def disk_full(*_a, **_k):
+        raise OSError("No space left on device")
+
+    monkeypatch.setattr("pulsar.core.store.write_private_atomic", disk_full)
+    client = XClient(store, transport=token_endpoint.transport())
+    try:
+        with pytest.raises(PulsarError) as exc:
+            await client.access_token()
+    finally:
+        await client.aclose()
+    assert exc.value.code == "internal" and "OSError" in exc.value.message
+    assert "pulsar auth login --account x:constworks" in exc.value.message
+
+
+async def test_store_io_runs_off_the_event_loop(store, authed, fake_x, monkeypatch):
+    loop_thread = threading.get_ident()
+    seen: list[int] = []
+    real = store.load
+
+    def load():
+        seen.append(threading.get_ident())
+        return real()
+
+    monkeypatch.setattr(store, "load", load)
+    client = XClient(store, transport=fake_x.transport())
+    try:
+        await client.me()
+    finally:
+        await client.aclose()
+    assert seen and loop_thread not in seen
+
+
+# -- the OAuth loopback callback (STD-05 §R16, §R17) ------------------------------------
+
+
+@pytest.fixture
+def callback():
+    """A callback server on an ephemeral loopback port, serving in a thread."""
+    server = CallbackServer("the-state", port=0)
+    result: dict[str, object] = {}
+
+    def serve():
+        try:
+            result["query"] = server.wait(10)
+        except PulsarError as exc:
+            result["error"] = exc
+
+    thread = threading.Thread(target=serve)
+    thread.start()
+    yield server, thread, result
+    server.result = server.result or {"stop": ["test over"]}
+    thread.join(10)
+    server.server_close()
+
+
+def _get(server, path, *, host="default", origin=None):
+    conn = http.client.HTTPConnection("127.0.0.1", server.port, timeout=5)
+    conn.putrequest("GET", path, skip_host=True)
+    if host == "default":
+        conn.putheader("Host", f"127.0.0.1:{server.port}")
+    elif host is not None:
+        conn.putheader("Host", host)
+    if origin is not None:
+        conn.putheader("Origin", origin)
+    conn.endheaders()
+    status = conn.getresponse().status
+    conn.close()
+    return status
+
+
+@pytest.mark.parametrize(
+    ("host", "status"),
+    [
+        (None, 400),
+        ("evil.example:{port}", 421),
+        ("127.0.0.1", 421),
+        ("127.0.0.1:1", 421),
+        ("localhost.evil.example:{port}", 421),
+        ("127.0.0.1:{port}.evil", 421),
+    ],
+)
+def test_callback_refuses_a_foreign_or_missing_host(callback, host, status):
+    server, thread, _ = callback
+    host = host.format(port=server.port) if host else None
+    assert _get(server, "/callback?state=the-state&code=c1", host=host) == status
+    assert server.result is None and thread.is_alive(), "nothing recorded, still waiting"
+
+
+@pytest.mark.parametrize(
+    "origin",
+    ["http://evil.example", "http://127.0.0.1:1", "https://127.0.0.1:{port}", "null"],
+)
+def test_callback_refuses_a_foreign_origin(callback, origin):
+    server, thread, _ = callback
+    origin = origin.format(port=server.port)
+    assert _get(server, "/callback?state=the-state&code=c1", origin=origin) == 403
+    assert server.result is None and thread.is_alive()
+
+
+def test_a_wrong_state_does_not_end_the_wait(callback):
+    server, thread, result = callback
+    assert _get(server, "/callback?state=forged&code=evil") == 400
+    assert _get(server, "/callback?code=evil") == 400
+    assert server.result is None and thread.is_alive()
+    assert (
+        _get(server, "/callback?state=the-state&code=real", host=f"localhost:{server.port}") == 200
+    )
+    thread.join(5)
+    assert result["query"] == {"state": ["the-state"], "code": ["real"]}
+
+
+def test_a_matching_origin_is_accepted(callback):
+    server, thread, result = callback
+    origin = f"http://127.0.0.1:{server.port}"
+    assert _get(server, "/callback?state=the-state&code=c2", origin=origin) == 200
+    thread.join(5)
+    assert result["query"]["code"] == ["c2"]
+
+
+def test_a_denial_with_the_right_state_is_recorded(callback):
+    server, thread, result = callback
+    assert _get(server, "/callback?state=the-state&error=access_denied") == 400
+    thread.join(5)
+    assert result["query"]["error"] == ["access_denied"]
+
+
+def test_login_sends_the_consent_url_to_notify_not_stdout(monkeypatch, capsys):
+    shown: list[str] = []
+
+    class Answered(CallbackServer):
+        def wait(self, timeout):
+            return {"state": [self.expected_state], "error": ["access_denied"]}
+
+    monkeypatch.setattr(auth, "CallbackServer", lambda state: Answered(state, port=0))
+    with pytest.raises(PulsarError) as exc:
+        auth.authorize("client-xyz", open_browser=False, notify=shown.append)
+    assert exc.value.message == "X denied authorization: access_denied"
+    assert len(shown) == 1 and "https://x.com/i/oauth2/authorize?" in shown[0]
+    assert capsys.readouterr().out == ""
+
+
+def test_the_default_notify_writes_to_stderr(monkeypatch, capsys):
+    class Answered(CallbackServer):
+        def wait(self, timeout):
+            return {"state": [self.expected_state], "error": ["x" * 2000]}
+
+    monkeypatch.setattr(auth, "CallbackServer", lambda state: Answered(state, port=0))
+    with pytest.raises(PulsarError) as exc:
+        auth.authorize("client-xyz", open_browser=False)
+    out, err = capsys.readouterr()
+    assert out == "" and "https://x.com/i/oauth2/authorize?" in err
+    assert "[truncated 1500 of 2000 characters]" in exc.value.message

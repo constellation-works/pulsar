@@ -7,6 +7,14 @@ a token for another account than the one named is refused
 (``account_mismatch``) and never written, which is what stops the wrong
 token being stored under the right name (2026-09-16). The MCP server never
 runs this.
+
+The loopback listener is not trusted because it is loopback (STD-05 §R16,
+§R17): a request counts only with a ``Host`` naming the exact authority it
+bound (``127.0.0.1:<port>`` or ``localhost:<port>``), no ``Origin`` other than
+that same loopback origin, and the ``state`` this login sent. Anything else
+is refused and recorded nowhere, so another local page or process cannot end
+the wait or feed in a code. The consent URL goes to ``notify`` (stderr by
+default), never to stdout.
 """
 
 from __future__ import annotations
@@ -15,9 +23,11 @@ import base64
 import hashlib
 import json
 import secrets
+import sys
 import threading
 import time
 import webbrowser
+from collections.abc import Callable
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlencode, urlparse
@@ -27,12 +37,13 @@ import httpx
 from ...core.accounts import Account, AccountRegistry, canonical_alias, check_handle
 from ...core.adapter import Identity
 from ...core.errors import API_ERROR, INVALID_ARGUMENT, PulsarError
-from ...core.fsutil import write_private_atomic
+from ...core.fsutil import require_private, write_private_atomic
 from ...core.jsonx import as_object, obj
 from ...core.paths import Paths
 from ...core.plan import alias_provider
 from ...core.settings import Settings
 from ...core.store import TokenBundle
+from .client import bounded_text
 from .config import (
     CALLBACK_HOST,
     CALLBACK_PATH,
@@ -100,55 +111,101 @@ def exchange_code(
         )
     if resp.status_code >= 400:
         raise PulsarError(
-            API_ERROR, f"token exchange failed (HTTP {resp.status_code})", detail=resp.text[:500]
+            API_ERROR,
+            f"token exchange failed (HTTP {resp.status_code})",
+            detail=bounded_text(resp.text),
         )
     return TokenBundle.from_token_response(resp.json(), client_id=client_id)
 
 
+class CallbackServer(HTTPServer):
+    """The loopback listener for one login: accepts only the redirect it is waiting for."""
+
+    def __init__(self, state: str, *, host: str = CALLBACK_HOST, port: int = CALLBACK_PORT) -> None:
+        super().__init__((host, port), _Callback)
+        self.expected_state = state
+        self.result: dict[str, list[str]] | None = None
+        self.timeout = 1.0
+        self.port: int = self.server_address[1]
+        # The exact authorities the browser may name: what we bound, nothing wider.
+        self.authorities = frozenset({f"127.0.0.1:{self.port}", f"localhost:{self.port}"})
+
+    def wait(self, timeout: float) -> dict[str, list[str]]:
+        """Serve until a request with the right ``state`` arrives; ``api_error`` on timeout."""
+        deadline = time.monotonic() + timeout
+        while self.result is None and time.monotonic() < deadline:
+            self.handle_request()
+        if self.result is None:
+            raise PulsarError(API_ERROR, "timed out waiting for the browser redirect")
+        return self.result
+
+
 class _Callback(BaseHTTPRequestHandler):
-    result: dict[str, list[str]] | None = None
-    expected_state: str = ""
+    server: CallbackServer  # pyright: ignore[reportIncompatibleVariableOverride]
+
+    def _reply(self, status: int, body: bytes) -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def do_GET(self) -> None:  # noqa: N802 — http.server API
+        host = (self.headers.get("Host") or "").strip().lower()
+        if not host:
+            self._reply(400, b"pulsar: missing Host header.")
+            return
+        if host not in self.server.authorities:
+            self._reply(421, b"pulsar: this listener only answers to its own loopback address.")
+            return
+        origin = self.headers.get("Origin")
+        if origin is not None and origin.strip().lower() != f"http://{host}":
+            self._reply(403, b"pulsar: cross-origin requests are refused.")
+            return
         parsed = urlparse(self.path)
         if parsed.path != CALLBACK_PATH:
-            self.send_response(404)
-            self.end_headers()
+            self._reply(404, b"pulsar: not found.")
             return
         query = parse_qs(parsed.query)
-        ok = query.get("state", [""])[0] == self.expected_state and "code" in query
-        type(self).result = query
-        self.send_response(200 if ok else 400)
-        self.send_header("Content-Type", "text/plain; charset=utf-8")
-        self.end_headers()
-        self.wfile.write(
-            b"pulsar: authorization received, you can close this tab."
-            if ok
-            else b"pulsar: authorization failed or state mismatch; check the terminal."
-        )
+        if not secrets.compare_digest(query.get("state", [""])[0], self.server.expected_state):
+            # Not our redirect: refuse it and keep waiting for the real one.
+            self._reply(400, b"pulsar: state mismatch; this is not the login in progress.")
+            return
+        self.server.result = query
+        if "code" in query:
+            self._reply(200, b"pulsar: authorization received, you can close this tab.")
+        else:
+            self._reply(400, b"pulsar: authorization failed; check the terminal.")
 
     def log_message(self, format: str, *args: object) -> None:  # keep the terminal quiet
         return
 
 
 def wait_for_callback(state: str, *, timeout: float = 300.0) -> dict[str, list[str]]:
-    _Callback.result = None
-    _Callback.expected_state = state
-    server = HTTPServer((CALLBACK_HOST, CALLBACK_PORT), _Callback)
-    server.timeout = 1.0
-    deadline = time.time() + timeout
+    server = CallbackServer(state)
     try:
-        while _Callback.result is None and time.time() < deadline:
-            server.handle_request()
+        return server.wait(timeout)
     finally:
         server.server_close()
-    if _Callback.result is None:
-        raise PulsarError(API_ERROR, "timed out waiting for the browser redirect")
-    return _Callback.result
+
+
+def notify_stderr(message: str) -> None:
+    """The default ``notify``: the human reads the consent URL on stderr."""
+    sys.stderr.write(message + "\n")
+    sys.stderr.flush()
 
 
 def _client_records(paths: Paths) -> dict[str, dict[str, str]]:
-    """``client.json`` by provider. The phase 1 file was X's record at the top level."""
+    """``client.json`` by provider. The phase 1 file was X's record at the top level.
+
+    A symlinked, foreign or group/world-writable file is ``insecure_storage``:
+    the client id decides which app the human authorizes.
+    """
+    require_private(
+        paths.client_file,
+        readable=True,
+        consequence="pulsar will not use an OAuth client id others could have changed",
+    )
     try:
         data = obj(json.loads(paths.client_file.read_text()))
     except (FileNotFoundError, ValueError):
@@ -164,12 +221,16 @@ def _client_records(paths: Paths) -> dict[str, dict[str, str]]:
 
 
 def save_client_id(paths: Paths, client_id: str) -> None:
-    """Remember X's OAuth client id: one per provider, shared by every account."""
-    paths.ensure()
-    records = _client_records(paths)
-    records[PROVIDER] = {"client_id": client_id, "redirect_uri": callback_url()}
-    doc = json.dumps(records, indent=2, sort_keys=True) + "\n"
-    write_private_atomic(paths.client_file, doc.encode())
+    """Remember X's OAuth client id: one per provider, shared by every account.
+
+    The read-modify-write holds ``accounts.lock`` so two logins for different
+    providers cannot drop each other's record.
+    """
+    with AccountRegistry(paths).locked_update("client.json update"):
+        records = _client_records(paths)
+        records[PROVIDER] = {"client_id": client_id, "redirect_uri": callback_url()}
+        doc = json.dumps(records, indent=2, sort_keys=True) + "\n"
+        write_private_atomic(paths.client_file, doc.encode())
 
 
 def load_client_id(paths: Paths) -> str | None:
@@ -181,18 +242,24 @@ def authorize(
     *,
     open_browser: bool = True,
     transport: httpx.BaseTransport | None = None,
+    notify: Callable[[str], None] = notify_stderr,
 ) -> TokenBundle:
     """The browser half: consent, callback, code exchange. Stores nothing."""
     pkce = Pkce.generate()
     url = build_authorize_url(client_id, pkce)
-    print(f"Open this URL and approve as the account that should post:\n\n  {url}\n")
-    if open_browser:
-        threading.Thread(target=webbrowser.open, args=(url,), daemon=True).start()
-    query = wait_for_callback(pkce.state)
-    if query.get("state", [""])[0] != pkce.state:
-        raise PulsarError(API_ERROR, "OAuth state mismatch; aborting")
+    server = CallbackServer(pkce.state)  # listening before the human can be redirected
+    try:
+        notify(f"Open this URL and approve as the account that should post:\n\n  {url}\n")
+        if open_browser:
+            threading.Thread(target=webbrowser.open, args=(url,), daemon=True).start()
+        query = server.wait(300.0)
+    finally:
+        server.server_close()
     if "error" in query:
-        raise PulsarError(API_ERROR, f"X denied authorization: {query['error'][0]}")
+        reason = bounded_text(query["error"][0])
+        raise PulsarError(API_ERROR, f"X denied authorization: {reason}")
+    if "code" not in query:
+        raise PulsarError(API_ERROR, "the browser redirect carried no authorization code")
     return exchange_code(client_id, query["code"][0], pkce, transport=transport)
 
 
@@ -275,8 +342,12 @@ def login(
     *,
     open_browser: bool = True,
     transport: httpx.BaseTransport | None = None,
+    notify: Callable[[str], None] = notify_stderr,
 ) -> Account:
-    """``pulsar auth login --account x:<handle>``: consent in a browser, verify, bind."""
+    """``pulsar auth login --account x:<handle>``: consent in a browser, verify, bind.
+
+    ``notify`` shows the human the consent URL (default: stderr).
+    """
     require_x_alias(alias)  # refuse a bad alias before sending the human to X
-    bundle = authorize(client_id, open_browser=open_browser, transport=transport)
+    bundle = authorize(client_id, open_browser=open_browser, transport=transport, notify=notify)
     return complete_login(paths, settings, alias, client_id, bundle, transport=transport)

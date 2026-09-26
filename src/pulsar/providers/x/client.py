@@ -1,7 +1,11 @@
 """Thin async client over the X v2 API with token refresh baked in.
 
 The transport is injectable so tests run against ``httpx.MockTransport``
-and never touch the network.
+and never touch the network. Store reads and writes (Fernet, fsync) run in a
+worker thread so a refresh never blocks the event loop; the per-client
+``asyncio.Lock`` and the store's cross-process lock keep one refresh in
+flight per account. Text X sends back is embedded in error messages only
+through ``bounded_text`` (STD-03 §R15).
 """
 
 from __future__ import annotations
@@ -18,6 +22,7 @@ from ...core.errors import (
     API_ERROR,
     DUPLICATE,
     FORBIDDEN,
+    INTERNAL,
     INVALID_ARGUMENT,
     INVALID_MEDIA,
     NOT_FOUND,
@@ -51,9 +56,19 @@ REFRESH_AHEAD_SECONDS = 120
 IMAGE_CHUNK_BYTES = 1024 * 1024
 VIDEO_CHUNK_BYTES = 4 * 1024 * 1024
 PROCESSING_TIMEOUT_SECONDS = 300
+# The most provider-supplied text an error message embeds.
+PROVIDER_TEXT_LIMIT = 500
 
 
 _X_ID = re.compile(r"[0-9]{1,19}")
+
+
+def bounded_text(value: object, limit: int = PROVIDER_TEXT_LIMIT) -> str:
+    """``value`` as text of at most ``limit`` characters, visibly marked when cut."""
+    text = str(value)
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}… [truncated {len(text) - limit} of {len(text)} characters]"
 
 
 def check_x_id(value: object, field: str) -> str:
@@ -81,7 +96,7 @@ def _error_detail(resp: httpx.Response) -> Any:
     try:
         body = resp.json()
     except ValueError:
-        return resp.text[:500]
+        return bounded_text(resp.text)
     if (fields := as_object(body)) is not None:
         # X returns either {"title","detail","type"} or {"errors":[...]}
         return {
@@ -143,11 +158,19 @@ class XClient:
 
     # -- auth ---------------------------------------------------------------
 
+    async def _load(self) -> TokenBundle | None:
+        return await asyncio.to_thread(self.store.load)
+
     async def _bundle(self) -> TokenBundle:
-        bundle = self.store.load()
+        bundle = await self._load()
         if bundle is None:
-            raise AuthExpired("no X authorization on this host; run `pulsar auth login`")
+            raise AuthExpired(
+                f"no X authorization is stored for this account; {self.store.reauth_hint()}"
+            )
         return bundle
+
+    def _expired(self, what: str) -> AuthExpired:
+        return AuthExpired(f"{what}; {self.store.reauth_hint()}")
 
     def _expiring(self, bundle: TokenBundle) -> bool:
         return self._now() + REFRESH_AHEAD_SECONDS >= bundle.expires_at
@@ -174,14 +197,14 @@ class XClient:
                 except PulsarError:
                     raise
                 except Exception as exc:
-                    # An unreadable 200, or a save that failed. Nothing but the
-                    # token POST was sent, so a write that got here did not
-                    # happen: never let this surface as outcome_unknown.
+                    # A save that failed, or a bug. Nothing but the token POST
+                    # was sent, so a write that got here did not happen: never
+                    # let this surface as outcome_unknown.
                     raise PulsarError(
-                        API_ERROR,
-                        f"token refresh failed: {exc.__class__.__name__}. If later calls "
-                        "return auth_expired, a human must re-run `pulsar auth login`",
-                        retryable=True,
+                        INTERNAL,
+                        f"token refresh failed inside pulsar: {exc.__class__.__name__}. X may "
+                        "have rotated the token pair already; if later calls return "
+                        f"auth_expired, {self.store.reauth_hint()}",
                     ) from exc
 
     async def _refresh_locked(self, stale: TokenBundle) -> TokenBundle:
@@ -192,32 +215,44 @@ class XClient:
         # to have been rotated by a process that ignored the lock.
         for _ in range(2):
             if not current.refresh_token:
-                raise AuthExpired("no refresh token stored; run `pulsar auth login`")
+                raise self._expired("no refresh token is stored for this account")
             resp = await self._post_refresh(current)
             if resp.status_code in (400, 401, 403):
-                newer = self.store.load()
+                newer = await self._load()
                 if newer is None or newer.refresh_token == current.refresh_token:
-                    raise AuthExpired()
+                    raise self._expired(
+                        f"X refused the refresh token (HTTP {resp.status_code}): it was revoked "
+                        "or has expired"
+                    )
                 if not self._expiring(newer):
                     return newer
                 current = newer
                 continue
             if resp.status_code >= 400:
                 raise map_http_error(resp)
-            fresh = TokenBundle.from_token_response(
-                resp.json(), client_id=current.client_id, now=self._now()
-            )
+            try:
+                fresh = TokenBundle.from_token_response(
+                    resp.json(), client_id=current.client_id, now=self._now()
+                )
+            except (ValueError, KeyError, TypeError) as exc:
+                # X answered 200 with something that is not a token pair.
+                raise PulsarError(
+                    API_ERROR,
+                    f"token refresh failed: X's answer was unreadable ({exc.__class__.__name__}). "
+                    f"If later calls return auth_expired, {self.store.reauth_hint()}",
+                    retryable=True,
+                ) from exc
             if fresh.refresh_token is None:
                 fresh.refresh_token = current.refresh_token
             fresh.binding_id = current.binding_id
             try:
-                self.store.save(fresh, expected_previous=current)
+                await asyncio.to_thread(self.store.save, fresh, expected_previous=current)
             except CredentialConflict:
                 # Login and logout hold the lock too, so this is a writer that
                 # ignored it; the stored binding wins over our rotation.
                 return await self._bundle()
             return fresh
-        raise AuthExpired()
+        raise self._expired("X refused the refresh token twice")
 
     async def _post_refresh(self, bundle: TokenBundle) -> httpx.Response:
         try:
@@ -286,7 +321,7 @@ class XClient:
                 **kwargs,
             )
         if resp.status_code == 401:
-            raise AuthExpired()
+            raise self._expired("X refused the access token again right after a refresh")
         if resp.status_code >= 500 and non_idempotent:
             raise OutcomeUnknown(
                 f"X answered HTTP {resp.status_code}",
@@ -364,7 +399,9 @@ class XClient:
         else:
             state = str(obj(info).get("state", "succeeded"))
             if state not in ("succeeded", "pending", "in_progress"):
-                raise MediaProcessingError(state, f"X media processing state: {state}", detail=info)
+                raise MediaProcessingError(
+                    state, f"X media processing state: {bounded_text(state)}", detail=info
+                )
         return media_id, state
 
     async def _wait_for_processing(self, media_id: str, info: dict[str, Any]) -> str:
@@ -379,12 +416,12 @@ class XClient:
                 message = fields.get("message") if fields is not None else str(error)
                 raise MediaProcessingError(
                     state,
-                    f"X media processing failed: {message or 'no detail from X'}",
+                    f"X media processing failed: {bounded_text(message or 'no detail from X')}",
                     detail=info,
                 )
             if state not in ("pending", "in_progress"):
                 raise MediaProcessingError(
-                    "unknown", f"X media processing state: {state}", detail=info
+                    "unknown", f"X media processing state: {bounded_text(state)}", detail=info
                 )
             remaining = deadline - self._monotonic()
             if remaining <= 0:
@@ -404,10 +441,3 @@ class XClient:
                     "unknown", "X media status has no processing_info", detail=body
                 )
             info = next_info
-
-    async def upload_image(
-        self, data: bytes, mime: str, *, chunk_size: int = IMAGE_CHUNK_BYTES
-    ) -> str:
-        """Compatibility wrapper for image callers."""
-        media_id, _ = await self.upload_media(data, mime, chunk_size=chunk_size)
-        return media_id
