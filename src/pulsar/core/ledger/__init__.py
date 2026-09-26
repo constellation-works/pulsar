@@ -38,11 +38,18 @@ credentials.
 ``writes.jsonl`` is an export: every terminal transition appends one line
 there through ``WriteLog.export``. The ledger is the source of truth.
 
-Layout: ``records`` (states and row values), ``keys`` (idempotency keys and
-digests), ``schema`` (DDL, migrations, transactions), ``queries`` (reads),
-``single`` (the legacy single-request API), ``plans`` (the plan API),
-``imports`` (historic rows) and ``facade`` (``Ledger``, which owns the
-connection). Import from this package, not from the modules.
+``Ledger(paths, read_only=True)`` serves reports: it never creates,
+migrates or locks anything, and refuses a file older than this pulsar with
+the remedy (``pulsar migrate``). Every connection re-reads the schema
+version, so a running process stops writing once a newer pulsar migrates
+the file.
+
+Layout: ``records`` (``State`` and row values), ``keys`` (idempotency keys
+and digests), ``text`` (the redaction hook for free text), ``schema`` (DDL,
+migrations, transactions), ``connection`` (read-write and read-only opens),
+``queries`` (reads), ``single`` (the legacy single-request API), ``plans``
+(the plan API), ``imports`` (historic rows) and ``facade`` (``Ledger``).
+Import from this package, not from the modules.
 """
 
 from __future__ import annotations
@@ -61,6 +68,7 @@ from .records import (
     PARTIAL,
     PENDING,
     PUBLISHED,
+    REARMABLE_TOOLS,
     RESOLVED_ABSENT,
     ROW_STATES,
     SKIP_TOOL,
@@ -72,8 +80,11 @@ from .records import (
     ItemIntent,
     ItemRecord,
     PlanRecord,
+    State,
     WriteRecord,
     derive_state,
+    is_ambiguous,
+    is_settled,
     parse_ts,
 )
 from .schema import BUSY_TIMEOUT_MS, SCHEMA_VERSION
@@ -92,6 +103,7 @@ __all__ = [
     "PARTIAL",
     "PENDING",
     "PUBLISHED",
+    "REARMABLE_TOOLS",
     "RESOLVED_ABSENT",
     "ROW_STATES",
     "SCHEMA_VERSION",
@@ -106,11 +118,14 @@ __all__ = [
     "ItemRecord",
     "Ledger",
     "PlanRecord",
+    "State",
     "WriteRecord",
     "check_key",
     "check_note",
     "default_key",
     "derive_state",
+    "is_ambiguous",
+    "is_settled",
     "parse_ts",
     "request_digest",
 ]

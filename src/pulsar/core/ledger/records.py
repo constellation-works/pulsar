@@ -7,29 +7,115 @@ import sqlite3
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any
+from enum import StrEnum
+from typing import Any, assert_never
 
+from ..errors import INTERNAL, INVALID_ARGUMENT, PulsarError
 from ..jsonx import as_list, obj
 
-PENDING = "pending"
-SUBMITTING = "submitting"
-PUBLISHED = "published"
-PARTIAL = "partial"
-FAILED = "failed"
-UNKNOWN = "unknown"
-SKIPPED = "skipped"
+
+class State(StrEnum):
+    """A row's or an item's state, stored and exported as its value.
+
+    Rows use every state; items never ``partial`` or ``skipped`` (the
+    schema's CHECK constraints enforce both). Branch on a state with an
+    exhaustive ``match`` ending in ``assert_never`` (STD-02@2 §R27), so a new
+    state fails type checking at every decision it affects.
+    """
+
+    PENDING = "pending"
+    SUBMITTING = "submitting"
+    PUBLISHED = "published"
+    PARTIAL = "partial"
+    FAILED = "failed"
+    UNKNOWN = "unknown"
+    SKIPPED = "skipped"
+
+
+# The names importers used before ``State`` existed; each is the member itself.
+PENDING = State.PENDING
+SUBMITTING = State.SUBMITTING
+PUBLISHED = State.PUBLISHED
+PARTIAL = State.PARTIAL
+FAILED = State.FAILED
+UNKNOWN = State.UNKNOWN
+SKIPPED = State.SKIPPED
+
+
+def is_settled(state: State) -> bool:
+    """The write's outcome is known and nothing about it is in flight.
+
+    False for a row still being published (``pending``, ``submitting``) and
+    for one only reconcile can settle (``unknown``). Reconcile's per-row
+    result ``changed`` is not a ledger state (reconcile left the row alone),
+    so callers reading reconcile results treat it as unsettled themselves.
+    """
+    match state:
+        case State.PUBLISHED | State.PARTIAL | State.FAILED | State.SKIPPED:
+            return True
+        case State.PENDING | State.SUBMITTING | State.UNKNOWN:
+            return False
+        case _:
+            assert_never(state)
+
+
+def is_ambiguous(state: State) -> bool:
+    """A request may have left with no recorded outcome: reconcile's to settle."""
+    match state:
+        case State.SUBMITTING | State.UNKNOWN:
+            return True
+        case State.PENDING | State.PUBLISHED | State.PARTIAL | State.FAILED | State.SKIPPED:
+            return False
+        case _:
+            assert_never(state)
+
+
+def is_open(state: State) -> bool:
+    """A row still being published: its pending items may yet be sent."""
+    match state:
+        case State.PENDING | State.SUBMITTING:
+            return True
+        case State.PUBLISHED | State.PARTIAL | State.FAILED | State.UNKNOWN | State.SKIPPED:
+            return False
+        case _:
+            assert_never(state)
+
+
+def is_committed(state: State) -> bool:
+    """An item that may have cost money: sent, or of unknown outcome."""
+    match state:
+        case State.SUBMITTING | State.PUBLISHED | State.UNKNOWN:
+            return True
+        case State.PENDING | State.FAILED:
+            return False
+        case State.PARTIAL | State.SKIPPED:  # row-only: no item is ever in these
+            return False
+        case _:
+            assert_never(state)
+
+
+def parse_state(value: object, *, where: str) -> State:
+    """A stored state as a ``State``; anything else is a ledger invariant break."""
+    try:
+        return State(str(value))
+    except ValueError:
+        raise PulsarError(
+            INTERNAL, f"ledger {where} has state {value!r}, which this pulsar does not know"
+        ) from None
+
+
 # Outcomes of the single-request API (``claim`` / ``publish`` / ``fail``).
 TERMINAL_STATES = frozenset({PUBLISHED, FAILED, UNKNOWN})
-ROW_STATES = frozenset({PENDING, SUBMITTING, PUBLISHED, PARTIAL, FAILED, UNKNOWN, SKIPPED})
+ROW_STATES = frozenset(State)
 ITEM_STATES = frozenset({PENDING, SUBMITTING, PUBLISHED, FAILED, UNKNOWN})
 # Row states ``finish`` can land on; each appends a writes.jsonl line.
 FINISHED_STATES = frozenset({PUBLISHED, PARTIAL, FAILED, UNKNOWN})
 # Item states that may have cost money: counted by ``usage``.
-COMMITTED_ITEM_STATES = (SUBMITTING, PUBLISHED, UNKNOWN)
+COMMITTED_ITEM_STATES = tuple(s for s in State if is_committed(s))
 # Rows whose ``pending`` items are still going to be sent: those items are
 # reserved against the budget from the claim on, so a concurrent claim cannot
 # spend what a thread in progress was admitted with.
-OPEN_ROW_STATES = (PENDING, SUBMITTING)
+OPEN_ROW_STATES = tuple(s for s in State if is_open(s))
 
 # Stored on an item that reconcile proved was never published. Ledger-only:
 # no tool returns it as an error code.
@@ -44,12 +130,21 @@ SKIP_TOOL = "skip"
 # as one item so ``usage`` counts it.
 LEGACY_PROVIDER = "x"
 LEGACY_ITEM_TOOLS = frozenset({"create_post"})
+# Legacy tools whose request has no duplicate effect worth guarding: DELETE
+# is idempotent at X, and a second upload only leaves an orphaned media id
+# that expires. ``claim(stale_after=...)`` re-arms a ``submitting`` row of
+# theirs that a crashed sender left behind, instead of blocking its key
+# forever (reconcile never sees these rows: they have no items). Never
+# ``create_post``: a second post is a paid duplicate.
+REARMABLE_TOOLS = frozenset({"delete_post", "upload_media"})
 
 
 def iso(when: datetime) -> str:
     """The one timestamp format the ledger stores, so strings compare as times."""
     if when.tzinfo is None:
-        raise ValueError("ledger timestamps must be timezone-aware")
+        raise PulsarError(
+            INVALID_ARGUMENT, f"ledger timestamps must be timezone-aware, not {when.isoformat()}"
+        )
     return when.astimezone(UTC).isoformat(timespec="milliseconds")
 
 
@@ -62,7 +157,7 @@ def parse_ts(value: str) -> datetime:
 class WriteRecord:
     idempotency_key: str
     tool: str
-    state: str
+    state: State
     request_digest: str
     account_user_id: str | None = None
     account_handle: str | None = None
@@ -84,7 +179,7 @@ class WriteRecord:
         return cls(
             idempotency_key=row["idempotency_key"],
             tool=row["tool"],
-            state=row["state"],
+            state=parse_state(row["state"], where=f"row {row['idempotency_key']!r}"),
             request_digest=row["request_digest"],
             account_user_id=row["account_user_id"],
             account_handle=row["account_handle"],
@@ -128,7 +223,7 @@ class ItemIntent:
 @dataclass(frozen=True)
 class ItemRecord:
     idx: int
-    state: str
+    state: State
     text_sha256: str | None = None
     fingerprint: str | None = None
     est_cost_usd: float = 0.0
@@ -145,7 +240,7 @@ class ItemRecord:
     def from_row(cls, row: sqlite3.Row) -> ItemRecord:
         return cls(
             idx=row["idx"],
-            state=row["state"],
+            state=parse_state(row["state"], where=f"item {row['write_id']}/{row['idx']}"),
             text_sha256=row["text_sha256"],
             fingerprint=row["fingerprint"],
             est_cost_usd=float(row["est_cost_usd"]),
@@ -183,7 +278,7 @@ class PlanRecord:
 
     key: str
     tool: str
-    state: str
+    state: State
     request_digest: str
     provider: str | None = None
     account_alias: str | None = None
@@ -207,7 +302,7 @@ class PlanRecord:
         return cls(
             key=row["idempotency_key"],
             tool=row["tool"],
-            state=row["state"],
+            state=parse_state(row["state"], where=f"row {row['idempotency_key']!r}"),
             request_digest=row["request_digest"],
             provider=row["provider"],
             account_alias=row["account_alias"],
@@ -256,13 +351,33 @@ class PlanRecord:
         }
 
 
-def derive_state(items: Sequence[ItemRecord]) -> str:
-    """A plan row's state from its items' (see the package docstring)."""
-    states = [i.state for i in items]
-    if states and all(s == PUBLISHED for s in states):
-        return PUBLISHED
-    if any(s in (UNKNOWN, SUBMITTING) for s in states):
+def derive_state(items: Sequence[ItemRecord]) -> State:
+    """A plan row's state from its items' (see the package docstring).
+
+    All published -> published; any ambiguous (unknown, or submitting with
+    no recorded outcome) -> unknown; some published and the rest failed or
+    pending -> partial; none published, or no items -> failed.
+    """
+    published = ambiguous = unpublished = 0
+    for item in items:
+        state = item.state
+        match state:
+            case State.PUBLISHED:
+                published += 1
+            case State.UNKNOWN | State.SUBMITTING:
+                ambiguous += 1
+            case State.PENDING | State.FAILED:
+                unpublished += 1
+            case State.PARTIAL | State.SKIPPED:
+                raise PulsarError(
+                    INTERNAL, f"post {item.idx} is {state}, a state only a row can be in"
+                )
+            case _:
+                assert_never(state)
+    if ambiguous:
         return UNKNOWN
-    if any(s == PUBLISHED for s in states):
+    if published and not unpublished:
+        return PUBLISHED
+    if published:
         return PARTIAL
     return FAILED

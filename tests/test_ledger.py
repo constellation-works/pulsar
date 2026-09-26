@@ -1,7 +1,8 @@
-"""The write ledger: idempotency, outcome classification, persistence, export.
+"""The write ledger through the legacy MCP tools: idempotency, outcome
+classification, persistence and export as a tool contract.
 
-Driven through a real MCP session where the behaviour is a tool contract,
-and against ``Ledger`` directly for the storage properties.
+The storage properties are tested against ``Ledger`` directly in the
+``test_ledger_*`` modules, which share the helpers at the end of this one.
 """
 
 from __future__ import annotations
@@ -10,12 +11,9 @@ import base64
 import contextlib
 import hashlib
 import json
-import multiprocessing
 import sqlite3
 import stat
-import threading
-from datetime import UTC, datetime, timedelta, timezone
-from pathlib import Path
+from datetime import UTC, datetime
 
 import anyio
 import httpx
@@ -23,16 +21,11 @@ import pytest
 from mcp.client._memory import InMemoryTransport
 from mcp.client.session import ClientSession
 
-import pulsar.core.ledger.facade as facade_mod
-from pulsar.core.errors import OUTCOME_UNKNOWN, OutcomeUnknown, PulsarError
+from pulsar.core.errors import OUTCOME_UNKNOWN
 from pulsar.core.ledger import (
     FAILED,
-    PARTIAL,
-    PENDING,
     PUBLISHED,
-    RESOLVED_ABSENT,
     SCHEMA_VERSION,
-    SKIPPED,
     SUBMITTING,
     UNKNOWN,
     AccountRef,
@@ -40,11 +33,7 @@ from pulsar.core.ledger import (
     Ledger,
     request_digest,
 )
-from pulsar.core.ledger.records import iso
 from pulsar.core.ledger.schema import SCHEMA_V1
-from pulsar.core.paths import Paths
-from pulsar.core.usage import Usage
-from pulsar.core.writelog import WriteLog
 from pulsar.surfaces.mcp import Runtime, build_server
 
 from .conftest import SECRETS
@@ -296,6 +285,15 @@ async def test_ledger_survives_a_new_runtime(paths, authed, flaky_x):
 
 async def test_two_runtimes_on_one_home_cannot_both_post(paths, authed, flaky_x):
     flaky_x.tweet_gate = anyio.Event()
+    arrived = anyio.Event()  # rt1's POST reached X: its row is claimed and in flight
+    handle = flaky_x.handle_async
+
+    async def spy(request):
+        if request.method == "POST" and request.url.path.endswith("/tweets"):
+            arrived.set()
+        return await handle(request)
+
+    flaky_x.handle_async = spy  # before the transports bind it
     rt1 = Runtime(paths, transport=flaky_x.transport())
     rt2 = Runtime(paths, transport=flaky_x.transport())
     args = {"text": "only once", "idempotency_key": "k-race"}
@@ -309,8 +307,7 @@ async def test_two_runtimes_on_one_home_cannot_both_post(paths, authed, flaky_x)
             async with anyio.create_task_group() as tg:
                 tg.start_soon(first)
                 with anyio.fail_after(5):
-                    while rt2.ledger.get("k-race") is None:
-                        await anyio.sleep(0.01)
+                    await arrived.wait()
                 # rt1 holds the key and its POST is in flight.
                 results["second"] = await call(s2, "create_post", args)
                 flaky_x.tweet_gate.set()
@@ -323,48 +320,6 @@ async def test_two_runtimes_on_one_home_cannot_both_post(paths, authed, flaky_x)
     assert results["first"]["ok"] is True
     assert results["third"] == {**results["first"], "replayed": True}
     assert len(flaky_x.posts()) == 1
-
-
-@pytest.mark.parametrize("trial", range(10))
-def test_concurrent_claims_from_many_processes_admit_exactly_one(tmp_path, trial):
-    """Separate Ledger objects stand in for processes; each opens its own connection.
-
-    Each trial starts from a new file, so the racers also race to create the
-    schema and switch it to WAL (which once failed with ``database is locked``).
-    """
-    paths = Paths(home=tmp_path / f"home-{trial}")
-    n = 8
-    barrier = threading.Barrier(n)
-    outcomes: list[str] = []
-    lock = threading.Lock()
-
-    def worker() -> None:
-        ledger = Ledger(paths)
-        barrier.wait()
-        try:
-            rec = ledger.claim(key="k", tool="create_post", digest="d", account=ME, caller="t")
-            result = rec.state
-        except OutcomeUnknown:
-            result = "blocked"
-        with lock:
-            outcomes.append(result)
-
-    threads = [threading.Thread(target=worker) for _ in range(n)]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
-    assert sorted(outcomes) == ["blocked"] * (n - 1) + [SUBMITTING]
-
-
-def test_key_from_another_account_is_a_conflict(paths):
-    ledger = Ledger(paths)
-    ledger.claim(key="k", tool="create_post", digest="d", account=ME, caller="t")
-    ledger.publish("k", post_id="1")
-    other = {"user_id": "999", "username": "someone"}
-    with pytest.raises(PulsarError) as exc:
-        ledger.claim(key="k", tool="create_post", digest="d", account=other, caller="t")
-    assert exc.value.code == "idempotency_conflict"
 
 
 # -- delete and upload ------------------------------------------------------------
@@ -406,7 +361,7 @@ async def test_upload_rows_record_media_facts_not_bytes(session, authed, flaky_x
         session, "upload_media", {"base64": base64.b64encode(data).decode(), "mime": "video/mp4"}
     )
     assert bad["code"] == "invalid_media"
-    ok_row, bad_row = rt.ledger.all()
+    ok_row, bad_row = (rt.ledger.get(r.key) for r in reversed(rt.ledger.history()))
     assert ok_row.tool == "upload_media" and ok_row.state == PUBLISHED
     assert ok_row.media_id == "710000"
     assert ok_row.meta == {"mime": "video/mp4", "bytes": len(data), "processing_state": "succeeded"}
@@ -427,7 +382,6 @@ async def test_schemas_mark_caller_advisory_and_document_the_key(session):
     for name in ("create_post", "delete_post"):
         props = by_name[name].input_schema["properties"]
         assert "replayed" in props["idempotency_key"]["description"]
-    assert "outcome_unknown" in by_name["create_post"].description
 
 
 async def test_jsonl_export_keeps_legacy_fields(session, authed, paths, monkeypatch):
@@ -441,13 +395,23 @@ async def test_jsonl_export_keeps_legacy_fields(session, authed, paths, monkeypa
     assert "first light" not in json.dumps(line)
 
 
-# == schema v2: plans, threads, usage =============================================
+# == shared by the test_ledger_* modules ============================================
 
 ACCT = AccountRef(alias="x:constworks", provider="x", user_id="1234567890", handle="constworks")
 OTHER = AccountRef(alias="x:someone", provider="x", user_id="999", handle="someone")
 DAY = datetime(2026, 9, 26, tzinfo=UTC)
 MONTH = datetime(2026, 9, 1, tzinfo=UTC)
 TEXTS = ["first of three", "second of three", "third of three"]
+
+
+class Clock:
+    """A settable clock for ``Ledger(clock=...)``: assign or advance ``now``."""
+
+    def __init__(self, now: datetime = datetime(2026, 9, 26, 12, 0, tzinfo=UTC)) -> None:
+        self.now = now
+
+    def __call__(self) -> datetime:
+        return self.now
 
 
 def sha(text: str) -> str:
@@ -495,16 +459,6 @@ def states(record):
     return [i.state for i in record.items]
 
 
-@pytest.fixture
-def clock(monkeypatch):
-    """The ledger's clock, settable: ``clock[0] = datetime(...)``."""
-    now = [datetime(2026, 9, 26, 12, 0, tzinfo=UTC)]
-    monkeypatch.setattr(facade_mod, "_now", lambda: iso(now[0]))
-    return now
-
-
-# -- migration ----------------------------------------------------------------------
-
 V1_COLUMNS = (
     "idempotency_key, tool, account_user_id, account_handle, caller, request_digest,"
     " text_sha256, state, post_id, media_id, url, error_code, error_message, retryable,"
@@ -539,575 +493,10 @@ def build_v1_ledger(paths) -> None:
     conn.close()
 
 
-def test_v1_database_migrates_in_place(paths):
-    build_v1_ledger(paths)
-    ledger = Ledger(paths)
-    before = {"k-pub", "k-unk", "k-fail", "delete:9", "upload:u1"}
-    assert {r.idempotency_key for r in ledger.all()} == before
-
+def sql(paths, query: str, *args):
+    """Rows straight from the file, bypassing ``Ledger``."""
     conn = sqlite3.connect(paths.ledger_db)
     try:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 2
-        names = {r[0] for r in conn.execute("SELECT name FROM sqlite_master")}
+        return conn.execute(query, args).fetchall()
     finally:
         conn.close()
-    assert {"writes_state", "writes_post_id", "writes_account", "writes_alias"} <= names
-    assert {"items", "items_state", "items_submitted"} <= names
-    assert "writes_v2" not in names
-
-    # v1 readers see the same rows.
-    pub = ledger.get("k-pub")
-    assert pub.state == PUBLISHED and pub.post_id == "101" and pub.created_at == T0
-    assert ledger.get("upload:u1").meta == {"bytes": 3, "mime": "image/png"}
-    assert ledger.get("k-fail").attempts == 2
-
-    # Every create_post row gained the one item it describes; other tools none.
-    plan = ledger.get_plan("k-pub")
-    assert plan.provider == "x" and plan.account_alias == "x:constworks"
-    assert plan.digest is None and plan.request_digest == "d-pub"
-    (item,) = plan.items
-    assert (item.idx, item.state, item.post_id, item.url) == (
-        0, PUBLISHED, "101", "https://x.com/constworks/status/101"
-    )  # fmt: skip
-    assert item.text_sha256 == sha("hello") and item.est_cost_usd == 0
-    assert item.submitted_at == T0
-    unk = ledger.get_plan("k-unk").items[0]
-    assert unk.state == UNKNOWN and unk.error_code == OUTCOME_UNKNOWN and unk.retryable is False
-    assert ledger.get_plan("k-fail").items[0].state == FAILED
-    assert ledger.get_plan("delete:9").items == ()
-    assert ledger.get_plan("upload:u1").items == ()
-
-    # The widened CHECK accepts the new states, and v1 behaviour is intact.
-    assert claim_plan(ledger, "plan-new").state == PENDING
-    replay = ledger.claim(key="k-pub", tool="create_post", digest="d-pub", account=ME, caller="b")
-    assert replay.state == PUBLISHED and replay.post_id == "101"
-    with pytest.raises(OutcomeUnknown):
-        ledger.claim(key="k-unk", tool="create_post", digest="d-unk", account=ME, caller="b")
-    # The unknown v1 row is reconcile's to settle.
-    assert [r.key for r in ledger.unresolved(stale_after=timedelta(0), now=DAY)] == ["k-unk"]
-
-
-def test_v1_database_new_ids_do_not_reuse_old_ones(paths):
-    build_v1_ledger(paths)
-    ledger = Ledger(paths)
-    claim_plan(ledger, "after-migration")
-    conn = sqlite3.connect(paths.ledger_db)
-    try:
-        ids = [r[0] for r in conn.execute("SELECT id FROM writes ORDER BY id")]
-        orphans = conn.execute(
-            "SELECT count(*) FROM items WHERE write_id NOT IN (SELECT id FROM writes)"
-        ).fetchone()[0]
-    finally:
-        conn.close()
-    assert ids == [1, 2, 3, 4, 5, 6] and orphans == 0
-
-
-def test_newer_schema_is_refused(paths):
-    Ledger(paths).get("x")
-    conn = sqlite3.connect(paths.ledger_db)
-    conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION + 1}")
-    conn.close()
-    with pytest.raises(PulsarError) as exc:
-        Ledger(paths).get("x")
-    assert exc.value.code == "invalid_config"
-
-
-def test_legacy_create_post_rows_mirror_one_item(paths):
-    ledger = Ledger(paths)
-    ledger.claim(key="k", tool="create_post", digest="d", account=ME, caller="t", text_sha256="h")
-    plan = ledger.get_plan("k")
-    assert plan.account_alias == "x:constworks" and states(plan) == [SUBMITTING]
-    ledger.fail("k", PulsarError("api_error", "down"))
-    assert ledger.get_plan("k").items[0].error_code == "api_error"
-    ledger.claim(key="k", tool="create_post", digest="d", account=ME, caller="t", text_sha256="h")
-    ledger.publish("k", post_id="77", url="https://x.com/constworks/status/77")
-    (item,) = ledger.get_plan("k").items
-    assert (item.state, item.post_id, item.error_code) == (PUBLISHED, "77", None)
-    ledger.claim(key="up", tool="upload_media", digest="u", account=ME, caller="t")
-    assert ledger.get_plan("up").items == ()
-
-
-# -- claim_plan -----------------------------------------------------------------------
-
-
-def test_claim_plan_inserts_pending_row_and_items(paths):
-    ledger = Ledger(paths)
-    seen: list[Usage] = []
-    rec = claim_plan(ledger, n=3, admit=seen.append)
-    assert seen == [Usage(0.0, 0.0, 0)]
-    assert rec.state == PENDING and rec.attempts == 1 and rec.resume_from == 0
-    assert rec.digest == "sha256:aaa" and rec.account_alias == "x:constworks"
-    assert (rec.account_user_id, rec.account_handle, rec.provider) == (
-        "1234567890", "constworks", "x"
-    )  # fmt: skip
-    assert states(rec) == [PENDING] * 3
-    assert [i.fingerprint for i in rec.items] == ["fp0", "fp1", "fp2"]
-    assert all(i.submitted_at is None for i in rec.items)
-    json.dumps(rec.to_dict())  # serialisable for surfaces
-
-
-@pytest.mark.parametrize(
-    "change",
-    [{"digest": "sha256:bbb"}, {"account": OTHER}, {"tool": "other_tool"}],
-    ids=["digest", "account", "tool"],
-)
-def test_claim_plan_same_key_different_request_is_a_conflict(paths, change):
-    ledger = Ledger(paths)
-    claim_plan(ledger)
-    with pytest.raises(PulsarError) as exc:
-        claim_plan(ledger, **change)
-    assert exc.value.code == "idempotency_conflict"
-    assert exc.value.detail == {"idempotency_key": "plan-1", "state": PENDING}
-
-
-def test_claim_plan_key_of_a_legacy_write_is_a_conflict(paths):
-    ledger = Ledger(paths)
-    ledger.claim(key="k", tool="create_post", digest="d", account=ME, caller="t")
-    ledger.publish("k", post_id="1")
-    with pytest.raises(PulsarError) as exc:
-        claim_plan(ledger, "k")
-    assert exc.value.code == "idempotency_conflict"
-
-
-def test_claim_plan_published_replays_without_admission(paths):
-    ledger = Ledger(paths)
-    claim_plan(ledger, n=2)
-    done = send_all(ledger, "plan-1", 2)
-    assert done.state == PUBLISHED
-
-    def refuse(_: Usage) -> None:
-        raise AssertionError("a replay is not a new write; policy must not run")
-
-    again = claim_plan(ledger, n=2, admit=refuse)
-    assert again.state == PUBLISHED and again.post_id == "500" and again.attempts == 1
-    assert [i.post_id for i in again.items] == ["500", "501"]
-
-
-@pytest.mark.parametrize("outcome", [UNKNOWN, SUBMITTING])
-def test_claim_plan_blocks_on_unknown_or_in_flight(paths, outcome):
-    ledger = Ledger(paths)
-    claim_plan(ledger)
-    ledger.begin_item("plan-1", 0)
-    if outcome == UNKNOWN:
-        ledger.item_unknown("plan-1", 0, OutcomeUnknown("ReadTimeout"))
-        ledger.finish("plan-1")
-    with pytest.raises(OutcomeUnknown) as exc:
-        claim_plan(ledger)
-    assert exc.value.detail["idempotency_key"] == "plan-1"
-    assert exc.value.detail["state"] == outcome
-    assert exc.value.retryable is False
-
-
-def test_claim_plan_pending_row_is_safe_to_reclaim(paths):
-    ledger = Ledger(paths)
-    claim_plan(ledger, n=2)
-    calls: list[Usage] = []
-    again = claim_plan(ledger, n=2, admit=calls.append)
-    assert again.state == PENDING and again.attempts == 1 and len(calls) == 1
-
-
-def test_claim_plan_failed_row_is_rearmed(paths):
-    ledger = Ledger(paths)
-    claim_plan(ledger, n=1)
-    ledger.begin_item("plan-1", 0)
-    ledger.item_failed("plan-1", 0, PulsarError("api_error", "connect refused"))
-    failed = ledger.finish("plan-1")
-    assert failed.state == FAILED and failed.error_code == "api_error"
-    again = claim_plan(ledger)
-    assert again.state == PENDING and again.attempts == 2 and again.error_code is None
-    (item,) = again.items
-    assert item.state == PENDING and item.error_code is None and item.submitted_at is None
-
-
-def test_admit_raising_writes_nothing(paths):
-    ledger = Ledger(paths)
-
-    def over_budget(usage: Usage) -> None:
-        raise PulsarError("budget_exceeded", "daily budget spent")
-
-    with pytest.raises(PulsarError) as exc:
-        claim_plan(ledger, n=3, admit=over_budget)
-    assert exc.value.code == "budget_exceeded"
-    assert ledger.get_plan("plan-1") is None and ledger.all() == []
-    conn = sqlite3.connect(paths.ledger_db)
-    try:
-        assert conn.execute("SELECT count(*) FROM items").fetchone()[0] == 0
-    finally:
-        conn.close()
-
-    # A refused re-arm leaves the failed row as it was.
-    claim_plan(ledger)
-    ledger.begin_item("plan-1", 0)
-    ledger.item_failed("plan-1", 0, PulsarError("api_error", "down"))
-    ledger.finish("plan-1")
-    with pytest.raises(PulsarError):
-        claim_plan(ledger, admit=over_budget)
-    row = ledger.get_plan("plan-1")
-    assert row.state == FAILED and row.attempts == 1 and states(row) == [FAILED]
-
-
-# -- begin_item: the compare-and-set ------------------------------------------------
-
-
-def test_begin_item_cas_two_ledgers_one_home(paths):
-    a, b = Ledger(paths), Ledger(paths)
-    assert claim_plan(a, n=2).state == PENDING
-    assert claim_plan(b, n=2).state == PENDING  # nothing sent yet: both may hold it
-    a.begin_item("plan-1", 0)
-    with pytest.raises(OutcomeUnknown) as exc:
-        b.begin_item("plan-1", 0)
-    assert exc.value.detail == {
-        "cause": exc.value.cause,
-        "idempotency_key": "plan-1",
-        "state": SUBMITTING,
-        "idx": 0,
-    }
-    with pytest.raises(OutcomeUnknown):
-        claim_plan(b, n=2)
-    row = a.get_plan("plan-1")
-    assert row.state == SUBMITTING and states(row) == [SUBMITTING, PENDING]
-
-
-def test_begin_item_many_threads_admit_exactly_one(paths):
-    claim_plan(Ledger(paths))
-    n = 8
-    barrier = threading.Barrier(n)
-    outcomes: list[str] = []
-    lock = threading.Lock()
-
-    def worker() -> None:
-        ledger = Ledger(paths)
-        barrier.wait()
-        try:
-            ledger.begin_item("plan-1", 0)
-            result = "started"
-        except OutcomeUnknown:
-            result = "blocked"
-        with lock:
-            outcomes.append(result)
-
-    threads = [threading.Thread(target=worker) for _ in range(n)]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
-    assert sorted(outcomes) == ["blocked"] * (n - 1) + ["started"]
-
-
-def _begin_in_process(home: str, go, results) -> None:
-    ledger = Ledger(Paths(Path(home)))
-    go.wait(30)
-    try:
-        ledger.begin_item("plan-proc", 0)
-        results.put("started")
-    except OutcomeUnknown:
-        results.put("blocked")
-
-
-def test_begin_item_cas_across_processes(paths):
-    claim_plan(Ledger(paths), "plan-proc")
-    ctx = multiprocessing.get_context("spawn")
-    go = ctx.Event()
-    results = ctx.Queue()
-    procs = [
-        ctx.Process(target=_begin_in_process, args=(str(paths.home), go, results)) for _ in range(3)
-    ]
-    for p in procs:
-        p.start()
-    go.set()
-    outcomes = sorted(results.get(timeout=60) for _ in procs)
-    for p in procs:
-        p.join(timeout=30)
-        assert p.exitcode == 0
-    assert outcomes == ["blocked", "blocked", "started"]
-
-
-def test_begin_item_refuses_out_of_order_and_closed_rows(paths):
-    ledger = Ledger(paths)
-    claim_plan(ledger, n=3)
-    with pytest.raises(PulsarError) as exc:
-        ledger.begin_item("plan-1", 1)
-    assert exc.value.code == "invalid_argument"
-    with pytest.raises(ValueError):
-        ledger.begin_item("plan-1", 3)
-    with pytest.raises(KeyError):
-        ledger.begin_item("nope", 0)
-    ledger.begin_item("plan-1", 0)
-    ledger.item_failed("plan-1", 0, PulsarError("forbidden", "no"))
-    ledger.finish("plan-1")  # failed: must be re-claimed before anything is sent
-    with pytest.raises(OutcomeUnknown):
-        ledger.begin_item("plan-1", 0)
-
-
-# -- threads: partial, resume, unknown, reconcile -------------------------------------
-
-
-def test_thread_failing_at_second_post_is_partial_and_resumes(paths):
-    ledger = Ledger(paths, export=WriteLog(paths).export)
-    claim_plan(ledger, "thread", n=3)
-    ledger.begin_item("thread", 0)
-    ledger.item_published("thread", 0, post_id="500", url="https://x.com/constworks/status/500")
-    ledger.begin_item("thread", 1)
-    ledger.item_failed("thread", 1, PulsarError("duplicate", "duplicate content"))
-    done = ledger.finish("thread")
-    assert done.state == PARTIAL and states(done) == [PUBLISHED, FAILED, PENDING]
-    assert done.post_id == "500" and done.error_code == "duplicate"
-    assert done.resume_from == 1
-
-    again = claim_plan(ledger, "thread", n=3)
-    assert again.state == PENDING and again.attempts == 2
-    assert states(again) == [PUBLISHED, PENDING, PENDING] and again.resume_from == 1
-    assert again.items[0].post_id == "500"
-    with pytest.raises(OutcomeUnknown):
-        ledger.begin_item("thread", 0)  # already published: never re-sent
-    final = send_all(ledger, "thread", 3, start=1)
-    assert final.state == PUBLISHED and [i.post_id for i in final.items] == ["500", "501", "502"]
-    assert [line["state"] for line in jsonl(paths)] == [PARTIAL, PUBLISHED]
-
-
-def test_unknown_blocks_reclaim_until_resolved_absent(paths):
-    ledger = Ledger(paths)
-    claim_plan(ledger, n=2)
-    ledger.begin_item("plan-1", 0)
-    ledger.item_failed("plan-1", 0, OutcomeUnknown("ReadTimeout"))  # ambiguous stays unknown
-    rec = ledger.finish("plan-1")
-    assert rec.state == UNKNOWN and states(rec) == [UNKNOWN, PENDING]
-    assert rec.error_code == OUTCOME_UNKNOWN
-    for _ in range(2):
-        with pytest.raises(OutcomeUnknown):
-            claim_plan(ledger, n=2)
-    unresolved = ledger.unresolved(stale_after=timedelta(hours=1), now=DAY)
-    assert [r.key for r in unresolved] == ["plan-1"]
-    with pytest.raises(ValueError):
-        ledger.resolve_item("plan-1", 1, post_id=None, url=None)  # pending: nothing to resolve
-
-    ledger.resolve_item("plan-1", 0, post_id=None, url=None)
-    item = ledger.get_plan("plan-1").items[0]
-    assert item.state == FAILED and item.error_code == RESOLVED_ABSENT
-    assert ledger.finish("plan-1").state == FAILED
-    assert ledger.unresolved(stale_after=timedelta(hours=1), now=DAY) == []
-    again = claim_plan(ledger, n=2)
-    assert again.state == PENDING and states(again) == [PENDING, PENDING]
-
-
-def test_unknown_resolved_as_published_resumes_after_it(paths):
-    ledger = Ledger(paths)
-    claim_plan(ledger, n=2)
-    ledger.begin_item("plan-1", 0)
-    ledger.item_unknown("plan-1", 0, OutcomeUnknown("HTTP 503"))
-    ledger.finish("plan-1")
-    ledger.resolve_item("plan-1", 0, post_id="900", url="https://x.com/constworks/status/900")
-    assert ledger.finish("plan-1").state == PARTIAL
-    again = claim_plan(ledger, n=2)
-    assert states(again) == [PUBLISHED, PENDING] and again.resume_from == 1
-
-
-def test_stale_submitting_row_is_unresolved_and_finishes_unknown(paths, clock):
-    ledger = Ledger(paths)
-    t0 = clock[0]
-    claim_plan(ledger, n=2)
-    ledger.begin_item("plan-1", 0)
-    ledger.item_published("plan-1", 0, post_id="1", url="u1")
-    clock[0] = t0 + timedelta(minutes=2)
-    ledger.begin_item("plan-1", 1)  # ...and the process dies here
-    stale = timedelta(minutes=10)
-    assert ledger.unresolved(stale_after=stale, now=t0 + timedelta(minutes=11)) == []
-    (row,) = ledger.unresolved(stale_after=stale, now=t0 + timedelta(minutes=13))
-    assert row.key == "plan-1" and row.state == SUBMITTING
-    done = ledger.finish("plan-1")
-    assert done.state == UNKNOWN and states(done) == [PUBLISHED, UNKNOWN]
-    assert done.items[1].error_code == OUTCOME_UNKNOWN
-
-
-def test_item_transitions_are_checked(paths):
-    ledger = Ledger(paths)
-    claim_plan(ledger)
-    with pytest.raises(ValueError):
-        ledger.item_published("plan-1", 0, post_id="1", url="u")  # never begun
-    ledger.begin_item("plan-1", 0)
-    ledger.item_published("plan-1", 0, post_id="1", url="u", media_ids=["710000"])
-    assert ledger.get_plan("plan-1").items[0].media_ids == ("710000",)
-    with pytest.raises(ValueError):
-        ledger.item_failed("plan-1", 0, PulsarError("api_error", "late"))
-
-
-# -- skip ---------------------------------------------------------------------------
-
-
-def test_skip_records_a_decision_never_to_post(paths):
-    ledger = Ledger(paths, export=WriteLog(paths).export)
-    rec = ledger.skip(key="pr:4", provider="x", account=ACCT, caller="t", note="not a feature")
-    assert rec.state == SKIPPED and rec.note == "not a feature" and rec.items == ()
-    assert ledger.skip(key="pr:4", provider="x", account=ACCT, caller="t", note="again") == rec
-
-    def refuse(_: Usage) -> None:
-        raise AssertionError("a skipped key never reaches policy")
-
-    got = claim_plan(ledger, "pr:4", admit=refuse)
-    assert got.state == SKIPPED and got.items == ()
-    with pytest.raises(PulsarError) as exc:
-        claim_plan(ledger, "pr:4", account=OTHER)
-    assert exc.value.code == "idempotency_conflict"
-    (line,) = jsonl(paths)
-    assert line["state"] == SKIPPED and line["idempotency_key"] == "pr:4"
-    assert line["items"] == []
-
-
-def test_skip_conflicts_with_published_or_in_flight(paths):
-    ledger = Ledger(paths)
-    claim_plan(ledger, "pub")
-    send_all(ledger, "pub", 1)
-    claim_plan(ledger, "flying")
-    ledger.begin_item("flying", 0)
-    for key in ("pub", "flying"):
-        with pytest.raises(PulsarError) as exc:
-            ledger.skip(key=key, provider="x", account=ACCT, caller="t", note=None)
-        assert exc.value.code == "idempotency_conflict"
-    with pytest.raises(PulsarError) as exc:
-        ledger.skip(key="pub", provider="x", account=OTHER, caller="t", note=None)
-    assert exc.value.code == "idempotency_conflict"
-    secret_note = "token=abcdefghijklmnopqrstu"
-    with pytest.raises(PulsarError) as exc:
-        ledger.skip(key="s", provider="x", account=ACCT, caller="t", note=secret_note)
-    assert exc.value.code == "secret_detected" and ledger.get_plan("s") is None
-
-
-def test_skip_a_pending_row_stops_a_holder_from_sending(paths):
-    ledger = Ledger(paths)
-    claim_plan(ledger)
-    ledger.skip(key="plan-1", provider="x", account=ACCT, caller="t", note="changed our mind")
-    with pytest.raises(OutcomeUnknown):
-        ledger.begin_item("plan-1", 0)
-    assert claim_plan(ledger).state == SKIPPED
-
-
-# -- usage --------------------------------------------------------------------------
-
-
-def test_usage_windows(paths, clock):
-    ledger = Ledger(paths)
-    clock[0] = datetime(2026, 9, 25, 10, 0, tzinfo=UTC)  # yesterday: month only
-    claim_plan(ledger, "yesterday", n=2, cost=0.2)
-    send_all(ledger, "yesterday", 2)
-
-    clock[0] = datetime(2026, 9, 26, 9, 0, tzinfo=UTC)
-    claim_plan(ledger, "published", cost=0.015)
-    send_all(ledger, "published", 1)
-    claim_plan(ledger, "unknown", account=OTHER, cost=0.2)
-    ledger.begin_item("unknown", 0)
-    ledger.item_unknown("unknown", 0, OutcomeUnknown("ReadTimeout"))
-    claim_plan(ledger, "in-flight", account=OTHER, cost=0.1)
-    ledger.begin_item("in-flight", 0)
-    claim_plan(ledger, "failed", n=2, cost=0.5)  # failed, the rest of a closed row, skipped: free
-    ledger.begin_item("failed", 0)
-    ledger.item_failed("failed", 0, PulsarError("forbidden", "no"))
-    ledger.finish("failed")
-    claim_plan(ledger, "pending", n=3, cost=0.7)  # claimed, not sent yet: reserved
-    ledger.skip(key="skipped", provider="x", account=ACCT, caller="t", note=None)
-
-    mine = ledger.usage("x:constworks", day_start=DAY, month_start=MONTH)
-    assert mine == Usage(spent_day_usd=2.415, spent_month_usd=2.815, posts_day=4)
-    theirs = ledger.usage("x:someone", day_start=DAY, month_start=MONTH)
-    assert theirs == Usage(spent_day_usd=2.415, spent_month_usd=2.815, posts_day=2)
-    # Window starts in another zone compare as instants: 12:00+02:00 is 10:00Z,
-    # after this morning's 09:00Z posts and claims.
-    later = datetime(2026, 9, 26, 12, 0, tzinfo=timezone(timedelta(hours=2)))
-    assert ledger.usage("x:constworks", day_start=later, month_start=MONTH) == Usage(0.0, 2.815, 0)
-    # admit sees the same numbers, computed inside the claim's transaction.
-    seen: list[Usage] = []
-    claim_plan(ledger, "next", admit=seen.append)
-    assert seen == [mine]
-
-
-# -- history and export -------------------------------------------------------------
-
-
-def test_history_newest_first_and_per_account(paths, clock):
-    ledger = Ledger(paths)
-    for i, account in enumerate([ACCT, OTHER, ACCT]):
-        clock[0] = DAY + timedelta(minutes=i)
-        claim_plan(ledger, f"k{i}", account=account)
-    assert [r.key for r in ledger.history()] == ["k2", "k1", "k0"]
-    assert [r.key for r in ledger.history(limit=1)] == ["k2"]
-    assert [r.key for r in ledger.history(account_alias="x:constworks")] == ["k2", "k0"]
-
-
-def test_plan_export_lines_carry_ids_and_hashes_never_text(paths):
-    ledger = Ledger(paths, export=WriteLog(paths).export)
-    claim_plan(ledger, "thread", n=3)
-    send_all(ledger, "thread", 3)
-    (line,) = jsonl(paths)
-    assert line["dry_run"] is False and line["tool"] == "publish" and line["caller"] == "tester"
-    assert line["state"] == PUBLISHED and line["idempotency_key"] == "thread"
-    assert line["post_id"] == "500" and line["account_user_id"] == "1234567890"
-    assert line["text_sha256"] == sha(TEXTS[0])
-    assert line["account_alias"] == "x:constworks" and line["plan_digest"] == "sha256:aaa"
-    assert line["items"] == [
-        {"idx": 0, "state": PUBLISHED, "post_id": "500"},
-        {"idx": 1, "state": PUBLISHED, "post_id": "501"},
-        {"idx": 2, "state": PUBLISHED, "post_id": "502"},
-    ]
-    raw = paths.write_log.read_bytes() + paths.ledger_db.read_bytes()
-    for wal in paths.home.glob("ledger.sqlite3-wal"):
-        raw += wal.read_bytes()
-    assert not any(text.encode() in raw for text in TEXTS)
-
-
-def test_failed_export_does_not_fail_finish(paths):
-    def broken(_record) -> None:
-        raise OSError("disk full")
-
-    ledger = Ledger(paths, export=broken)
-    claim_plan(ledger)
-    assert send_all(ledger, "plan-1", 1).state == PUBLISHED
-
-
-# -- item_sending and settle: a live sender and reconcile never both win -----------
-
-
-def test_item_sending_is_a_compare_and_set_on_the_senders_stamp(paths, clock):
-    ledger = Ledger(paths)
-    claim_plan(ledger, n=1)
-    stamp = ledger.begin_item("plan-1", 0)
-    assert ledger.item_sending("plan-1", 0, "2000-01-01T00:00:00.000+00:00") is None
-    clock[0] += timedelta(minutes=12)  # a long upload
-    fresh = ledger.item_sending("plan-1", 0, stamp)
-    assert fresh is not None and fresh > stamp
-    assert ledger.get_plan("plan-1").items[0].submitted_at == fresh
-    assert ledger.item_sending("plan-1", 0, stamp) is None, "the old stamp is spent"
-    ledger.item_failed("plan-1", 0, PulsarError("forbidden", "no"))
-    assert ledger.item_sending("plan-1", 0, fresh) is None
-
-
-def test_settle_writes_nothing_when_the_row_changed_since_it_was_listed(paths, clock):
-    ledger = Ledger(paths)
-    claim_plan(ledger, n=2)
-    stamp = ledger.begin_item("plan-1", 0)
-    listed = ledger.get_plan("plan-1")
-    seen = {i.idx: (i.state, i.submitted_at) for i in listed.items if i.state == SUBMITTING}
-    clock[0] += timedelta(seconds=1)
-    ledger.item_sending("plan-1", 0, stamp)  # the sender is alive after all
-    assert ledger.settle("plan-1", seen=seen, verdicts={0: None}) is None
-    item = ledger.get_plan("plan-1").items[0]
-    assert item.state == SUBMITTING and item.error_code is None
-
-    now_seen = {0: (SUBMITTING, item.submitted_at)}
-    settled = ledger.settle("plan-1", seen=now_seen, verdicts={0: None})
-    assert settled is not None and settled.state == FAILED
-    assert settled.items[0].error_code == RESOLVED_ABSENT
-    assert settled.items[1].state == PENDING
-
-
-def test_settle_records_a_found_post_and_finishes(paths, clock):
-    ledger = Ledger(paths)
-    claim_plan(ledger, n=1)
-    ledger.begin_item("plan-1", 0)
-    ledger.item_unknown("plan-1", 0, OutcomeUnknown("ReadTimeout"))
-    ledger.finish("plan-1")
-    item = ledger.get_plan("plan-1").items[0]
-    url = "https://x.com/constworks/status/900"
-    done = ledger.settle(
-        "plan-1", seen={0: (UNKNOWN, item.submitted_at)}, verdicts={0: ("900", url)}
-    )
-    assert done is not None and done.state == PUBLISHED and done.post_id == "900"
-    assert ledger.settle("plan-1", seen={}, verdicts={}) is None, "a settled row is not open"

@@ -12,6 +12,7 @@ import logging
 import sqlite3
 import time
 from collections.abc import Generator
+from pathlib import Path
 
 from ..errors import INVALID_CONFIG, PulsarError
 
@@ -137,6 +138,16 @@ MIGRATIONS: dict[int, str] = {1: SCHEMA_V1, 2: SCHEMA_V2}
 SCHEMA_VERSION = max(MIGRATIONS)
 
 
+def is_busy(exc: sqlite3.Error) -> bool:
+    """Another connection holds the lock: worth waiting for, not a failure.
+
+    Decided from SQLite's result code (STD-02@2 §R10); the low byte is the
+    primary code under an extended one such as ``SQLITE_BUSY_SNAPSHOT``.
+    """
+    code: int | None = getattr(exc, "sqlite_errorcode", None)
+    return code is not None and code & 0xFF in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)
+
+
 def switch_to_wal(conn: sqlite3.Connection, busy_timeout_ms: int) -> str:
     """Switch to WAL. On a new file this needs an exclusive lock and SQLite
     does not apply the busy timeout to it, so a second process opening the
@@ -147,28 +158,53 @@ def switch_to_wal(conn: sqlite3.Connection, busy_timeout_ms: int) -> str:
         try:
             return str(conn.execute("PRAGMA journal_mode = WAL").fetchone()[0])
         except sqlite3.OperationalError as exc:
-            if "locked" not in str(exc) or time.monotonic() >= deadline:
+            if not is_busy(exc) or time.monotonic() >= deadline:
                 raise
             time.sleep(0.01)
 
 
-def migrate(conn: sqlite3.Connection, busy_timeout_ms: int) -> None:
+def user_version(conn: sqlite3.Connection) -> int:
+    return int(conn.execute("PRAGMA user_version").fetchone()[0])
+
+
+def newer_than_supported(path: Path, version: int) -> PulsarError:
+    """This pulsar must not write, migrate down or reinterpret a newer file
+    (STD-03@2 §R10), and a long-running process must notice when a newer
+    pulsar migrates the file under it, so every connection checks."""
+    return PulsarError(
+        INVALID_CONFIG,
+        f"ledger {path} has schema v{version}, newer than this pulsar understands "
+        f"(v{SCHEMA_VERSION}); upgrade pulsar (and restart any running pulsar server)",
+        detail={"path": str(path), "schema_version": version, "supported": SCHEMA_VERSION},
+    )
+
+
+def needs_migration(path: Path, version: int) -> PulsarError:
+    """A read-only open never migrates (STD-01@2 §R31); the operator does."""
+    return PulsarError(
+        INVALID_CONFIG,
+        f"ledger {path} has schema v{version} and this pulsar reads v{SCHEMA_VERSION}; "
+        "run `pulsar migrate` to upgrade it",
+        detail={"path": str(path), "schema_version": version, "supported": SCHEMA_VERSION},
+    )
+
+
+def migrate(conn: sqlite3.Connection, path: Path, busy_timeout_ms: int) -> tuple[int, int]:
+    """Switch to WAL and bring the file to ``SCHEMA_VERSION``, in one transaction:
+    ``(from_version, to_version)``. Refuses a file newer than this pulsar."""
     mode = switch_to_wal(conn, busy_timeout_ms)
     if str(mode).lower() != "wal":
         log.warning("ledger journal_mode is %s, not wal", mode)
     with immediate(conn):
-        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        version = user_version(conn)
         if version > SCHEMA_VERSION:
-            raise PulsarError(
-                INVALID_CONFIG,
-                f"ledger schema v{version} is newer than this pulsar (v{SCHEMA_VERSION}); "
-                "upgrade pulsar",
-            )
+            raise newer_than_supported(path, version)
         for target in range(version + 1, SCHEMA_VERSION + 1):
             for statement in MIGRATIONS[target].split(";"):
                 if statement.strip():
                     conn.execute(statement)
             conn.execute(f"PRAGMA user_version = {target}")
+    return version, SCHEMA_VERSION
 
 
 @contextlib.contextmanager

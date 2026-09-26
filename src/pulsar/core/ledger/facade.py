@@ -1,7 +1,7 @@
 """``Ledger``: one connection per operation, one transaction per state change.
 
 The SQL lives in the sibling modules; this class owns the connection, the
-clock and the ``writes.jsonl`` export.
+schema-version check, the clock and the ``writes.jsonl`` export.
 """
 
 from __future__ import annotations
@@ -14,26 +14,21 @@ from collections.abc import Callable, Generator, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from ..errors import OUTCOME_UNKNOWN, PulsarError
-from ..fsutil import append_private
+from ..errors import INTERNAL, INVALID_ARGUMENT, OUTCOME_UNKNOWN, PulsarError
 from ..paths import Paths
 from ..usage import Usage
-from . import imports, plans, queries, single
+from . import connection, imports, plans, queries, single
 from .keys import check_note
-from .records import (
-    FAILED,
-    PENDING,
-    PUBLISHED,
-    RESOLVED_ABSENT,
-    SUBMITTING,
-    UNKNOWN,
-    AccountRef,
-    ItemIntent,
-    PlanRecord,
-    WriteRecord,
-    iso,
+from .records import AccountRef, ItemIntent, PlanRecord, State, WriteRecord, iso
+from .schema import (
+    BUSY_TIMEOUT_MS,
+    SCHEMA_VERSION,
+    immediate,
+    migrate,
+    needs_migration,
+    newer_than_supported,
+    user_version,
 )
-from .schema import BUSY_TIMEOUT_MS, immediate, migrate
 
 log = logging.getLogger(__name__)
 
@@ -45,6 +40,16 @@ def _now() -> str:
 
 
 class Ledger:
+    """The ledger at ``paths.ledger_db``.
+
+    ``read_only=True`` is for reports (STD-01@2 §R31): it creates no
+    directory or file, never migrates or switches the journal mode, takes
+    no write lock, and works in a read-only home. A missing file reads as
+    empty; a file older than this pulsar is refused with the remedy
+    (``pulsar migrate``, which is ``migrate`` on a read-write ledger). Every
+    state change on it raises ``internal``.
+    """
+
     def __init__(
         self,
         paths: Paths,
@@ -52,8 +57,10 @@ class Ledger:
         export: Export | None = None,
         busy_timeout_ms: int = BUSY_TIMEOUT_MS,
         clock: Callable[[], datetime] | None = None,
+        read_only: bool = False,
     ) -> None:
         self.paths = paths
+        self.read_only = read_only
         self._export = export
         self._busy_timeout_ms = busy_timeout_ms
         self._clock = clock
@@ -66,69 +73,122 @@ class Ledger:
 
     @contextlib.contextmanager
     def _connect(self) -> Generator[sqlite3.Connection]:
-        """A short-lived connection in autocommit mode; callers BEGIN explicitly.
+        """A short-lived read-write connection in autocommit mode; callers BEGIN.
 
         Opening per operation keeps transactions short and lets several
         processes share the file; the busy timeout makes them queue rather
-        than fail.
+        than fail. The schema version is read on every connection, not once
+        per process: a long-running server must stop the moment a newer
+        pulsar migrates the file under it (STD-03@2 §R10, §R26). Migrations
+        run on the first connection, and again only if the file is older.
         """
         path = self.paths.ledger_db
-        self.paths.ensure()
-        # Create the file 0600 ourselves so SQLite never creates it with the
-        # process umask; its -wal/-shm files inherit the database's mode.
-        append_private(path, "")
-        conn = sqlite3.connect(path, timeout=self._busy_timeout_ms / 1000, isolation_level=None)
+        conn = connection.open_writable(self.paths, self._busy_timeout_ms)
         try:
-            conn.row_factory = sqlite3.Row
-            conn.execute(f"PRAGMA busy_timeout = {int(self._busy_timeout_ms)}")
-            # The submitting row must survive a power cut before the POST goes out.
-            conn.execute("PRAGMA synchronous = FULL")
-            if not self._ready:
-                migrate(conn, self._busy_timeout_ms)
+            version = user_version(conn)
+            if version > SCHEMA_VERSION:
+                raise newer_than_supported(path, version)
+            if not self._ready or version < SCHEMA_VERSION:
+                migrate(conn, path, self._busy_timeout_ms)
                 self._ready = True
             yield conn
         finally:
             conn.close()
 
+    def _read[T](self, body: Callable[[sqlite3.Connection], T], empty: T) -> T:
+        """``body`` over a connection at ``SCHEMA_VERSION``; ``empty`` when a
+        read-only ledger has no file (or a file no schema was ever applied to)."""
+        if not self.read_only:
+            with self._connect() as conn:
+                return body(conn)
+        path = self.paths.ledger_db
+
+        def checked(conn: sqlite3.Connection) -> T:
+            version = user_version(conn)
+            if version == 0:
+                return empty
+            if version > SCHEMA_VERSION:
+                raise newer_than_supported(path, version)
+            if version < SCHEMA_VERSION:
+                raise needs_migration(path, version)
+            return body(conn)
+
+        return connection.read_only(path, self._busy_timeout_ms, checked, missing=empty)
+
+    def _write[T](self, operation: str, body: Callable[[sqlite3.Connection], T]) -> T:
+        """``body`` in one ``BEGIN IMMEDIATE`` transaction, the version re-read
+        under the write lock so a concurrent upgrade cannot slip in between."""
+        self._refuse_read_only(operation)
+        with self._connect() as conn, immediate(conn):
+            version = user_version(conn)
+            if version > SCHEMA_VERSION:
+                raise newer_than_supported(self.paths.ledger_db, version)
+            return body(conn)
+
+    def _refuse_read_only(self, operation: str) -> None:
+        if self.read_only:
+            raise PulsarError(
+                INTERNAL,
+                f"ledger {self.paths.ledger_db} was opened read-only; {operation} writes to it",
+                detail={"path": str(self.paths.ledger_db), "operation": operation},
+            )
+
+    def migrate(self) -> tuple[int, int]:
+        """Bring the file to this pulsar's schema, creating it if needed:
+        ``(from_version, to_version)``. Refuses a newer file."""
+        self._refuse_read_only("migrate")
+        conn = connection.open_writable(self.paths, self._busy_timeout_ms)
+        try:
+            versions = migrate(conn, self.paths.ledger_db, self._busy_timeout_ms)
+        finally:
+            conn.close()
+        self._ready = True
+        return versions
+
     # -- reads --------------------------------------------------------------
 
     def get(self, key: str) -> WriteRecord | None:
-        with self._connect() as conn:
-            return queries.get_write(conn, key)
-
-    def all(self) -> list[WriteRecord]:
-        with self._connect() as conn:
-            return queries.all_writes(conn)
+        return self._read(lambda conn: queries.get_write(conn, key), None)
 
     def get_plan(self, key: str) -> PlanRecord | None:
-        with self._connect() as conn:
-            return queries.load(conn, key)
+        return self._read(lambda conn: queries.load(conn, key), None)
 
     def known_post_ids(self, post_ids: Sequence[str]) -> set[str]:
         """Which of ``post_ids`` the ledger already records; reconcile must not reuse them."""
         wanted = [p for p in post_ids if p]
         if not wanted:
             return set()
-        with self._connect() as conn:
-            return queries.known_post_ids(conn, wanted)
+        return self._read(lambda conn: queries.known_post_ids(conn, wanted), set[str]())
 
     def history(self, *, limit: int = 20, account_alias: str | None = None) -> list[PlanRecord]:
         """The newest rows first (by ``created_at``), optionally for one account."""
-        with self._connect() as conn:
-            return queries.history(conn, limit=limit, account_alias=account_alias)
+        return self._read(
+            lambda conn: queries.history(conn, limit=limit, account_alias=account_alias), []
+        )
+
+    def count(self, *, account_alias: str | None = None) -> int:
+        """How many rows ``history`` would match without a limit (its ``total``)."""
+        return self._read(lambda conn: queries.count(conn, account_alias=account_alias), 0)
+
+    def last_published(self, alias: str) -> PlanRecord | None:
+        """``alias``'s newest ``published`` row, however many newer rows are not."""
+        return self._read(lambda conn: queries.last_published(conn, alias), None)
 
     def usage(self, account_alias: str, *, day_start: datetime, month_start: datetime) -> Usage:
         """Money and posts committed since the window starts (see ``core/usage.py``)."""
-        with self._connect() as conn:
-            return queries.usage(conn, account_alias, day_start=day_start, month_start=month_start)
+        return self._read(
+            lambda conn: queries.usage(
+                conn, account_alias, day_start=day_start, month_start=month_start
+            ),
+            Usage(spent_day_usd=0.0, spent_month_usd=0.0, posts_day=0),
+        )
 
     def unresolved(self, *, stale_after: timedelta, now: datetime) -> list[PlanRecord]:
         """What reconcile works on: ``unknown`` rows, and ``submitting`` rows whose
         newest item was submitted more than ``stale_after`` before ``now`` (a
         sender that crashed or was killed mid-thread)."""
         cutoff = iso(now - stale_after)
-        with self._connect() as conn:
-            return queries.unresolved(conn, cutoff=cutoff)
+        return self._read(lambda conn: queries.unresolved(conn, cutoff=cutoff), [])
 
     # -- single-request transitions (legacy tools) ----------------------------
 
@@ -142,6 +202,7 @@ class Ledger:
         caller: str | None,
         text_sha256: str | None = None,
         meta: dict[str, Any] | None = None,
+        stale_after: timedelta | None = None,
     ) -> WriteRecord:
         """Reserve ``key`` for this request, committed before any network call.
 
@@ -151,10 +212,24 @@ class Ledger:
         the key belongs to a different request or account, and
         ``outcome_unknown`` when an earlier attempt is in flight or ended
         ambiguously. A ``failed`` row is re-claimed: nothing reached X.
+
+        With ``stale_after``, a ``delete_post`` or ``upload_media`` row still
+        ``submitting`` that long after its last update is taken over (its
+        sender died; neither request has a duplicate effect): it is returned
+        ``submitting`` with ``attempts`` bumped and a ``note`` saying so.
+        ``create_post`` rows are never taken over.
         """
         now = self._stamp()
-        with self._connect() as conn, immediate(conn):
-            return single.claim(
+        stale_before = None
+        if stale_after is not None:
+            if stale_after <= timedelta(0):
+                raise PulsarError(
+                    INVALID_ARGUMENT, f"stale_after must be positive, not {stale_after}"
+                )
+            stale_before = iso(datetime.fromisoformat(now) - stale_after)
+        return self._write(
+            "claim",
+            lambda conn: single.claim(
                 conn,
                 now,
                 key=key,
@@ -164,7 +239,9 @@ class Ledger:
                 caller=caller,
                 text_sha256=text_sha256,
                 meta=meta,
-            )
+                stale_before=stale_before,
+            ),
+        )
 
     def publish(
         self,
@@ -175,13 +252,15 @@ class Ledger:
         url: str | None = None,
         meta: dict[str, Any] | None = None,
     ) -> WriteRecord:
-        return self._settle(key, PUBLISHED, post_id=post_id, media_id=media_id, url=url, meta=meta)
+        return self._settle(
+            key, State.PUBLISHED, post_id=post_id, media_id=media_id, url=url, meta=meta
+        )
 
     def fail(
         self, key: str, error: PulsarError, *, meta: dict[str, Any] | None = None
     ) -> WriteRecord:
         """Settle a claimed row from an error: ``unknown`` if ambiguous, else ``failed``."""
-        state = UNKNOWN if error.code == OUTCOME_UNKNOWN else FAILED
+        state = State.UNKNOWN if error.code == OUTCOME_UNKNOWN else State.FAILED
         return self._settle(
             key,
             state,
@@ -194,14 +273,16 @@ class Ledger:
     def _settle(
         self,
         key: str,
-        state: str,
+        state: State,
         *,
         meta: dict[str, Any] | None = None,
         **columns: Any,
     ) -> WriteRecord:
         now = self._stamp()
-        with self._connect() as conn, immediate(conn):
-            record = single.settle(conn, now, key, state, meta=meta, columns=columns)
+        record = self._write(
+            "settle",
+            lambda conn: single.settle(conn, now, key, state, meta=meta, columns=columns),
+        )
         self._emit(record)
         return record
 
@@ -242,12 +323,18 @@ class Ledger:
         thread in progress was admitted with.
         """
         if not items:
-            raise ValueError("a plan has at least one item")
-        if provider != account.provider:
-            raise ValueError(f"provider {provider!r} is not the account's {account.provider!r}")
+            raise PulsarError(
+                INVALID_ARGUMENT,
+                f"plan {key!r} has no posts; a plan has at least one",
+                detail={"idempotency_key": key},
+            )
+        _check_provider(provider, account)
+        for window_start in (day_start, month_start):
+            iso(window_start)  # a naive window is refused before anything is written
         now = self._stamp()
-        with self._connect() as conn, immediate(conn):
-            result = plans.claim_plan(
+        result = self._write(
+            "claim_plan",
+            lambda conn: plans.claim_plan(
                 conn,
                 now,
                 key=key,
@@ -260,7 +347,8 @@ class Ledger:
                 admit=admit,
                 day_start=day_start,
                 month_start=month_start,
-            )
+            ),
+        )
         if isinstance(result, PulsarError):
             raise result
         return result
@@ -272,8 +360,7 @@ class Ledger:
         the item is not pending (another caller started it) or the row is no
         longer open."""
         now = self._stamp()
-        with self._connect() as conn, immediate(conn):
-            plans.begin_item(conn, now, key, idx)
+        self._write("begin_item", lambda conn: plans.begin_item(conn, now, key, idx))
         return now
 
     def item_sending(self, key: str, idx: int, stamp: str) -> str | None:
@@ -283,8 +370,10 @@ class Ledger:
         longer this sender's (reconcile settled it, or a retry took it over)
         and the post must not be sent."""
         now = self._stamp()
-        with self._connect() as conn, immediate(conn):
-            return now if plans.item_sending(conn, now, key, idx, stamp) else None
+        mine = self._write(
+            "item_sending", lambda conn: plans.item_sending(conn, now, key, idx, stamp)
+        )
+        return now if mine else None
 
     def item_published(
         self,
@@ -298,8 +387,8 @@ class Ledger:
         self._set_item(
             key,
             idx,
-            PUBLISHED,
-            allowed_from=(SUBMITTING, UNKNOWN),
+            State.PUBLISHED,
+            allowed_from=(State.SUBMITTING, State.UNKNOWN),
             post_id=post_id,
             url=url,
             media_ids_json=json.dumps(list(media_ids)),
@@ -317,8 +406,8 @@ class Ledger:
         self._set_item(
             key,
             idx,
-            FAILED,
-            allowed_from=(PENDING, SUBMITTING),
+            State.FAILED,
+            allowed_from=(State.PENDING, State.SUBMITTING),
             error_code=error.code,
             error_message=error.message,
             retryable=int(error.retryable),
@@ -328,46 +417,23 @@ class Ledger:
         self._set_item(
             key,
             idx,
-            UNKNOWN,
-            allowed_from=(PENDING, SUBMITTING, UNKNOWN),
+            State.UNKNOWN,
+            allowed_from=(State.PENDING, State.SUBMITTING, State.UNKNOWN),
             error_code=error.code,
             error_message=error.message,
             retryable=int(error.retryable),
         )
 
-    def resolve_item(self, key: str, idx: int, *, post_id: str | None, url: str | None) -> None:
-        """Reconcile's verdict on an ``unknown`` or ``submitting`` item: it was
-        published as ``post_id``, or (``post_id`` None) provably never was.
-        Call ``finish`` afterwards."""
-        if post_id is not None:
-            self._set_item(
-                key,
-                idx,
-                PUBLISHED,
-                allowed_from=(SUBMITTING, UNKNOWN),
-                post_id=post_id,
-                url=url,
-                error_code=None,
-                error_message=None,
-                retryable=None,
-            )
-        else:
-            self._set_item(
-                key,
-                idx,
-                FAILED,
-                allowed_from=(SUBMITTING, UNKNOWN),
-                error_code=RESOLVED_ABSENT,
-                error_message="reconcile found no such post on the account; it was not published",
-                retryable=1,
-            )
-
     def _set_item(
-        self, key: str, idx: int, state: str, *, allowed_from: tuple[str, ...], **columns: Any
+        self, key: str, idx: int, state: State, *, allowed_from: tuple[State, ...], **columns: Any
     ) -> None:
         now = self._stamp()
-        with self._connect() as conn, immediate(conn):
-            plans.set_item(conn, now, key, idx, state, allowed_from=allowed_from, columns=columns)
+        self._write(
+            f"moving an item to {state}",
+            lambda conn: plans.set_item(
+                conn, now, key, idx, state, allowed_from=allowed_from, columns=columns
+            ),
+        )
 
     def finish(self, key: str) -> PlanRecord:
         """Settle the row from its items and export it to writes.jsonl.
@@ -378,8 +444,7 @@ class Ledger:
         published -> failed. The row carries item 0's post id and url.
         """
         now = self._stamp()
-        with self._connect() as conn, immediate(conn):
-            record = plans.finish(conn, now, key)
+        record = self._write("finish", lambda conn: plans.finish(conn, now, key))
         self._emit(record)
         return record
 
@@ -401,8 +466,9 @@ class Ledger:
         returned: the row is not reconcile's to settle.
         """
         now = self._stamp()
-        with self._connect() as conn, immediate(conn):
-            record = plans.settle(conn, now, key, seen=seen, verdicts=verdicts)
+        record = self._write(
+            "settle", lambda conn: plans.settle(conn, now, key, seen=seen, verdicts=verdicts)
+        )
         if record is not None:
             self._emit(record)
         return record
@@ -425,13 +491,14 @@ class Ledger:
         published posts, if any, stay recorded).
         """
         check_note(note)
-        if provider != account.provider:
-            raise ValueError(f"provider {provider!r} is not the account's {account.provider!r}")
+        _check_provider(provider, account)
         now = self._stamp()
-        with self._connect() as conn, immediate(conn):
-            changed, record = plans.skip(
+        changed, record = self._write(
+            "skip",
+            lambda conn: plans.skip(
                 conn, now, key=key, provider=provider, account=account, caller=caller, note=note
-            )
+            ),
+        )
         if changed:
             self._emit(record)
         return record
@@ -460,8 +527,9 @@ class Ledger:
         """
         check_note(note)
         now = self._stamp()
-        with self._connect() as conn, immediate(conn):
-            return imports.record_import(
+        return self._write(
+            "record_import",
+            lambda conn: imports.record_import(
                 conn,
                 now,
                 key=key,
@@ -476,7 +544,8 @@ class Ledger:
                 text_sha256=text_sha256,
                 note=note,
                 meta=meta,
-            )
+            ),
+        )
 
     def _emit(self, record: WriteRecord | PlanRecord) -> None:
         if self._export is None:
@@ -489,3 +558,12 @@ class Ledger:
             # caller might "fix" by retrying.
             key = record.idempotency_key if isinstance(record, WriteRecord) else record.key
             log.exception("writes.jsonl export failed for %s", key)
+
+
+def _check_provider(provider: str, account: AccountRef) -> None:
+    if provider != account.provider:
+        raise PulsarError(
+            INVALID_ARGUMENT,
+            f"provider {provider!r} is not account {account.alias!r}'s ({account.provider!r})",
+            detail={"provider": provider, "account": account.alias},
+        )

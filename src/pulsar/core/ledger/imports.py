@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import json
 import sqlite3
 from datetime import datetime
 from typing import Any
 
+from . import text
 from .queries import load, require
 from .records import PUBLISHED, SKIPPED, AccountRef, PlanRecord, iso
 
@@ -39,9 +39,9 @@ def record_import(
         " account_user_id, account_handle, caller, request_digest, text_sha256, state,"
         " post_id, url, note, meta_json, attempts, created_at, updated_at)"
         " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
-        (key, tool, provider, account.alias, account.user_id, account.handle, caller,
-         digest, text_sha256, state, post_id, url, note,
-         json.dumps(meta, sort_keys=True), when, now),
+        (key, tool, provider, account.alias, account.user_id, account.handle,
+         text.persisted_text(caller), digest, text_sha256, state, post_id, url,
+         text.persisted_text(note), text.persisted_meta(meta), when, now),
     )  # fmt: skip
     if post_id is not None:
         conn.execute(
