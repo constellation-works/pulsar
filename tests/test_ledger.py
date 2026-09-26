@@ -20,8 +20,8 @@ import pytest
 from mcp.client._memory import InMemoryTransport
 from mcp.client.session import ClientSession
 
-from pulsar.errors import OUTCOME_UNKNOWN, OutcomeUnknown, PulsarError
-from pulsar.ledger import (
+from pulsar.core.errors import OUTCOME_UNKNOWN, OutcomeUnknown, PulsarError
+from pulsar.core.ledger import (
     FAILED,
     PUBLISHED,
     SCHEMA_VERSION,
@@ -30,7 +30,7 @@ from pulsar.ledger import (
     Ledger,
     request_digest,
 )
-from pulsar.server import Runtime, build_server
+from pulsar.surfaces.mcp import Runtime, build_server
 
 from .conftest import SECRETS
 from .media_samples import MP4

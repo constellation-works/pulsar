@@ -26,9 +26,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .config import Paths
 from .errors import INVALID_CONFIG, PulsarError
 from .jsonx import as_list, as_object
+from .paths import Paths
 
 DEFAULT_PLAIN_POST_USD = 0.015
 DEFAULT_URL_POST_USD = 0.20

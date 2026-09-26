@@ -1,8 +1,9 @@
 import pytest
 
-from pulsar.errors import INVALID_TEXT, SECRET_DETECTED, PulsarError
-from pulsar.guard import scan_for_secrets, validate_text, weighted_length
-from pulsar.settings import DEFAULT_PLAIN_POST_USD, DEFAULT_URL_POST_USD, Prices
+from pulsar.core.errors import INVALID_TEXT, SECRET_DETECTED, PulsarError
+from pulsar.core.guard import scan_for_secrets
+from pulsar.core.settings import DEFAULT_PLAIN_POST_USD, DEFAULT_URL_POST_USD, Prices
+from pulsar.providers.x.text import validate_text, weighted_length
 
 
 def test_weighted_length_counts_urls_as_23_and_emoji_as_2():

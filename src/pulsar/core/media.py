@@ -34,10 +34,13 @@ import stat
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 
-from .config import IMAGE_MIME_TYPES, MAX_IMAGE_BYTES, MAX_VIDEO_BYTES, VIDEO_MIME_TYPES
 from .errors import INVALID_CONFIG, INVALID_MEDIA, SECRET_DETECTED, PulsarError
 from .guard import scan_for_secrets
 
+MAX_IMAGE_BYTES = 5 * 1024 * 1024
+IMAGE_MIME_TYPES = frozenset({"image/png", "image/jpeg", "image/gif", "image/webp"})
+MAX_VIDEO_BYTES = 100 * 1024 * 1024
+VIDEO_MIME_TYPES = frozenset({"video/mp4"})
 SUPPORTED_MIME_TYPES = IMAGE_MIME_TYPES | VIDEO_MIME_TYPES
 
 # ISO BMFF major brands that carry an ``ftyp`` box but are not MP4 video:

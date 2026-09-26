@@ -329,5 +329,16 @@ facts — never post text, media bytes, or credentials.
 make check     # ruff lint + format check + basedpyright strict + pytest (no network; fake X transport)
 ```
 
-`tests/conftest.py` holds the scripted X API; tests drive the server through a
-real MCP client session over the in-memory transport.
+Layout:
+
+```text
+src/pulsar/core/          provider-neutral: plan, ledger, policy, credential store,
+                          media confinement, secret scanner, settings, errors (no HTTP)
+src/pulsar/providers/x/   X: OAuth 2.0 PKCE flow, v2 API client, text rules, limits
+src/pulsar/surfaces/      front ends: mcp.py (standalone MCP server), cli.py
+```
+
+`tests/test_layering.py` enforces the boundaries on the import graph: `core`
+imports no `httpx`, `mcp`, provider or surface; providers never import a
+surface. `tests/conftest.py` holds the scripted X API; tests drive the server
+through a real MCP client session over the in-memory transport.

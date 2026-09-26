@@ -9,10 +9,10 @@ from pathlib import Path
 import httpx
 import pytest
 
-from pulsar.config import Paths
-from pulsar.errors import AuthExpired, OutcomeUnknown, PulsarError
-from pulsar.store import TokenBundle, TokenStore
-from pulsar.xapi import MediaProcessingError, XClient
+from pulsar.core.errors import AuthExpired, OutcomeUnknown, PulsarError
+from pulsar.core.paths import Paths
+from pulsar.core.store import TokenBundle, TokenStore
+from pulsar.providers.x.client import MediaProcessingError, XClient
 
 from .conftest import ACCESS, REFRESH, ROTATED_ACCESS, ROTATED_REFRESH, RotatingTokenEndpoint
 
@@ -220,7 +220,7 @@ async def test_upload_video_without_processing_info_is_ready(client, authed, fak
 
 
 async def test_upload_video_processing_timeout(store, authed, fake_x, monkeypatch):
-    monkeypatch.setattr("pulsar.xapi.PROCESSING_TIMEOUT_SECONDS", 3)
+    monkeypatch.setattr("pulsar.providers.x.client.PROCESSING_TIMEOUT_SECONDS", 3)
     fake_x.media_finalize_info = {"state": "pending", "check_after_secs": 2}
     fake_x.media_status_info = [{"state": "in_progress", "check_after_secs": 2}]
     clock = FakeClock()
@@ -299,7 +299,7 @@ async def test_two_processes_on_one_home_refresh_once(paths, bundle, token_endpo
 
 
 async def test_refresh_waits_boundedly_for_the_lock(paths, authed, token_endpoint, monkeypatch):
-    monkeypatch.setattr("pulsar.xapi.REFRESH_LOCK_WAIT_SECONDS", 0.2)
+    monkeypatch.setattr("pulsar.providers.x.client.REFRESH_LOCK_WAIT_SECONDS", 0.2)
     client = XClient(TokenStore(paths), transport=token_endpoint.transport())
     fd = os.open(paths.refresh_lock, os.O_RDWR | os.O_CREAT, 0o600)
     fcntl.flock(fd, fcntl.LOCK_EX)  # another process mid-refresh, and stuck

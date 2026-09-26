@@ -3,9 +3,9 @@ import stat
 
 import pytest
 
-from pulsar.errors import PulsarError
-from pulsar.fsutil import append_private, write_private_atomic
-from pulsar.settings import Prices, Settings, load_settings
+from pulsar.core.errors import PulsarError
+from pulsar.core.fsutil import append_private, write_private_atomic
+from pulsar.core.settings import Prices, Settings, load_settings
 
 
 def test_defaults_without_a_config_file(paths):

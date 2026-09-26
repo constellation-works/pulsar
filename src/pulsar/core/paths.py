@@ -1,4 +1,4 @@
-"""Filesystem layout and constants for the pulsar host state.
+"""Filesystem layout of the pulsar host state.
 
 Everything pulsar persists lives under one directory (``PULSAR_HOME``,
 default ``~/.config/pulsar``). The token bundle is encrypted at rest; the
@@ -13,21 +13,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .fsutil import ensure_private_dir
-
-X_AUTHORIZE_URL = "https://x.com/i/oauth2/authorize"
-X_TOKEN_URL = "https://api.x.com/2/oauth2/token"
-X_API_BASE = "https://api.x.com/2"
-SCOPES = ("tweet.read", "tweet.write", "users.read", "offline.access")
-
-CALLBACK_HOST = "127.0.0.1"
-CALLBACK_PORT = 8976
-CALLBACK_PATH = "/callback"
-
-MAX_POST_WEIGHTED_LENGTH = 280
-MAX_IMAGE_BYTES = 5 * 1024 * 1024
-IMAGE_MIME_TYPES = frozenset({"image/png", "image/jpeg", "image/gif", "image/webp"})
-MAX_VIDEO_BYTES = 100 * 1024 * 1024
-VIDEO_MIME_TYPES = frozenset({"video/mp4"})
 
 
 def pulsar_home() -> Path:
@@ -79,7 +64,3 @@ class Paths:
 
 def default_paths() -> Paths:
     return Paths(pulsar_home())
-
-
-def callback_url() -> str:
-    return f"http://{CALLBACK_HOST}:{CALLBACK_PORT}{CALLBACK_PATH}"

@@ -6,11 +6,11 @@ import threading
 import pytest
 from cryptography.fernet import Fernet
 
-from pulsar.auth import bind
-from pulsar.errors import PulsarError
-from pulsar.server import Runtime
-from pulsar.store import CredentialConflict, FernetFileStore, TokenBundle, TokenStore
-from pulsar.writelog import WriteLog
+from pulsar.core.errors import PulsarError
+from pulsar.core.store import CredentialConflict, FernetFileStore, TokenBundle, TokenStore
+from pulsar.core.writelog import WriteLog
+from pulsar.providers.x.auth import bind
+from pulsar.surfaces.mcp import Runtime
 
 
 def test_round_trip_and_private_modes(store, bundle, paths):
@@ -56,7 +56,7 @@ def test_from_token_response_defaults():
 
 
 def test_rebinding_drops_the_cached_identity(store, bundle, paths):
-    from pulsar.auth import bind, load_client_id
+    from pulsar.providers.x.auth import bind, load_client_id
 
     store.save(bundle)
     paths.whoami_cache.write_text('{"user_id": "1", "username": "old-account"}\n')
@@ -80,7 +80,7 @@ def test_crash_mid_save_keeps_the_previous_bundle(store, bundle, paths, monkeypa
     def crash(*_args):
         raise OSError("power cut")
 
-    monkeypatch.setattr("pulsar.fsutil.os.replace", crash)
+    monkeypatch.setattr("pulsar.core.fsutil.os.replace", crash)
     with pytest.raises(OSError):
         store.save(rotated)
     monkeypatch.undo()
@@ -99,7 +99,7 @@ def test_losing_the_key_creation_race_adopts_the_winners_key(store, bundle, path
         os.close(fd)
         real_link(src, dst)  # now FileExistsError, as for the real loser
 
-    monkeypatch.setattr("pulsar.store.os.link", another_process_wins)
+    monkeypatch.setattr("pulsar.core.store.os.link", another_process_wins)
     store.save(bundle)
     assert paths.key_file.read_bytes() == winner
     assert Fernet(winner).decrypt(paths.token_file.read_bytes())
@@ -161,7 +161,7 @@ def test_wide_modes_are_refused_not_treated_as_logged_out(store, authed, paths, 
 
 
 def test_foreign_owner_is_refused(store, authed, paths, monkeypatch):
-    monkeypatch.setattr("pulsar.store.os.geteuid", lambda: os.getuid() + 1)
+    monkeypatch.setattr("pulsar.core.store.os.geteuid", lambda: os.getuid() + 1)
     with pytest.raises(PulsarError) as exc:
         store.load()
     assert exc.value.code == "insecure_storage"
@@ -248,7 +248,7 @@ async def test_logout_waits_for_a_refresh_in_flight(store, bundle, paths):
 def test_login_gives_up_boundedly_when_the_lock_is_stuck(store, bundle, paths, monkeypatch):
     import fcntl
 
-    monkeypatch.setattr("pulsar.store.REFRESH_LOCK_WAIT_SECONDS", 0.2)
+    monkeypatch.setattr("pulsar.core.store.REFRESH_LOCK_WAIT_SECONDS", 0.2)
     store.save(bundle)
     fd = os.open(paths.refresh_lock, os.O_RDWR | os.O_CREAT, 0o600)
     try:
@@ -269,7 +269,7 @@ def test_undecodable_bundle_is_auth_expired(store, authed, paths):
     from cryptography.fernet import Fernet as F
 
     key = paths.key_file.read_bytes().strip()
-    from pulsar.fsutil import write_private_atomic
+    from pulsar.core.fsutil import write_private_atomic
 
     write_private_atomic(paths.token_file, F(key).encrypt(b'{"unexpected": 1}'))
     with pytest.raises(PulsarError) as exc:

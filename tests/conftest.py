@@ -16,8 +16,8 @@ from urllib.parse import parse_qs
 import httpx
 import pytest
 
-from pulsar.config import Paths
-from pulsar.store import TokenBundle, TokenStore
+from pulsar.core.paths import Paths
+from pulsar.core.store import TokenBundle, TokenStore
 
 ACCESS = "access-token-AAAA1111"
 REFRESH = "refresh-token-BBBB2222"

@@ -34,7 +34,6 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
-from .config import Paths
 from .errors import (
     IDEMPOTENCY_CONFLICT,
     INVALID_ARGUMENT,
@@ -46,6 +45,7 @@ from .errors import (
 )
 from .fsutil import append_private
 from .guard import scan_for_secrets
+from .paths import Paths
 
 log = logging.getLogger(__name__)
 

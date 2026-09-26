@@ -14,8 +14,7 @@ from typing import Any
 
 import httpx
 
-from .config import X_API_BASE, X_TOKEN_URL
-from .errors import (
+from ...core.errors import (
     API_ERROR,
     DUPLICATE,
     FORBIDDEN,
@@ -27,8 +26,14 @@ from .errors import (
     OutcomeUnknown,
     PulsarError,
 )
-from .jsonx import as_list, as_object, obj
-from .store import REFRESH_LOCK_WAIT_SECONDS, CredentialConflict, CredentialStore, TokenBundle
+from ...core.jsonx import as_list, as_object, obj
+from ...core.store import (
+    REFRESH_LOCK_WAIT_SECONDS,
+    CredentialConflict,
+    CredentialStore,
+    TokenBundle,
+)
+from .config import X_API_BASE, X_TOKEN_URL
 
 # Raised before any request byte reaches X: no connection, no pool slot, or a
 # request httpx refused to build. Retrying one of these cannot double-write.

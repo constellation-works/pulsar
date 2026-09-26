@@ -13,7 +13,7 @@ dependencies = [
 ]
 
 [project.scripts]
-pulsar = "pulsar.cli:main"
+pulsar = "pulsar.surfaces.cli:main"
 
 [dependency-groups]
 dev = [

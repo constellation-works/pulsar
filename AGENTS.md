@@ -13,4 +13,7 @@
   the network — use the fake transport in `tests/`.
 - `agent-main` is the landing branch; commit directly, no PR gate. Daniel owns
   releases and any change to the X app registration.
-- Run `make check` before handing off.
+- Layout: `src/pulsar/core` (provider-neutral, no HTTP), `providers/<name>`
+  (one channel adapter each), `surfaces` (MCP server, CLI). Keep `core` free
+  of provider and transport imports; `tests/test_layering.py` enforces it.
+- Run `make check` (ruff, basedpyright strict, pytest) before handing off.

@@ -14,8 +14,8 @@ import os
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from .config import Paths
 from .fsutil import append_private
+from .paths import Paths
 
 if TYPE_CHECKING:
     from .ledger import WriteRecord

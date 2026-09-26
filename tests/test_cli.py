@@ -5,8 +5,8 @@ import time
 
 import pytest
 
-from pulsar.cli import main, status_report
-from pulsar.store import TokenBundle
+from pulsar.core.store import TokenBundle
+from pulsar.surfaces.cli import main, status_report
 
 from .conftest import ROTATED_ACCESS, SECRETS
 

@@ -53,10 +53,10 @@ from typing import Protocol
 
 from cryptography.fernet import Fernet, InvalidToken
 
-from .config import Paths
 from .errors import API_ERROR, INSECURE_STORAGE, AuthExpired, PulsarError
 from .fsutil import FILE_MODE, require_private, write_private_atomic
 from .jsonx import as_object, obj
+from .paths import Paths
 
 LOCK_POLL_SECONDS = 0.05
 # Longer than one token POST (the HTTP timeout) so a waiter outlasts a live refresher.

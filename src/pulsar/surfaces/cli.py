@@ -11,12 +11,13 @@ from typing import Any
 
 import httpx
 
-from . import __version__
-from .auth import load_client_id, login
-from .config import CALLBACK_HOST, Paths, default_paths
-from .errors import PulsarError
-from .store import TokenStore, cached_identity
-from .xapi import REFRESH_AHEAD_SECONDS
+from .. import __version__
+from ..core.errors import PulsarError
+from ..core.paths import Paths, default_paths
+from ..core.store import TokenStore, cached_identity
+from ..providers.x.auth import load_client_id, login
+from ..providers.x.client import REFRESH_AHEAD_SECONDS
+from ..providers.x.config import CALLBACK_HOST
 
 
 def _auth_login(args: argparse.Namespace) -> int:
@@ -97,7 +98,7 @@ async def status_report(
             out["account"] = cached
             out["account_source"] = "cache"
         return _finish(out)
-    from .server import Runtime
+    from .mcp import Runtime
 
     try:
         rt = Runtime(paths, transport=transport)
@@ -157,7 +158,7 @@ def _auth_logout(_: argparse.Namespace) -> int:
 
 
 def _serve(args: argparse.Namespace) -> int:
-    from .server import Runtime, build_server
+    from .mcp import Runtime, build_server
 
     try:
         rt = Runtime()

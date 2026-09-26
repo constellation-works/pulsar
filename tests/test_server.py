@@ -9,10 +9,10 @@ import pytest
 from mcp.client._memory import InMemoryTransport
 from mcp.client.session import ClientSession
 
-from pulsar.config import MAX_IMAGE_BYTES, MAX_VIDEO_BYTES
-from pulsar.server import TOOL_NAMES, Runtime, build_server
-from pulsar.settings import Settings
-from pulsar.store import TokenBundle
+from pulsar.core.media import MAX_IMAGE_BYTES, MAX_VIDEO_BYTES
+from pulsar.core.settings import Settings
+from pulsar.core.store import TokenBundle
+from pulsar.surfaces.mcp import TOOL_NAMES, Runtime, build_server
 
 from .conftest import SECRETS
 from .media_samples import JPEG, MP4, PEM_KEY
@@ -294,7 +294,7 @@ async def test_upload_video_failure_logs_final_state_without_media_id(
 async def test_upload_video_timeout_has_no_media_id_and_logs_state(
     session, authed, fake_x, paths, monkeypatch
 ):
-    monkeypatch.setattr("pulsar.xapi.PROCESSING_TIMEOUT_SECONDS", 0)
+    monkeypatch.setattr("pulsar.providers.x.client.PROCESSING_TIMEOUT_SECONDS", 0)
     fake_x.media_finalize_info = {"state": "pending", "check_after_secs": 2}
     out = _payload(
         await session.call_tool(
@@ -335,7 +335,7 @@ async def test_upload_media_limits_and_mime(session, authed, fake_x, media_dir):
 
 
 async def test_upload_video_base64_limit(session, authed, fake_x, monkeypatch):
-    monkeypatch.setattr("pulsar.media.MAX_VIDEO_BYTES", 4)
+    monkeypatch.setattr("pulsar.core.media.MAX_VIDEO_BYTES", 4)
     out = _payload(
         await session.call_tool(
             "upload_media", {"base64": base64.b64encode(MP4).decode(), "mime": "video/mp4"}
@@ -544,7 +544,7 @@ async def test_unreadable_refresh_is_a_failed_write_not_outcome_unknown(
 async def test_post_that_went_live_stays_ok_when_bookkeeping_fails(
     paths, authed, fake_x, monkeypatch, caplog
 ):
-    from pulsar.errors import INSECURE_STORAGE, PulsarError
+    from pulsar.core.errors import INSECURE_STORAGE, PulsarError
 
     rt = Runtime(paths, settings=Settings(), transport=fake_x.transport())
 
@@ -594,8 +594,8 @@ async def test_identity_looked_up_before_a_relogin_is_not_trusted_after_it(
     paths, store, bundle, fake_x
 ):
     """A whoami that raced `auth login` writes the old account under the old binding."""
-    from pulsar.auth import bind
-    from pulsar.store import save_identity
+    from pulsar.core.store import save_identity
+    from pulsar.providers.x.auth import bind
 
     old = bind(paths, "client-xyz", bundle)
     rt = Runtime(paths, settings=Settings(), transport=fake_x.transport())
