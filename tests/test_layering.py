@@ -134,7 +134,7 @@ def test_imports_point_down(package, member):
 
 # A lower layer's public API is its package's __init__: code outside the
 # package imports from the package root, and only the names __all__ lists.
-FACADES = ("pulsar.core", "pulsar.providers.x")
+FACADES = ("pulsar.core", "pulsar.providers.x", "pulsar.app")
 
 
 def _public(package: str) -> set[str]:
@@ -170,6 +170,30 @@ def test_other_layers_use_only_the_public_api(facade):
             elif module == parent and names and leaf in names:
                 offenders.append(f"{where} imports {facade} as a module; import names from it")
     assert not offenders, f"{facade} used past its public API:\n" + "\n".join(offenders)
+
+
+# The front ends reach everything below through app: never core or providers.
+FRONT_ENDS = ("cli", "mcp", "orbit_tool")
+BELOW_APP = ("pulsar.core", "pulsar.providers")
+
+
+@pytest.mark.parametrize("front_end", FRONT_ENDS)
+def test_front_ends_go_through_app(front_end):
+    single = SRC / f"{front_end}.py"
+    files = ([single] if single.exists() else []) + sorted((SRC / front_end).rglob("*.py"))
+    assert files, f"{front_end} has no source"
+    offenders = []
+    for path in files:
+        for module, names, line in _statements(path):
+            for below in BELOW_APP:
+                parent, _, leaf = below.rpartition(".")
+                if (
+                    module == below
+                    or module.startswith(below + ".")
+                    or (module == parent and names and leaf in names)
+                ):
+                    offenders.append(f"{path.relative_to(SRC)}:{line} imports {below}")
+    assert not offenders, "front ends skip app:\n" + "\n".join(offenders)
 
 
 # core takes the environment, the cwd and the home as arguments (STD-02 §R3).

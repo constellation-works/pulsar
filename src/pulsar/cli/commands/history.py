@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 
-from pulsar.app import ops
+from pulsar.app import HISTORY_LIMIT_DEFAULT, HISTORY_LIMIT_MAX, history_report
 
 from .. import views
 from ..context import Context, emit, notice
@@ -17,8 +17,8 @@ def register(commands: Commands) -> None:
     p.add_argument(
         "--limit",
         type=_limit,
-        default=ops.HISTORY_LIMIT_DEFAULT,
-        help=f"rows to show, 1..{ops.HISTORY_LIMIT_MAX}; default: {ops.HISTORY_LIMIT_DEFAULT}",
+        default=HISTORY_LIMIT_DEFAULT,
+        help=f"rows to show, 1..{HISTORY_LIMIT_MAX}; default: {HISTORY_LIMIT_DEFAULT}",
     )
     p.set_defaults(func=_history)
 
@@ -28,13 +28,13 @@ def _limit(value: str) -> int:
         limit = int(value)
     except ValueError:
         raise argparse.ArgumentTypeError(f"not an integer: {value!r}") from None
-    if not 1 <= limit <= ops.HISTORY_LIMIT_MAX:
-        raise argparse.ArgumentTypeError(f"must be 1..{ops.HISTORY_LIMIT_MAX}, got {limit}")
+    if not 1 <= limit <= HISTORY_LIMIT_MAX:
+        raise argparse.ArgumentTypeError(f"must be 1..{HISTORY_LIMIT_MAX}, got {limit}")
     return limit
 
 
 def _history(args: argparse.Namespace, ctx: Context) -> int:
-    out, code = ops.history_report(ctx.paths, account=args.account, limit=args.limit)
+    out, code = history_report(ctx.paths, account=args.account, limit=args.limit)
     if not out["writes"]:
         notice("no ledger rows" + (f" for {args.account}" if args.account else ""))
     elif out["truncated"]:

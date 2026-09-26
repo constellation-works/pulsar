@@ -1,5 +1,5 @@
 """The ``pulsar`` command line: human auth management, the operator verbs
-(``app/ops.py``) and the MCP server.
+(``pulsar.app``) and the MCP server.
 
 ``main`` parses and dispatches; each command lives in ``commands/``; a
 command's payload is printed through ``context.emit``, rendered by

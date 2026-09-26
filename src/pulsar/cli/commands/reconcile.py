@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 
-from pulsar.app import ops
+from pulsar.app import reconcile_report
 
 from .. import views
 from ..context import Context, emit
@@ -26,7 +26,7 @@ def register(commands: Commands) -> None:
 
 def _reconcile(args: argparse.Namespace, ctx: Context) -> int:
     return emit(
-        asyncio.run(ops.reconcile_report(ctx.paths, account=args.account, transport=ctx.transport)),
+        asyncio.run(reconcile_report(ctx.paths, account=args.account, transport=ctx.transport)),
         ctx,
         views.reconcile,
     )

@@ -12,7 +12,7 @@ import json
 import sys
 from typing import Any
 
-from pulsar.core import INVALID_ARGUMENT, PulsarError
+from pulsar.app import INVALID_ARGUMENT, PulsarError
 
 EXIT_OK, EXIT_FAILED, EXIT_USAGE = 0, 1, 2
 

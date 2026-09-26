@@ -41,8 +41,9 @@ Inside `app`, `runtime.py` (rank 0) comes before `health.py` and `ops.py` (rank 
 A layer is used only through its public API: its package's `__init__.py`. Code outside
 the package imports from the package root (`from pulsar.core import Ledger`), and only the
 names its `__all__` lists; modules inside the package import each other directly. Adding
-to `__all__` is the deliberate act of widening the layer. `core` and `providers/x`
-are held to this today; `app` follows.
+to `__all__` is the deliberate act of widening the layer. `core`, `providers/x` and
+`app` are held to it. The front ends go through `app` only: what they need from `core` or
+a provider, `app` re-exports.
 
 Inside `cli/`, the same rule:
 

@@ -37,11 +37,9 @@ from dataclasses import replace
 from pathlib import Path
 from typing import IO, Any
 
-from pulsar.app import ops
-from pulsar.app.health import attention as health_attention
-from pulsar.app.health import auth_report
-from pulsar.app.runtime import Runtime, configure_logging
-from pulsar.core import (
+from pulsar.app import (
+    HISTORY_LIMIT_DEFAULT,
+    HISTORY_LIMIT_MAX,
     INTERNAL,
     INVALID_ARGUMENT,
     INVALID_CONFIG,
@@ -55,13 +53,19 @@ from pulsar.core import (
     Plan,
     PlanRecord,
     PulsarError,
+    Runtime,
     Settings,
     as_object,
+    auth_report,
+    budget_report,
+    check_limit,
+    configure_logging,
     home_command,
     load_settings,
     open_beneath,
     resolve_home,
 )
+from pulsar.app import attention as health_attention
 
 log = logging.getLogger(__name__)
 
@@ -145,7 +149,7 @@ async def status(paths: Paths, call: Call) -> Output:
     """
     account = call.string("account")
     auth, _ = await auth_report(paths, account=account)
-    budget, _ = ops.budget_report(paths, account=account)
+    budget, _ = budget_report(paths, account=account)
     usage = {entry["alias"]: entry for entry in budget["accounts"]}
     rt = Runtime(paths, read_only=True)
     try:
@@ -298,12 +302,10 @@ def _reason(exc: BaseException) -> str:
 async def history(paths: Paths, call: Call) -> Output:
     """The newest ledger rows, flattened for a table, and how many there are. Offline."""
     account = call.string("account")
-    limit = call.input.get("limit", ops.HISTORY_LIMIT_DEFAULT)
+    limit = call.input.get("limit", HISTORY_LIMIT_DEFAULT)
     if not isinstance(limit, int):
-        raise PulsarError(
-            INVALID_ARGUMENT, f"`limit` must be an integer 1..{ops.HISTORY_LIMIT_MAX}"
-        )
-    limit = ops.check_limit(limit)
+        raise PulsarError(INVALID_ARGUMENT, f"`limit` must be an integer 1..{HISTORY_LIMIT_MAX}")
+    limit = check_limit(limit)
     rt = Runtime(paths, read_only=True)
     try:
         alias = rt.account(account).alias if account is not None else None

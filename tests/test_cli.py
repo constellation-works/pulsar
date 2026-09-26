@@ -93,7 +93,7 @@ def test_an_unexpected_exception_is_internal(paths, monkeypatch, capsys):
     def boom(*_a, **_k):
         raise RuntimeError("secret detail")
 
-    monkeypatch.setattr("pulsar.app.ops.budget_report", boom)
+    monkeypatch.setattr("pulsar.cli.commands.status.budget_report", boom)
     code, out, err = _run(capsys, ["status"])
     assert code == 1 and out == ""
     body = _error(err)

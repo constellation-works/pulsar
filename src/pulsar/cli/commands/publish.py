@@ -6,7 +6,7 @@ import argparse
 import asyncio
 from pathlib import Path
 
-from pulsar.app import ops
+from pulsar.app import CLI_CALLER, publish_report, validate_report
 
 from .. import views
 from ..context import Context, emit, notice
@@ -44,7 +44,7 @@ def register(commands: Commands) -> None:
     )
     p_pub.add_argument(
         "--caller",
-        help=f"audit label recorded in the ledger; default: $PULSAR_CALLER, else {ops.CLI_CALLER}",
+        help=f"audit label recorded in the ledger; default: $PULSAR_CALLER, else {CLI_CALLER}",
     )
     p_pub.add_argument("--confirm", action="store_true", help="actually publish (costs money)")
     p_pub.add_argument("--yes", action="store_true", help="deprecated alias of --confirm")
@@ -53,7 +53,7 @@ def register(commands: Commands) -> None:
 
 def _validate(args: argparse.Namespace, ctx: Context) -> int:
     return emit(
-        asyncio.run(ops.validate_report(ctx.paths, args.plan, account=args.account)),
+        asyncio.run(validate_report(ctx.paths, args.plan, account=args.account)),
         ctx,
         views.plan_report,
     )
@@ -64,7 +64,7 @@ def _publish(args: argparse.Namespace, ctx: Context) -> int:
         notice("--yes is deprecated; use --confirm")
     return emit(
         asyncio.run(
-            ops.publish_report(
+            publish_report(
                 ctx.paths,
                 args.plan,
                 account=args.account,

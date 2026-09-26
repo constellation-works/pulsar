@@ -16,7 +16,7 @@ from typing import Any
 
 import httpx
 
-from pulsar.core import Paths
+from pulsar.app import Paths
 
 from . import views
 from .render import Mode, Terminal, View, render

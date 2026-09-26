@@ -60,7 +60,7 @@ def _orbit_tool(_args: argparse.Namespace, _ctx: Context) -> int:
 
 
 def _serve(args: argparse.Namespace, ctx: Context) -> int:
-    from pulsar.app.runtime import Runtime
+    from pulsar.app import Runtime
     from pulsar.mcp import build_server, loopback_security
 
     if args.transport != "http" and (args.host is not None or args.port is not None):

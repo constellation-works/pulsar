@@ -17,8 +17,7 @@ from collections.abc import Sequence
 import httpx
 
 from pulsar import __version__
-from pulsar.app.runtime import configure_logging, default_paths
-from pulsar.core import INTERNAL, PulsarError
+from pulsar.app import INTERNAL, PulsarError, configure_logging, default_paths
 
 from .commands import REGISTER
 from .context import Context, Handler
