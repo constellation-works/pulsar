@@ -99,6 +99,33 @@ at zero. The `[accounts]`, `[policy]` and `default_account` keys are parsed
 and validated now; the plan publisher that enforces them is landing in
 phase 2 (ORB-13028), and this section will say so when it does.
 
+Policy (`pulsar.core.policy`) is checked before any network call, against
+what the ledger has committed (in-flight, published or unknown-outcome posts;
+failed and skipped ones are free). The first rule that fails is reported:
+
+1. `quiet_hours` — now is inside the window. `[start, end)` on the wall clock
+   of `policy.timezone`; it may wrap midnight (`23:00-07:00`).
+2. `daily_cap` — the account's posts today plus the plan's posts exceed
+   `max_posts_per_day`. Every post of a thread counts.
+3. `budget_exceeded` — spend today (all accounts) plus the plan's estimated
+   cost exceeds `daily_budget_usd`; then the same for the calendar month and
+   `monthly_budget_usd` (`detail.window` is `day` or `month`).
+
+Limits are inclusive: a plan that lands exactly on a cap or budget passes.
+Money is compared in exact decimals (6 places). A budget of 0 stops every
+paid plan and a cap of 0 every post; a plan that costs nothing is never
+stopped by a budget, only by the cap. All three codes are `retryable` and
+carry `detail.retry_after` (ISO 8601 UTC): the end of the quiet window, the
+next local midnight, or the first instant of the next local month. A plan too
+big to ever pass on its own — more posts than the cap, or costing more than a
+budget — is refused with `retryable: false` and `retry_after: null`; split it
+or raise the limit.
+
+Days and months are local to `policy.timezone` (default `UTC`), so a day is
+23 or 25 hours across a DST change. A quiet-hours end skipped by a
+spring-forward gap ends the window at the jump; on a fall-back night a
+repeated wall-clock hour inside the window is quiet both times.
+
 `media.roots` are the only directories `upload_media` will read a `path` from
 (see [Media confinement](#media-confinement)). With none set, a `path` upload
 is refused with `invalid_config` and only `base64` works: the server's cwd is
