@@ -193,6 +193,24 @@ repeating a delete that succeeded returns `{ok: true, post_id, deleted,
 replayed: true}` without calling X. `upload_media` records every upload in the
 ledger but does not deduplicate: an orphaned media id is harmless and expires.
 
+Plans and threads (the phase-2 publisher; the ledger side is in place, the
+tool that drives it is not yet) key one ledger row per plan and account, with
+the same rules plus three more:
+
+- **thread partly published** (some posts went out, a later one failed
+  definitively) → the row is `partial`; calling again resumes after the last
+  published post and never re-sends one.
+- **key skipped** (a recorded decision never to publish it, e.g. imported
+  from the old routine's `posted.jsonl`) → reported as skipped; nothing is
+  sent.
+- **key imported as published** from `posted.jsonl` → replays the imported
+  receipt whatever the new plan's text, since the old routine kept no request
+  to compare with.
+
+Policy (budgets, daily cap) is checked in the same transaction that claims a
+new row or re-arms a failed one, so a refused call leaves no row; a replay is
+never re-checked.
+
 #### `outcome_unknown`
 
 Returned when the post request may have reached X but pulsar cannot tell
@@ -345,28 +363,75 @@ take the write lock (`BEGIN IMMEDIATE`, busy timeout) so two of them cannot
 send the same key.
 
 One row per logical write (`writes` table): `idempotency_key` (unique), `tool`,
-the account's `account_user_id`/`account_handle`, the advisory `caller`,
-`request_digest` (SHA-256 of the canonical request), `text_sha256`, `state`,
-`post_id`/`media_id`/`url`, `error_code`/`error_message`/`retryable`,
-`meta_json` (mime, bytes, processing_state, deleted), `attempts`,
-`created_at`/`updated_at`. States:
+`provider`, the account's `account_alias` (`x:constworks`) and
+`account_user_id`/`account_handle`, the advisory `caller`, `request_digest`
+(SHA-256 of the canonical request), `plan_digest` (plan rows), `text_sha256`,
+`state`, `post_id`/`media_id`/`url`, `error_code`/`error_message`/`retryable`,
+`note` (why a key was skipped), `meta_json` (mime, bytes, processing_state,
+deleted, superseded post), `attempts`, `created_at`/`updated_at`.
+
+A plan row has one `items` row per post of its thread: `idx`, `state`,
+`text_sha256`, `fingerprint` (for reconcile to match the post on the
+provider), `est_cost_usd`, `post_id`/`url`, `media_ids_json`, the error
+columns, and `submitted_at`. Legacy `create_post` rows mirror themselves as one
+item, so every post counts toward usage. States:
 
 ```
-submitting ──> published   X confirmed; the key replays this receipt
-           ├─> failed      nothing reached X, or X rejected it; a retry re-sends
-           └─> unknown     may have reached X; never re-sent automatically
+legacy tools   submitting ──> published | failed | unknown
+
+plan row       pending ──> submitting ──> published   every post confirmed
+                                      ├─> partial     some published, the rest provably not
+                                      ├─> failed      none published; a retry re-sends
+                                      └─> unknown     a post may have gone out; blocked
+               skipped                                decided never to publish this key
+plan item      pending ──> submitting ──> published | failed | unknown
 ```
 
-The row is committed as `submitting` *before* the request leaves, so a crash
-or kill mid-request leaves evidence, and that key answers `outcome_unknown`
-until it is reconciled. Inspect it with `sqlite3 ledger.sqlite3 'select * from
-writes'`.
+The row (or, for a thread, the item) is committed as `submitting` *before* its
+request leaves, so a crash or kill mid-request leaves evidence, and that key
+answers `outcome_unknown` until it is reconciled. Moving an item from
+`pending` to `submitting` is a compare-and-set under the write lock, so two
+callers holding the same pending row cannot both send a post; a thread's posts
+start strictly in order. Calling again on a `failed` or `partial` row re-arms
+its failed posts and keeps the published ones. Reconcile works on `unknown`
+rows and on `submitting` rows whose newest post was submitted longer ago than
+a staleness window (a sender that died); it settles each ambiguous post as
+published (with the id it found) or absent (`error_code:
+outcome_resolved_absent`, re-sent on the next call), and the row's state is
+derived again from its posts. Inspect it with `sqlite3 ledger.sqlite3 'select
+* from writes'`.
+
+**Usage** for policy: spend is the sum of `est_cost_usd` over posts that are
+`submitting`, `published` or `unknown` (anything that may have cost money),
+across all accounts, since the start of the policy day and month; the daily
+post count is the same posts for one account. Pending, failed and skipped posts
+are free.
+
+**Schema versions.** v1 was the single-request ledger; v2 adds providers,
+account aliases, plans and items. A v1 file migrates in place on first open
+(`writes` is rebuilt to widen its states; old rows are recorded as provider
+`x`, alias `x:<handle>`, and each `create_post` row gains its one item). A
+pulsar older than the file refuses it with `invalid_config`.
+
+**Importing `posted.jsonl`.** The retired x-updates routine's log
+(`{key, ts, post_id|null, text?, note?, superseded_post_id?,
+superseded_note?}` per line) imports with `pulsar.core.importer.import_posted`:
+a line with a `post_id` becomes a `published` row (tool `import:posted.jsonl`)
+with one item carrying the post id, URL and the text's SHA-256 (never the
+text), costing nothing; `post_id: null` becomes `skipped` with the line's note;
+superseded facts go to `meta_json`. Timestamps are kept, normalised to UTC.
+The import is idempotent, reports a key already taken by another write (or an
+imported row that disagrees with its line) as a conflict without touching it,
+and reports malformed lines by number without stopping. Imported rows are not
+exported to `writes.jsonl`.
 
 `writes.jsonl` beside it is an **export**, append-only: one line per terminal
-transition (`published`, `failed`, `unknown`) with `ts`, `tool`, `caller`,
-`dry_run` (always false now), `post_id`, `text_sha256`, `state`,
-`idempotency_key`, `account_user_id`, `error_code` on failure, and the upload
-facts — never post text, media bytes, or credentials.
+transition (`published`, `partial`, `failed`, `unknown`, `skipped`) with `ts`,
+`tool`, `caller`, `dry_run` (always false now), `post_id`, `text_sha256`,
+`state`, `idempotency_key`, `account_user_id`, `error_code` on failure, and the
+upload facts. Plan rows add `account_alias`, `plan_digest` and `items`
+(`[{idx, state, post_id}]`); their `post_id` and `text_sha256` are the first
+post's. Never post text, media bytes, or credentials.
 
 ## Development
 
