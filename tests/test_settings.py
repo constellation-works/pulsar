@@ -5,7 +5,23 @@ import pytest
 
 from pulsar.core.errors import PulsarError
 from pulsar.core.fsutil import append_private, write_private_atomic
+from pulsar.core.paths import Paths
 from pulsar.core.settings import Prices, Settings, load_settings
+
+
+@pytest.fixture
+def user_paths(paths, tmp_path) -> Paths:
+    """``paths`` with the user's home resolved, as a surface hands it down."""
+    user = tmp_path / "user"
+    user.mkdir()
+    return Paths(paths.home, user_home=user)
+
+
+def _config(paths, text, mode=0o644):
+    """Write config.toml the way an operator's editor does (readable, not writable)."""
+    paths.ensure()
+    paths.settings_file.write_text(text)
+    os.chmod(paths.settings_file, mode)
 
 
 def test_defaults_without_a_config_file(paths):
@@ -16,9 +32,9 @@ def test_defaults_without_a_config_file(paths):
 
 
 def test_prices_and_media_roots_from_config(paths, tmp_path):
-    paths.ensure()
-    paths.settings_file.write_text(
-        f'[prices]\nplain_post_usd = 0.02\nurl_post_usd = 0.3\n[media]\nroots = ["{tmp_path}"]\n'
+    _config(
+        paths,
+        f'[prices]\nplain_post_usd = 0.02\nurl_post_usd = 0.3\n[media]\nroots = ["{tmp_path}"]\n',
     )
     s = load_settings(paths)
     assert s.prices == Prices(plain_post_usd=0.02, url_post_usd=0.3)
@@ -38,8 +54,7 @@ def test_prices_and_media_roots_from_config(paths, tmp_path):
     ],
 )
 def test_bad_config_is_refused_not_defaulted(paths, body):
-    paths.ensure()
-    paths.settings_file.write_text(body)
+    _config(paths, body)
     with pytest.raises(PulsarError) as exc:
         load_settings(paths)
     assert exc.value.code == "invalid_config"
@@ -49,20 +64,109 @@ def test_no_media_roots_by_default(paths):
     assert load_settings(paths).media_roots == ()
 
 
-@pytest.mark.parametrize("root", ["/", "~", "~/..", "relative/media"])
-def test_broad_or_relative_media_roots_are_refused(paths, root):
-    paths.ensure()
-    paths.settings_file.write_text(f'[media]\nroots = ["{root}"]\n')
+@pytest.mark.parametrize("root", ["/", "~", "~/..", "relative/media", "~other/media"])
+def test_broad_or_relative_media_roots_are_refused(user_paths, root):
+    _config(user_paths, f'[media]\nroots = ["{root}"]\n')
+    with pytest.raises(PulsarError) as exc:
+        load_settings(user_paths)
+    assert exc.value.code == "invalid_config"
+    assert exc.value.detail == {"path": str(user_paths.settings_file), "key": "media.roots"}
+
+
+def test_the_user_home_itself_is_refused_as_a_root(user_paths):
+    _config(user_paths, f'[media]\nroots = ["{user_paths.user_home}"]\n')
+    with pytest.raises(PulsarError) as exc:
+        load_settings(user_paths)
+    assert "home directory" in exc.value.message
+
+
+def test_a_directory_below_home_is_an_acceptable_root(user_paths, monkeypatch):
+    monkeypatch.setenv("HOME", "/nonexistent")  # core never reads it
+    _config(user_paths, '[media]\nroots = ["~/marketing"]\n')
+    assert load_settings(user_paths).media_roots == (user_paths.user_home / "marketing",)
+
+
+def test_tilde_needs_a_user_home_from_the_caller(paths, tmp_path):
+    _config(paths, '[media]\nroots = ["~/marketing"]\n')
+    with pytest.raises(PulsarError) as exc:
+        load_settings(paths)
+    assert exc.value.code == "invalid_config" and "absolute path" in exc.value.message
+    assert load_settings(paths, user_home=tmp_path).media_roots == (tmp_path / "marketing",)
+
+
+# -- R28: numbers are checked at load, naming the key and the resolved file -----------
+
+
+@pytest.mark.parametrize(
+    ("body", "key"),
+    [
+        ("[policy]\ndaily_budget_usd = nan\n", "policy.daily_budget_usd"),
+        ("[policy]\nmonthly_budget_usd = inf\n", "policy.monthly_budget_usd"),
+        ("[policy]\ndaily_budget_usd = -inf\n", "policy.daily_budget_usd"),
+        ("[prices.x]\nplain_post_usd = nan\n", "prices.x.plain_post_usd"),
+        ("[prices]\nurl_post_usd = inf\n", "prices.url_post_usd"),
+        ("[prices.x]\nurl_post_usd = 101\n", "prices.x.url_post_usd"),
+        ("[policy]\ndaily_budget_usd = 1e308\n", "policy.daily_budget_usd"),
+        ("[policy]\nmonthly_budget_usd = 100001\n", "policy.monthly_budget_usd"),
+        ("[policy]\nmax_posts_per_day = 10001\n", "policy.max_posts_per_day"),
+        ("[policy]\nmax_posts_per_day = 5.0\n", "policy.max_posts_per_day"),
+        ('[policy]\nmax_posts_per_day = "5"\n', "policy.max_posts_per_day"),
+    ],
+)
+def test_numbers_must_be_finite_bounded_and_the_right_kind(paths, body, key):
+    _config(paths, body)
     with pytest.raises(PulsarError) as exc:
         load_settings(paths)
     assert exc.value.code == "invalid_config"
+    assert exc.value.message.startswith(f"{paths.settings_file}: {key} must be")
+    assert exc.value.detail == {"path": str(paths.settings_file), "key": key}
 
 
-def test_a_directory_below_home_is_an_acceptable_root(paths, tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path))
+def test_bounds_are_inclusive(paths):
+    _config(
+        paths,
+        "[prices.x]\nplain_post_usd = 100\n[policy]\ndaily_budget_usd = 10000\n"
+        "monthly_budget_usd = 100000\nmax_posts_per_day = 10000\n",
+    )
+    s = load_settings(paths)
+    assert s.prices.plain_post_usd == 100.0 and s.policy.max_posts_per_day == 10_000
+
+
+def test_errors_name_the_resolved_config_path(paths):
+    _config(paths, "not toml [")
+    with pytest.raises(PulsarError) as exc:
+        load_settings(paths)
+    assert exc.value.message.startswith(f"{paths.settings_file}: not valid TOML")
+
+
+# -- R9: the config is refused when others could have changed it ------------------------
+
+
+@pytest.mark.parametrize("mode", [0o664, 0o646, 0o666])
+def test_a_group_or_world_writable_config_is_refused(paths, mode):
+    _config(paths, "[policy]\ndaily_budget_usd = 1000\n", mode=mode)
+    with pytest.raises(PulsarError) as exc:
+        load_settings(paths)
+    assert exc.value.code == "insecure_storage"
+    assert str(paths.settings_file) in exc.value.message
+    assert exc.value.detail["fix"] == f"chmod go-w {paths.settings_file}"
+
+
+def test_a_readable_config_is_fine(paths):
+    _config(paths, "[policy]\ndaily_budget_usd = 2\n", mode=0o644)
+    assert load_settings(paths).policy.daily_budget_usd == 2.0
+
+
+def test_a_symlinked_config_is_refused(paths, tmp_path):
+    real = tmp_path / "dotfiles-config.toml"
+    real.write_text("[policy]\ndaily_budget_usd = 1000\n")
+    os.chmod(real, 0o600)
     paths.ensure()
-    paths.settings_file.write_text('[media]\nroots = ["~/marketing"]\n')
-    assert load_settings(paths).media_roots == (tmp_path / "marketing",)
+    paths.settings_file.symlink_to(real)
+    with pytest.raises(PulsarError) as exc:
+        load_settings(paths)
+    assert exc.value.code == "insecure_storage" and "symlink" in exc.value.message
+    assert str(real) in exc.value.detail["fix"]
 
 
 def _mode(p):
@@ -94,12 +198,12 @@ def test_atomic_write_leaves_the_old_file_when_the_write_fails(tmp_path, monkeyp
     assert sorted(p.name for p in tmp_path.iterdir()) == ["tokens.enc"], "temp file cleaned up"
 
 
-def test_full_config(paths, tmp_path, monkeypatch):
+def test_full_config(user_paths):
     from datetime import time
 
-    monkeypatch.setenv("HOME", str(tmp_path))
-    paths.ensure()
-    paths.settings_file.write_text(
+    paths = user_paths
+    _config(
+        paths,
         """
 default_account = "X:@ConstWorks"
 
@@ -122,7 +226,7 @@ timezone = "America/Los_Angeles"
 
 [media]
 roots = ["~/marketing"]
-"""
+""",
     )
     s = load_settings(paths)
     assert s.default_account == "x:constworks"
@@ -159,8 +263,7 @@ def test_policy_defaults_agreed_with_daniel():
     ],
 )
 def test_bad_policy_and_account_config_is_refused(paths, body):
-    paths.ensure()
-    paths.settings_file.write_text(body)
+    _config(paths, body)
     with pytest.raises(PulsarError) as exc:
         load_settings(paths)
     assert exc.value.code == "invalid_config"

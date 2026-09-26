@@ -7,9 +7,14 @@ last_validated: 2026-09-26
 # Reference: `config.toml`
 
 Optional, in the pulsar home ([settings.py](../../../../src/pulsar/core/settings.py)). Every key
-has a default. An unknown key or bad value fails with `invalid_config` naming the file, rather
+has a default. An unknown key or bad value fails at load with `invalid_config` whose message
+starts with the resolved path of the file and names the key (`detail: {path, key}`), rather
 than falling back silently. It is the only source of settings for every surface, the Orbit
 plugin included (`[plugins.pulsar]` takes no keys).
+
+The file may be world-readable, but a symlinked `config.toml`, one owned by another user, or
+one writable by group or other users is refused (`insecure_storage`, fix `chmod go-w <path>`):
+it sets budgets, media roots and `expected_handle`.
 
 ```toml
 default_account = "x:constworks"     # the account a call without `account` acts as
@@ -39,5 +44,19 @@ roots = ["~/workspace/constellation/marketing"]   # default: none (path uploads 
 | `prices.<provider>.plain_post_usd`, `url_post_usd` | X: 0.015 / 0.20; others: 0 | [specs/policy.md](../specs/policy.md) |
 | `policy.*` | as above, no quiet hours | [specs/policy.md](../specs/policy.md) |
 | `media.roots` | none | [specs/media-confinement.md](../specs/media-confinement.md) |
+
+Numbers must be finite (TOML's `nan` and `inf` are refused) and within these bounds, which exist
+to catch a typo at load rather than let it through a budget:
+
+| Key | Type | Allowed |
+|---|---|---|
+| `prices.<provider>.plain_post_usd`, `url_post_usd` | number | 0 to 100 |
+| `policy.daily_budget_usd` | number | 0 to 10,000 |
+| `policy.monthly_budget_usd` | number | 0 to 100,000 |
+| `policy.max_posts_per_day` | integer (not `5.0`) | 0 to 10,000 |
+
+`~` in a media root expands against the user's home that the surface resolved and passed down
+(`Paths.user_home`); a surface that passes none gets `invalid_config` for a `~` root and must
+spell the path out. `~name` is not expanded.
 
 `pulsar serve` prints the effective media roots to stderr at startup.
