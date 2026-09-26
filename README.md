@@ -91,4 +91,5 @@ make check    # standards check, uv lock --check, ruff, basedpyright strict, pyt
 ```
 
 `src/pulsar/core` is provider-neutral and imports no HTTP; `providers/x` is the X adapter;
-`surfaces` holds the MCP server, CLI and Orbit backend. `tests/test_layering.py` enforces it.
+`app` joins them into the verbs; `cli/`, `mcp.py` and `orbit_tool.py` are the front ends on
+top. `tests/test_layering.py` enforces the order.

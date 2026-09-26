@@ -9,35 +9,34 @@ summary: The layers of pulsar, which way imports point, and where ambient state 
 
 # Architecture
 
-pulsar is one core with three front ends. This page fixes the layer order (STD-02 §R1);
+pulsar is one core with three front ends (the surfaces). This page fixes the layer order (STD-02 §R1);
 [tests/test_layering.py](../../tests/test_layering.py) checks it on the import graph.
 
 ## Layers
 
 ```
-surfaces   cli ─▶ mcp, orbit_tool ─▶ health, ops ─▶ runtime
-              │                                       │
-providers  x (client, auth, adapter) ◀────────────────┘
-              │
-core       plan, publisher, ledger, policy, accounts, store, media, guard, settings, paths
+front ends   cli ─▶ mcp, orbit_tool          the surfaces: argv, MCP, the Orbit envelope
+                 │
+app          ops, health ─▶ runtime          the verbs every front end calls; composition
+                 │
+providers    x (client, auth, adapter)       one channel each
+                 │
+core         plan, publisher, ledger, policy, accounts, store, media, guard, settings, paths
 ```
 
-An arrow is "may import". Each layer imports only the layers below it:
+An arrow is "may import". A layer imports only the layers below it, never above or
+beside it; the one exception is that `cli` starts the other two front ends (`serve`,
+`orbit-tool`), so it ranks above them and nothing imports `cli`.
 
-| Layer | Owns | Must not import |
-|---|---|---|
-| `core` | plans, the publisher, the ledger, policy, accounts and credential storage, media loading, the secret scanner, settings | `httpx`, `mcp`, `providers`, `surfaces` |
-| `providers/<name>` | one channel: its HTTP client, OAuth, and the `Channel` adapter | `mcp`, `surfaces` |
-| `surfaces` | composition and the front ends | nothing below restricts it |
+| Rank | Package | Owns | Also must not import |
+|---|---|---|---|
+| 0 | `core` | plans, the publisher, the ledger, policy, accounts and credential storage, media loading, the secret scanner, settings | `httpx`, `mcp` |
+| 1 | `providers/<name>` | one channel: its HTTP client, OAuth, and the `Channel` adapter | `mcp` |
+| 2 | `app` | the `Runtime` that joins settings, storage, the ledger and providers; the reports and operator verbs, as functions returning `(report, exit_code)` | `mcp` |
+| 3 | `mcp.py`, `orbit_tool.py` | the MCP server and the Orbit exec backend | |
+| 4 | `cli/` | the one dispatcher: parses argv, prints, maps errors to exit codes | |
 
-Inside `surfaces`, a module imports only modules of a lower rank:
-
-| Rank | Module | Role |
-|---|---|---|
-| 0 | `runtime.py` | composition: joins settings, storage, the ledger and providers into a `Runtime` |
-| 1 | `health.py`, `ops.py` | the reports and operator verbs, as functions returning `(report, exit_code)` |
-| 2 | `mcp.py`, `orbit_tool.py` | the MCP server and the Orbit exec backend |
-| 3 | `cli/` | the one dispatcher: parses argv, prints, maps errors to exit codes |
+Inside `app`, `runtime.py` (rank 0) comes before `health.py` and `ops.py` (rank 1).
 
 Inside `cli/`, the same rule:
 
@@ -52,10 +51,10 @@ Inside `cli/`, the same rule:
 ## Ambient state
 
 `core` takes the environment, the working directory and the home as arguments (STD-02 §R3).
-The surfaces resolve them once, at the edge:
+The front ends and `app` resolve them once, at the edge:
 
 - **Home.** `PULSAR_HOME`, else `~/.config/pulsar`; under Orbit, `$ORBIT_PLUGIN_STATE/home`
-  (`orbit_tool.plugin_paths`). `runtime.default_paths` is where a surface turns the
+  (`orbit_tool.plugin_paths`). `app.runtime.default_paths` is where a front end turns the
   environment into `Paths`; no core module reads the environment, the cwd or `$HOME`, and
   `tests/test_layering.py` holds it there.
 - **Relative media paths** start from the `media_base` a surface passes to `Runtime`: the

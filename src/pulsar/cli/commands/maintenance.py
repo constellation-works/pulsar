@@ -6,7 +6,7 @@ import argparse
 import asyncio
 from pathlib import Path
 
-from pulsar.surfaces import ops
+from pulsar.app import ops
 
 from .. import views
 from ..context import Context, emit

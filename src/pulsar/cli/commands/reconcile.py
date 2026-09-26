@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 
-from pulsar.surfaces import ops
+from pulsar.app import ops
 
 from .. import views
 from ..context import Context, emit

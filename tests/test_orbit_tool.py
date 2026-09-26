@@ -1,4 +1,4 @@
-"""The Orbit exec backend (``surfaces/orbit_tool.py``) and the plugin manifest around it.
+"""The Orbit exec backend (``orbit_tool.py``) and the plugin manifest around it.
 
 These run the backend in-process; ``orbit plugin test <clean export> --grant fs,network``
 runs the same goldens (``tests/conformance/``) through Orbit and its sandbox.
@@ -16,10 +16,11 @@ import jsonschema
 import pytest
 import yaml
 
+from pulsar import orbit_tool
+from pulsar.app import ops
+from pulsar.app.ops import publish_report
+from pulsar.cli import main as cli_main
 from pulsar.core.paths import Paths
-from pulsar.surfaces import ops, orbit_tool
-from pulsar.surfaces.cli import main as cli_main
-from pulsar.surfaces.ops import publish_report
 
 from .conftest import ALIAS, SECRETS, register
 from .media_samples import PNG
@@ -126,7 +127,7 @@ def test_no_request_schema_takes_a_credential():
 def test_launcher_and_skill_ship_in_the_tree():
     launcher = ROOT / MANIFEST["spec"]["backend"]["command"]
     assert launcher.is_file() and os.access(launcher, os.X_OK)
-    assert "pulsar.surfaces.orbit_tool" in launcher.read_text(), (
+    assert "pulsar.orbit_tool" in launcher.read_text(), (
         "the manifest's backend command must exec the Orbit backend module"
     )
     for skill in MANIFEST["spec"]["skills"]:

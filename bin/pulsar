@@ -68,4 +68,4 @@ if [ ! -x "$venv/bin/python" ] || [ "$(cat "$stamp" 2>/dev/null || true)" != "$l
     mv -f "$stamp.tmp.$$" "$stamp"
 fi
 
-exec "$venv/bin/python" -m pulsar.surfaces.orbit_tool
+exec "$venv/bin/python" -m pulsar.orbit_tool

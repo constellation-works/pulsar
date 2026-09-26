@@ -7,10 +7,10 @@ import time
 
 import pytest
 
+from pulsar.app.health import attention, auth_report
 from pulsar.core.accounts import AccountRegistry
 from pulsar.core.errors import PulsarError
 from pulsar.core.store import TokenBundle
-from pulsar.surfaces.health import attention, auth_report
 
 from .conftest import ALIAS, ROTATED_ACCESS, SECRETS, register
 

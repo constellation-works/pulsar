@@ -8,10 +8,10 @@ from pathlib import Path
 
 import pytest
 
+from pulsar.cli import build_parser, main
 from pulsar.core.accounts import AccountRegistry
 from pulsar.core.ledger import SCHEMA_VERSION, Ledger
 from pulsar.providers.x import auth as x_auth
-from pulsar.surfaces.cli import build_parser, main
 
 from .conftest import ALIAS, SECRETS, register
 
@@ -93,7 +93,7 @@ def test_an_unexpected_exception_is_internal(paths, monkeypatch, capsys):
     def boom(*_a, **_k):
         raise RuntimeError("secret detail")
 
-    monkeypatch.setattr("pulsar.surfaces.ops.budget_report", boom)
+    monkeypatch.setattr("pulsar.app.ops.budget_report", boom)
     code, out, err = _run(capsys, ["status"])
     assert code == 1 and out == ""
     body = _error(err)

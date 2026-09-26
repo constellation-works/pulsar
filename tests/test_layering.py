@@ -10,11 +10,12 @@ import pytest
 
 SRC = Path(__file__).resolve().parents[1] / "src" / "pulsar"
 
-# core is provider-neutral: no HTTP, no MCP, nothing from providers or surfaces.
-# providers never reach up into surfaces.
+# Third-party boundaries; the order between pulsar's own layers is RANK below.
+# core is provider-neutral: no HTTP, no MCP. Only the MCP front end speaks MCP.
 FORBIDDEN = {
-    "core": ("httpx", "mcp", "pulsar.providers", "pulsar.surfaces"),
-    "providers": ("mcp", "pulsar.surfaces"),
+    "core": ("httpx", "mcp"),
+    "providers": ("mcp",),
+    "app": ("mcp",),
 }
 
 
@@ -49,16 +50,25 @@ def test_layer_imports_stay_inside_their_boundary(layer):
     )
 
 
-# Inside surfaces: composition first, then the reports built on it, then the
-# front ends. A module (or subpackage) imports only modules of a lower rank;
-# the CLI is the one dispatcher, so nothing imports it.
-SURFACE_RANK = {
+# The layers, bottom up: a module (or subpackage) imports only lower ranks.
+# core supplies everything; providers plug a channel into it; app joins them
+# into the verbs every front end calls; the front ends sit on top. The CLI
+# starts the other two (`serve`, `orbit-tool`), so it ranks above them and
+# nothing imports it.
+PULSAR_RANK = {
+    "core": 0,
+    "providers": 1,
+    "app": 2,
+    "mcp": 3,
+    "orbit_tool": 3,
+    "cli": 4,
+}
+
+# Inside app: the runtime first, then the reports built on it.
+APP_RANK = {
     "runtime": 0,
     "health": 1,
     "ops": 1,
-    "mcp": 2,
-    "orbit_tool": 2,
-    "cli": 3,
 }
 
 # Inside the CLI: rendering and errors first, then what commands share, then
@@ -73,7 +83,7 @@ CLI_RANK = {
     "main": 4,
 }
 
-RANKED = {"pulsar.surfaces": SURFACE_RANK, "pulsar.surfaces.cli": CLI_RANK}
+RANKED = {"pulsar": PULSAR_RANK, "pulsar.app": APP_RANK, "pulsar.cli": CLI_RANK}
 
 
 def _package_dir(package: str) -> Path:

@@ -11,13 +11,13 @@ import pytest
 from mcp.client._memory import InMemoryTransport
 from mcp.client.session import ClientSession
 
+from pulsar.app.runtime import Runtime
 from pulsar.core.accounts import AccountRegistry
 from pulsar.core.adapter import Identity
 from pulsar.core.media import MAX_IMAGE_BYTES, MAX_VIDEO_BYTES
 from pulsar.core.settings import Settings
 from pulsar.core.store import TokenBundle
-from pulsar.surfaces.mcp import TOOL_NAMES, build_server, loopback_security
-from pulsar.surfaces.runtime import Runtime
+from pulsar.mcp import TOOL_NAMES, build_server, loopback_security
 
 from .conftest import ALIAS, SECRETS, register
 from .media_samples import JPEG, MP4, PEM_KEY

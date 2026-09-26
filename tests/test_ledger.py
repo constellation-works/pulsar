@@ -34,7 +34,7 @@ from pulsar.core.ledger import (
     request_digest,
 )
 from pulsar.core.ledger.schema import SCHEMA_V1
-from pulsar.surfaces.mcp import Runtime, build_server
+from pulsar.mcp import Runtime, build_server
 
 from .conftest import SECRETS
 from .media_samples import MP4

@@ -13,10 +13,12 @@
   the network — use the fake transport in `tests/`.
 - `agent-main` is the landing branch; commit directly, no PR gate. Daniel owns
   releases and any change to the X app registration.
-- Layout: `src/pulsar/core` (provider-neutral, no HTTP), `providers/<name>`
-  (one channel adapter each), `surfaces` (MCP server, CLI, Orbit exec backend
-  `orbit_tool.py`). Keep `core` free of provider and transport imports;
-  `tests/test_layering.py` enforces it.
+- Layout, bottom up: `src/pulsar/core` (provider-neutral, no HTTP),
+  `providers/<name>` (one channel adapter each), `app` (the runtime and the
+  verbs every front end calls), then the front ends `mcp.py`, `orbit_tool.py`
+  (Orbit exec backend) and `cli/`. A layer imports only layers below it; keep
+  `core` free of provider and transport imports. `tests/test_layering.py`
+  enforces it.
 - The Orbit plugin is `plugin.yaml` + `bin/pulsar` + `schemas/` +
   `skills/publish/` + `tests/conformance/`. A tool change updates its schema
   and goldens; `orbit plugin test <clean export> --grant fs,network` runs them

@@ -9,7 +9,7 @@ doc_role: overview
 type: design
 summary: pulsar's three front ends over one core and one ledger — the standalone MCP server, the operator CLI and the Orbit plugin.
 tags: [surfaces, mcp, cli, orbit-plugin]
-paths: ["src/pulsar/surfaces/**", "plugin.yaml", "bin/pulsar", "schemas/**", "skills/**", "tests/conformance/**"]
+paths: ["src/pulsar/**", "plugin.yaml", "bin/pulsar", "schemas/**", "skills/**", "tests/conformance/**"]
 related_features: [publishing, accounts]
 related_artifacts: [ORB-12124, ORB-13028, ORB-13029, ORB-13030]
 ---
@@ -34,11 +34,11 @@ translates requests and errors; it never decides policy and never touches a cred
 ## 2. Core Concepts
 
 - **Runtime.** A surface's handle on one home: settings, registry, ledger, publisher
-  (`surfaces/mcp.py` `Runtime`).
+  (`mcp.py` `Runtime`).
 - **Tool annotations.** MCP `readOnlyHint` / `destructiveHint` / `idempotentHint`, so a
   harness can gate by tool without parsing arguments.
 - **Operator verbs.** `pulsar status | history | validate | publish | reconcile |
-  import-posted` (`surfaces/ops.py`).
+  import-posted` (`app/ops.py`).
 - **Exec envelope.** Orbit's one-request-per-process protocol: JSON in on stdin, one JSON line
   out.
 - **Caller.** A self-asserted audit label on writes; advisory, never authorization.
@@ -47,10 +47,10 @@ translates requests and errors; it never decides policy and never touches a cred
 
 | Concern | File | Task |
 |---------|------|------|
-| MCP server, tools, annotations | [surfaces/mcp.py](../../../src/pulsar/surfaces/mcp.py) | [ORB-12124], [ORB-13028] |
-| CLI: auth, operator verbs, `serve`, `orbit-tool` | [surfaces/cli/](../../../src/pulsar/surfaces/cli/) | [ORB-13027], [ORB-13028], [ORB-13029] |
-| Operator verbs | [surfaces/ops.py](../../../src/pulsar/surfaces/ops.py) | [ORB-13028] |
-| Orbit exec backend | [surfaces/orbit_tool.py](../../../src/pulsar/surfaces/orbit_tool.py) | [ORB-13029] |
+| MCP server, tools, annotations | [mcp.py](../../../src/pulsar/mcp.py) | [ORB-12124], [ORB-13028] |
+| CLI: auth, operator verbs, `serve`, `orbit-tool` | [cli/](../../../src/pulsar/cli/) | [ORB-13027], [ORB-13028], [ORB-13029] |
+| Operator verbs | [app/ops.py](../../../src/pulsar/app/ops.py) | [ORB-13028] |
+| Orbit exec backend | [orbit_tool.py](../../../src/pulsar/orbit_tool.py) | [ORB-13029] |
 | Plugin manifest, launcher | [plugin.yaml](../../../plugin.yaml), [bin/pulsar](../../../bin/pulsar) | [ORB-13029] |
 | Tool schemas, skill, goldens | [schemas/](../../../schemas/), [skills/publish/](../../../skills/publish/SKILL.md), [tests/conformance/](../../../tests/conformance/pulsar.yaml) | [ORB-13029] |
 

@@ -1,14 +1,11 @@
-"""Operator verbs (``surfaces/ops.py``) and the policy on the legacy ``create_post``."""
+"""Operator verbs (``app/ops.py``) and the policy on the legacy ``create_post``."""
 
 import json
 from pathlib import Path
 
 import pytest
 
-from pulsar.core.accounts import AccountRegistry
-from pulsar.core.errors import OutcomeUnknown, PulsarError
-from pulsar.core.ledger import Ledger
-from pulsar.surfaces.ops import (
+from pulsar.app.ops import (
     HISTORY_LIMIT_MAX,
     budget_report,
     history_report,
@@ -17,7 +14,10 @@ from pulsar.surfaces.ops import (
     reconcile_report,
     validate_report,
 )
-from pulsar.surfaces.runtime import Runtime
+from pulsar.app.runtime import Runtime
+from pulsar.core.accounts import AccountRegistry
+from pulsar.core.errors import OutcomeUnknown, PulsarError
+from pulsar.core.ledger import Ledger
 
 from .conftest import ALIAS, SECRETS, register
 from .test_ledger import call, claim_plan, open_session

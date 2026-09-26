@@ -6,7 +6,7 @@ import re
 
 import pytest
 
-from pulsar.surfaces.cli.render import (
+from pulsar.cli.render import (
     Fields,
     ModeConflict,
     Table,

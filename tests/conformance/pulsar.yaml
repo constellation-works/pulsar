@@ -1,5 +1,5 @@
 # Goldens for `orbit plugin test .`: an empty plugin state and workspace, no network.
-# Regenerate by running each input through `python -m pulsar.surfaces.orbit_tool` and
+# Regenerate by running each input through `python -m pulsar.orbit_tool` and
 # reading the diff; outputs are compared exactly.
 schemaVersion: 1
 kind: PluginTest

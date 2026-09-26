@@ -24,7 +24,7 @@ from typing import Any, Literal, assert_never
 
 import httpx
 
-from ..core.accounts import (
+from pulsar.core.accounts import (
     ACTIVE,
     REAUTH_REQUIRED,
     REVOKED,
@@ -33,12 +33,13 @@ from ..core.accounts import (
     check_handle,
     expected_handles,
 )
-from ..core.errors import AUTH_EXPIRED, PulsarError
-from ..core.paths import Paths
-from ..core.settings import Settings, load_settings
-from ..core.store import home_command, login_command
-from ..providers.x.auth import load_client_id
-from ..providers.x.client import REFRESH_AHEAD_SECONDS
+from pulsar.core.errors import AUTH_EXPIRED, PulsarError
+from pulsar.core.paths import Paths
+from pulsar.core.settings import Settings, load_settings
+from pulsar.core.store import home_command, login_command
+from pulsar.providers.x.auth import load_client_id
+from pulsar.providers.x.client import REFRESH_AHEAD_SECONDS
+
 from .runtime import Runtime
 
 Health = Literal["healthy", "unverified", "unhealthy"]

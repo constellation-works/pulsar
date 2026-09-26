@@ -27,9 +27,9 @@ from pulsar.core.errors import PulsarError
 from pulsar.core.paths import account_slug, alias_from_slug
 from pulsar.core.settings import AccountConfig, Settings
 from pulsar.core.store import FernetFileStore, TokenBundle
+from pulsar.mcp import Runtime, build_server
 from pulsar.providers.x.auth import complete_login
 from pulsar.providers.x.client import XClient
-from pulsar.surfaces.mcp import Runtime, build_server
 
 from .conftest import ALIAS, REFRESH, ROTATED_ACCESS, SECRETS, register
 from .lock_probe import blocked_on_lock

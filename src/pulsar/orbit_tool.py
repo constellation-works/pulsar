@@ -37,7 +37,11 @@ from dataclasses import replace
 from pathlib import Path
 from typing import IO, Any
 
-from ..core.errors import (
+from pulsar.app import ops
+from pulsar.app.health import attention as health_attention
+from pulsar.app.health import auth_report
+from pulsar.app.runtime import Runtime, configure_logging
+from pulsar.core.errors import (
     INTERNAL,
     INVALID_ARGUMENT,
     INVALID_CONFIG,
@@ -48,17 +52,13 @@ from ..core.errors import (
     UNSUPPORTED,
     PulsarError,
 )
-from ..core.jsonx import as_object
-from ..core.ledger import PUBLISHED, PlanRecord
-from ..core.media import open_beneath
-from ..core.paths import Paths, resolve_home
-from ..core.plan import Plan
-from ..core.settings import Settings, load_settings
-from ..core.store import home_command
-from . import ops
-from .health import attention as health_attention
-from .health import auth_report
-from .runtime import Runtime, configure_logging
+from pulsar.core.jsonx import as_object
+from pulsar.core.ledger import PUBLISHED, PlanRecord
+from pulsar.core.media import open_beneath
+from pulsar.core.paths import Paths, resolve_home
+from pulsar.core.plan import Plan
+from pulsar.core.settings import Settings, load_settings
+from pulsar.core.store import home_command
 
 log = logging.getLogger(__name__)
 

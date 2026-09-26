@@ -9,7 +9,7 @@ doc_role: design
 type: design
 summary: The MCP tools and the caller boundary, the operator CLI, and how the Orbit plugin runs (home, settings, paths, grants, launcher, envelope).
 tags: [surfaces, mcp, cli, orbit-plugin]
-paths: ["src/pulsar/surfaces/**", "plugin.yaml", "bin/pulsar", "schemas/**"]
+paths: ["src/pulsar/**", "plugin.yaml", "bin/pulsar", "schemas/**"]
 related_features: [publishing, accounts]
 related_artifacts: [ORB-13029, ORB-13032, ORB-13114, ORB-13115, ORB-13138]
 ---
@@ -20,7 +20,7 @@ The three front ends as built. The phase 4 plugin tools are in [3_vision.md](./3
 
 ## 1. MCP Server
 
-`pulsar serve` ([mcp.py](../../../src/pulsar/surfaces/mcp.py)) runs over stdio, or
+`pulsar serve` ([mcp.py](../../../src/pulsar/mcp.py)) runs over stdio, or
 streamable HTTP on a loopback address (`--transport http --host 127.0.0.1 --port 8977`;
 `--host` accepts only `127.0.0.1`, `localhost` or `::1`; both flags are refused without
 `--transport http`). Over HTTP a request whose `Host` is not one of the bound loopback
@@ -72,20 +72,20 @@ authenticates it.
 
 ## 2. Operator CLI
 
-[cli/](../../../src/pulsar/surfaces/cli/), verbs in [ops.py](../../../src/pulsar/surfaces/ops.py),
-health in [health.py](../../../src/pulsar/surfaces/health.py). `cli/main.py` builds the command
+[cli/](../../../src/pulsar/cli/), verbs in [ops.py](../../../src/pulsar/app/ops.py),
+health in [health.py](../../../src/pulsar/app/health.py). `cli/main.py` builds the command
 tree and dispatches; each command declares its parser and holds its handler in `cli/commands/`;
 `cli/context.py` prints a payload and `cli/errors.py` a failure.
 
 - **Help.** `pulsar` or `pulsar auth` alone prints that level's help on stderr and exits 2.
   The root help lists the commands in groups (Accounts, Publish, Observe, Maintenance,
   Services), built from each command's own declaration. `-V` prints the version.
-- **Output.** Each command builds one payload. [render.py](../../../src/pulsar/surfaces/cli/render.py)
+- **Output.** Each command builds one payload. [render.py](../../../src/pulsar/cli/render.py)
   resolves the mode once: `--format auto|table|json` or `--json`, accepted before or after
   the command; else `PULSAR_FORMAT`; else `auto`. An unknown `PULSAR_FORMAT` counts as
   `auto`, and `--json` with another `--format` is a usage error.
   - `auto` means `table` on a terminal and the piped form otherwise.
-  - `table` renders the command's view ([views.py](../../../src/pulsar/surfaces/cli/views.py)):
+  - `table` renders the command's view ([views.py](../../../src/pulsar/cli/views.py)):
     borderless tables with one line per record, `-` for absent values and right-aligned
     numbers, plus key-value fields for single results.
     - Values are cut with `…` only to fit a known width (`COLUMNS`, else the terminal's).
@@ -169,7 +169,7 @@ is linked as `pulsar-publish`.
   --no-install-project` once per `uv.lock` checksum, then execs the venv's Python with
   `PYTHONPATH` at the plugin's `src/`. `requires.programs: [uv]` lets Orbit resolve uv at
   enable ([ORB-13032]); older hosts need uv on the caller's `PATH`.
-- **Envelope.** [orbit_tool.py](../../../src/pulsar/surfaces/orbit_tool.py) reads
+- **Envelope.** [orbit_tool.py](../../../src/pulsar/orbit_tool.py) reads
   `{schema_version: 1, tool, input, context}` and writes exactly one JSON line,
   `{ok: true, output}` or `{ok: false, error: {code, message, retryable, detail?}}`, exit 0
   (a recorded deviation from STD-01 §R20). It never raises; an unexpected exception is

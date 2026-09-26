@@ -14,8 +14,8 @@ from pulsar.core.fsutil import hold_lock, write_private_atomic
 from pulsar.core.paths import Paths
 from pulsar.core.store import CredentialConflict, FernetFileStore, TokenBundle
 from pulsar.core.writelog import WriteLog
+from pulsar.mcp import Runtime
 from pulsar.providers.x.auth import load_client_id, save_client_id
-from pulsar.surfaces.mcp import Runtime
 
 from .conftest import register
 from .lock_probe import blocked_on_lock

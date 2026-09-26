@@ -9,7 +9,7 @@ doc_role: design
 type: design
 summary: Login with identity check, the registry, encrypted per-account bundles, locked refresh, legacy migration and the storage boundary.
 tags: [accounts, auth, oauth, credentials, storage]
-paths: ["src/pulsar/core/accounts.py", "src/pulsar/core/store.py", "src/pulsar/core/paths.py", "src/pulsar/core/fsutil.py", "src/pulsar/providers/x/auth.py", "src/pulsar/providers/x/client.py", "src/pulsar/surfaces/cli/commands/auth.py"]
+paths: ["src/pulsar/core/accounts.py", "src/pulsar/core/store.py", "src/pulsar/core/paths.py", "src/pulsar/core/fsutil.py", "src/pulsar/providers/x/auth.py", "src/pulsar/providers/x/client.py", "src/pulsar/cli/commands/auth.py"]
 related_features: [publishing, surfaces]
 related_artifacts: [ORB-13008, ORB-13009, ORB-13027, ORB-13028, ORB-13039, ORB-13138]
 ---
@@ -82,7 +82,7 @@ handle.
 
 ## 4. Status
 
-`pulsar auth status` ([health.py](../../../src/pulsar/surfaces/health.py)) reports each
+`pulsar auth status` ([health.py](../../../src/pulsar/app/health.py)) reports each
 account with every key present (null when unknown): `alias`, `status`, `expected_handle`,
 `mismatch`, `token_state`, `account`, `account_source`, `verified`, `refreshed`,
 `reauth_required`, `error`, and `health` with its `reason`. Exit 0 only when every reported

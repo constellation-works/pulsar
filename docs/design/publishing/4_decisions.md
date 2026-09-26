@@ -107,7 +107,7 @@ claimed) as well as sent, published and unknown ones.
 ## `create_post` keeps its original request digest
 
 **Recorded:** 2026-09-26 · [ORB-13028]
-**Code anchors:** `src/pulsar/core/ledger/keys.py::request_digest`, `src/pulsar/surfaces/mcp.py::_legacy_post`
+**Code anchors:** `src/pulsar/core/ledger/keys.py::request_digest`, `src/pulsar/mcp.py::_legacy_post`
 
 ### Context
 
@@ -152,7 +152,7 @@ substring; everything else is classified from status codes and fields.
 
 **Recorded:** 2026-09-26 · [ORB-13138]
 **Deviates from:** STD-03@2 §R1 (blocking calls off async threads)
-**Code anchors:** `src/pulsar/core/publisher.py::Publisher.publish`, `src/pulsar/core/publisher.py::Publisher.reconcile`, `src/pulsar/surfaces/mcp.py::_settle_on_error`, `src/pulsar/surfaces/mcp.py::_record_success`
+**Code anchors:** `src/pulsar/core/publisher.py::Publisher.publish`, `src/pulsar/core/publisher.py::Publisher.reconcile`, `src/pulsar/mcp.py::_settle_on_error`, `src/pulsar/mcp.py::_record_success`
 
 ### Context
 
@@ -202,7 +202,7 @@ write already happened, and reporting it as failed would invite a duplicate.
 
 **Recorded:** 2026-09-26 · [ORB-13138]
 **Deviates from:** STD-03@2 §R31
-**Code anchors:** `src/pulsar/core/ledger/records.py::REARMABLE_TOOLS`, `src/pulsar/core/ledger/facade.py::Ledger.claim`, `src/pulsar/surfaces/mcp.py::delete_post`, `src/pulsar/providers/x/client.py::XClient._post_refresh`
+**Code anchors:** `src/pulsar/core/ledger/records.py::REARMABLE_TOOLS`, `src/pulsar/core/ledger/facade.py::Ledger.claim`, `src/pulsar/mcp.py::delete_post`, `src/pulsar/providers/x/client.py::XClient._post_refresh`
 
 ### Context
 
