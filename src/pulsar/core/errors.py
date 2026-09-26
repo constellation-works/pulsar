@@ -10,7 +10,8 @@ from __future__ import annotations
 
 from typing import Any
 
-# Codes an agent may branch on. Keep this list in sync with the README.
+# Codes an agent may branch on. Keep this list in sync with
+# docs/design/surfaces/references/error-codes.md.
 AUTH_EXPIRED = "auth_expired"
 INVALID_TEXT = "invalid_text"
 INVALID_ARGUMENT = "invalid_argument"

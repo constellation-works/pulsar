@@ -4,7 +4,7 @@
   "properties": {
     "plan": {
       "type": "object",
-      "description": "An inline plan: {account|accounts, text | posts[{text, media[{path, alt}]}], reply_to | quote, variants, not_before}. See pulsar's README, Operator commands."
+      "description": "An inline plan: {account|accounts, text | posts[{text, media[{path, alt}]}], reply_to | quote, variants, not_before}. See pulsar's docs/design/publishing/2_design.md, Plans."
     },
     "source": {
       "type": "string",

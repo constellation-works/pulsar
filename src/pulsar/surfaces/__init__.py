@@ -1,1 +1,1 @@
-"""Front ends over the core: standalone MCP server and the human CLI."""
+"""Front ends over the core: standalone MCP server, the CLI and the Orbit exec backend."""

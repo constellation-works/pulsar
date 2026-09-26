@@ -1,8 +1,8 @@
 # Agent guidance
 
-- This repository is `pulsar`, the constellation's X write connector — an MCP
-  server (Python, `uv`) exposing `whoami`, `create_post`, `upload_media`,
-  `delete_post`. Reads are not its job.
+- This repository is `pulsar`, the constellation's social write connector (X
+  today; Python, `uv`): an MCP server, the `pulsar` CLI and an Orbit plugin over
+  one core and one ledger. Reads are not its job.
 - Credentials never cross the tool boundary. No tool may accept a token, key,
   or secret as an argument, and no tool may return one. Token storage stays
   encrypted under the pulsar home directory.
@@ -15,10 +15,14 @@
   releases and any change to the X app registration.
 - Layout: `src/pulsar/core` (provider-neutral, no HTTP), `providers/<name>`
   (one channel adapter each), `surfaces` (MCP server, CLI, Orbit exec backend
-  `orbit_tool.py`). Keep `core` free
-  of provider and transport imports; `tests/test_layering.py` enforces it.
+  `orbit_tool.py`). Keep `core` free of provider and transport imports;
+  `tests/test_layering.py` enforces it.
 - The Orbit plugin is `plugin.yaml` + `bin/pulsar` + `schemas/` +
   `skills/publish/` + `tests/conformance/`. A tool change updates its schema
   and goldens; `orbit plugin test <clean export> --grant fs,network` runs them
   under the sandbox. No symlinks in the tree: the installer refuses them.
+- Design docs live in `docs/design/<feature>/` and follow
+  `docs/design/CONVENTIONS.md`. A behaviour change updates its design doc (and
+  the README only if the front door changed) in the same commit; keep the README
+  minimal.
 - Run `make check` (ruff, basedpyright strict, pytest) before handing off.
