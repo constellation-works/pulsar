@@ -10,14 +10,13 @@ from mcp.client.session import ClientSession
 
 from pulsar.config import MAX_IMAGE_BYTES, MAX_VIDEO_BYTES
 from pulsar.server import TOOL_NAMES, Runtime, build_server
+from pulsar.settings import Settings
 
 from .conftest import SECRETS
+from .media_samples import JPEG, MP4, PEM_KEY
+from .media_samples import PNG as PNG_1PX
 
 SECRET_PARAM = re.compile(r"(?i)token|secret|bearer|password|api[_-]?key|client[_-]?secret")
-
-PNG_1PX = base64.b64decode(
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
-)
 
 pytestmark = pytest.mark.anyio
 
@@ -31,6 +30,15 @@ async def session(paths, fake_x):
             await s.initialize()
             yield s
     await rt.client.aclose()
+
+
+@pytest.fixture
+def media_dir(tmp_path, monkeypatch):
+    """The default media root is the server's cwd; put the test there."""
+    d = tmp_path / "media"
+    d.mkdir()
+    monkeypatch.chdir(d)
+    return d
 
 
 def _payload(result):
@@ -204,8 +212,8 @@ async def test_refresh_failure_surfaces_as_auth_expired(session, authed, fake_x)
     }
 
 
-async def test_upload_media_by_path_then_attach(session, authed, fake_x, tmp_path):
-    png = tmp_path / "pic.png"
+async def test_upload_media_by_path_then_attach(session, authed, fake_x, media_dir):
+    png = media_dir / "pic.png"
     png.write_bytes(PNG_1PX)
     up = _payload(await session.call_tool("upload_media", {"path": str(png)}))
     assert up["ok"] is True and up["media_id"] == "710000" and up["mime"] == "image/png"
@@ -226,9 +234,9 @@ async def test_upload_media_by_base64(session, authed):
     assert up["ok"] is True and up["bytes"] == len(PNG_1PX)
 
 
-async def test_upload_video_by_path_and_log(session, authed, fake_x, paths, tmp_path):
-    video = tmp_path / "reel.mp4"
-    video.write_bytes(b"distinct-video-payload")
+async def test_upload_video_by_path_and_log(session, authed, fake_x, paths, media_dir):
+    video = media_dir / "reel.mp4"
+    video.write_bytes(MP4)
     up = _payload(await session.call_tool("upload_media", {"path": str(video)}))
     assert up == {
         "ok": True,
@@ -247,7 +255,7 @@ async def test_upload_video_by_path_and_log(session, authed, fake_x, paths, tmp_
 
 
 async def test_upload_video_by_base64(session, authed):
-    data = b"mp4-payload"
+    data = MP4
     up = _payload(
         await session.call_tool(
             "upload_media", {"base64": base64.b64encode(data).decode(), "mime": "video/mp4"}
@@ -265,7 +273,7 @@ async def test_upload_video_failure_logs_final_state_without_media_id(
     }
     out = _payload(
         await session.call_tool(
-            "upload_media", {"base64": base64.b64encode(b"video").decode(), "mime": "video/mp4"}
+            "upload_media", {"base64": base64.b64encode(MP4).decode(), "mime": "video/mp4"}
         )
     )
     assert out["ok"] is False and out["code"] == "invalid_media"
@@ -273,7 +281,7 @@ async def test_upload_video_failure_logs_final_state_without_media_id(
     assert out["detail"]["error"]["message"] == "Unsupported codec"
     line = json.loads(paths.write_log.read_text().splitlines()[-1])
     assert line["processing_state"] == "failed"
-    assert line["mime"] == "video/mp4" and line["bytes"] == 5
+    assert line["mime"] == "video/mp4" and line["bytes"] == len(MP4)
     assert "media_id" not in line
 
 
@@ -284,7 +292,7 @@ async def test_upload_video_timeout_has_no_media_id_and_logs_state(
     fake_x.media_finalize_info = {"state": "pending", "check_after_secs": 2}
     out = _payload(
         await session.call_tool(
-            "upload_media", {"base64": base64.b64encode(b"video").decode(), "mime": "video/mp4"}
+            "upload_media", {"base64": base64.b64encode(MP4).decode(), "mime": "video/mp4"}
         )
     )
     assert out["code"] == "invalid_media" and "media_id" not in out
@@ -294,7 +302,7 @@ async def test_upload_video_timeout_has_no_media_id_and_logs_state(
 
 
 async def test_upload_media_scans_bytes_before_x_write(session, authed, fake_x):
-    data = b"prefix sk-abcdefghijklmnopqrstuvwxyz suffix"
+    data = MP4 + b"prefix sk-abcdefghijklmnopqrstuvwxyz suffix"
     out = _payload(
         await session.call_tool(
             "upload_media", {"base64": base64.b64encode(data).decode(), "mime": "video/mp4"}
@@ -305,13 +313,13 @@ async def test_upload_media_scans_bytes_before_x_write(session, authed, fake_x):
     assert fake_x.requests == []
 
 
-async def test_upload_media_limits_and_mime(session, authed, fake_x, tmp_path):
+async def test_upload_media_limits_and_mime(session, authed, fake_x, media_dir):
     for name, size, needle in (
         ("clip.webm", 1, "unsupported media type video/webm"),
         ("large.mp4", MAX_VIDEO_BYTES + 1, str(MAX_VIDEO_BYTES)),
         ("large.png", MAX_IMAGE_BYTES + 1, str(MAX_IMAGE_BYTES)),
     ):
-        media = tmp_path / name
+        media = media_dir / name
         with media.open("wb") as fh:
             fh.truncate(size)
         out = _payload(await session.call_tool("upload_media", {"path": str(media)}))
@@ -321,10 +329,10 @@ async def test_upload_media_limits_and_mime(session, authed, fake_x, tmp_path):
 
 
 async def test_upload_video_base64_limit(session, authed, fake_x, monkeypatch):
-    monkeypatch.setattr("pulsar.server.MAX_VIDEO_BYTES", 4)
+    monkeypatch.setattr("pulsar.media.MAX_VIDEO_BYTES", 4)
     out = _payload(
         await session.call_tool(
-            "upload_media", {"base64": base64.b64encode(b"12345").decode(), "mime": "video/mp4"}
+            "upload_media", {"base64": base64.b64encode(MP4).decode(), "mime": "video/mp4"}
         )
     )
     assert out["code"] == "invalid_media" and "limit is 4" in out["message"]
@@ -347,9 +355,92 @@ async def test_upload_media_description_documents_video_limits(session):
         ({"base64": base64.b64encode(b"abc").decode(), "mime": "video/webm"}, "unsupported"),
     ],
 )
-async def test_upload_media_rejections(session, authed, args, needle):
+async def test_upload_media_rejections(session, authed, fake_x, args, needle):
     out = _payload(await session.call_tool("upload_media", args))
     assert out["ok"] is False and out["code"] == "invalid_media" and needle in out["message"]
+    assert fake_x.requests == []
+
+
+async def test_upload_media_refuses_a_private_key_outside_the_roots(
+    session, authed, fake_x, media_dir, tmp_path
+):
+    """The exfiltration path: any readable file, declared as an image."""
+    key = tmp_path / "id_rsa"
+    key.write_bytes(PEM_KEY)
+    out = _payload(await session.call_tool("upload_media", {"path": str(key), "mime": "image/png"}))
+    assert out["ok"] is False and out["code"] == "invalid_media"
+    assert "outside the allowed media roots" in out["message"]
+    assert "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQ" not in json.dumps(out)
+    assert fake_x.requests == []
+
+
+async def test_upload_media_refuses_pulsar_home_even_under_a_root(
+    session, authed, fake_x, paths, tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)  # cwd root now contains the pulsar home
+    out = _payload(await session.call_tool("upload_media", {"path": str(paths.token_file)}))
+    assert out["code"] == "invalid_media" and "pulsar's own state" in out["message"]
+    assert fake_x.requests == []
+
+
+@pytest.mark.parametrize(
+    ("name", "data", "args", "needle"),
+    [
+        ("id_rsa", PEM_KEY, {"mime": "image/png"}, "not a recognised"),
+        ("photo.png", JPEG, {}, "does not match"),
+        ("photo.jpg", JPEG, {"mime": "image/png"}, "does not match"),
+        ("../escape.png", PNG_1PX, {}, "outside the allowed media roots"),
+    ],
+)
+async def test_upload_media_path_refusals_never_reach_x(
+    session, authed, fake_x, media_dir, name, data, args, needle
+):
+    target = media_dir / name
+    target.write_bytes(data)
+    out = _payload(await session.call_tool("upload_media", {"path": str(target), **args}))
+    assert out["ok"] is False and out["code"] == "invalid_media" and needle in out["message"]
+    assert fake_x.requests == []
+
+
+async def test_upload_media_refuses_symlink_out_of_the_root(
+    session, authed, fake_x, media_dir, tmp_path
+):
+    (tmp_path / "secret.png").write_bytes(PNG_1PX)
+    (media_dir / "link.png").symlink_to(tmp_path / "secret.png")
+    out = _payload(await session.call_tool("upload_media", {"path": "link.png"}))
+    assert out["code"] == "invalid_media" and "outside" in out["message"]
+    assert fake_x.requests == []
+
+
+async def test_upload_media_honours_configured_roots(paths, fake_x, authed, tmp_path):
+    root = tmp_path / "marketing"
+    root.mkdir()
+    (root / "pic.png").write_bytes(PNG_1PX)
+    rt = Runtime(paths, settings=Settings(media_roots=(root,)), transport=fake_x.transport())
+    async with InMemoryTransport(build_server(rt)) as (read, write):
+        async with ClientSession(read, write) as s:
+            await s.initialize()
+            ok = _payload(await s.call_tool("upload_media", {"path": str(root / "pic.png")}))
+            assert ok["ok"] is True and ok["mime"] == "image/png"
+            fake_x.requests.clear()
+            (tmp_path / "elsewhere.png").write_bytes(PNG_1PX)
+            out = _payload(
+                await s.call_tool("upload_media", {"path": str(tmp_path / "elsewhere.png")})
+            )
+            assert out["code"] == "invalid_media" and str(root) in out["detail"]["roots"]
+            assert fake_x.requests == []
+    await rt.client.aclose()
+
+
+async def test_upload_media_base64_with_mismatched_mime_never_reaches_x(session, authed, fake_x):
+    out = _payload(
+        await session.call_tool(
+            "upload_media", {"base64": base64.b64encode(JPEG).decode(), "mime": "image/png"}
+        )
+    )
+    assert out["code"] == "invalid_media"
+    assert out["detail"] == {"declared": "image/png", "sniffed": "image/jpeg"}
+    assert fake_x.requests == []
 
 
 async def test_delete_post(session, authed, fake_x, paths):
