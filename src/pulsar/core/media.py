@@ -28,12 +28,14 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
 import mimetypes
 import os
 import stat
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 
+from .adapter import LoadedMedia
 from .errors import INVALID_CONFIG, INVALID_MEDIA, SECRET_DETECTED, PulsarError
 from .guard import scan_for_secrets
 
@@ -259,3 +261,15 @@ def load_media(
     else:
         data, claimed = _load_base64(base64_data or "", mime)
     return data, _check_content(data, claimed)
+
+
+def load_ref(
+    path: str, alt: str, *, roots: Sequence[Path], deny: Iterable[Path] = ()
+) -> LoadedMedia:
+    """Load one plan media item under the same confinement as ``upload_media``.
+
+    The digest is over these bytes, and these bytes are what gets uploaded, so a
+    file swapped after approval changes the digest instead of the post.
+    """
+    data, mime = load_media(path, None, None, roots=roots, deny=deny)
+    return LoadedMedia(data=data, mime=mime, alt=alt, sha256=hashlib.sha256(data).hexdigest())

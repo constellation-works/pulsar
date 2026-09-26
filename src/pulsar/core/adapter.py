@@ -113,6 +113,10 @@ class Channel(Protocol):
         """Provider text rules, offline: raises ``invalid_text`` or ``unsupported``."""
         ...
 
+    def check_media(self, media: tuple[LoadedMedia, ...]) -> None:
+        """Provider rules for one post's media set (count, mixing, alt length), offline."""
+        ...
+
     def check_target(self, *, reply_to: str | None, quote: str | None) -> None:
         """Validate reply/quote ids offline: ``invalid_argument`` or ``unsupported``."""
         ...
