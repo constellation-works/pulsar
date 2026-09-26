@@ -60,7 +60,7 @@ the alias names. No agent ever sees a token, and no tool can accept one.
 | Owner-only files, atomic saves, `insecure_storage` | [core/fsutil.py](../../../src/pulsar/core/fsutil.py) | [ORB-13027] |
 | OAuth 2.0 PKCE login and identity check | [providers/x/auth.py](../../../src/pulsar/providers/x/auth.py) | [ORB-12124], [ORB-13028] |
 | Refresh under a per-account file lock | [providers/x/client.py](../../../src/pulsar/providers/x/client.py) | [ORB-13027] |
-| `pulsar auth login | status | logout | migrate` | [surfaces/cli.py](../../../src/pulsar/surfaces/cli.py) | [ORB-13027], [ORB-13028] |
+| `pulsar auth login | status | logout | migrate` | [surfaces/cli/commands/auth.py](../../../src/pulsar/surfaces/cli/commands/auth.py) | [ORB-13027], [ORB-13028] |
 
 ## Task References
 

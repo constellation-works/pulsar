@@ -28,19 +28,19 @@ A change that alters a row updates it in the same commit. Reviewed against the c
 | Rule | Status | Evidence |
 |---|---|---|
 | R1, R2 | Deviation | [verb-first grammar](./surfaces/4_decisions.md#the-cli-keeps-its-verb-first-grammar) |
-| R3 | Complies | long kebab-case flags, one spelling per concept (`cli.py`) |
+| R3 | Complies | long kebab-case flags, one spelling per concept (`surfaces/cli/commands/`) |
 | R4 | Gap | `--account` is per subcommand, not global: [ORB-13210] |
 | R5 | Deviation | `--confirm` on `publish`, `auth logout`, `import-posted`, `migrate`, `auth migrate`; [reconcile and first-use migration](./surfaces/4_decisions.md#reconcile-and-first-use-migration-apply-without---confirm) |
-| R6, R7 | Complies | one payload per command, every rendering derived from it (`surfaces/views.py`); `--format`/`--json` anywhere, conflict refused |
-| R8 | Complies | flag > `PULSAR_FORMAT` > auto, resolved once (`surfaces/output.py::resolve_mode`) |
-| R9 | Complies | piped: tab-separated lines, no header, escapes or truncation (`tests/test_output.py`) |
+| R6, R7 | Complies | one payload per command, every rendering derived from it (`surfaces/cli/views.py`); `--format`/`--json` anywhere, conflict refused |
+| R8 | Complies | flag > `PULSAR_FORMAT` > auto, resolved once (`surfaces/cli/render.py::resolve_mode`) |
+| R9 | Complies | piped: tab-separated lines, no header, escapes or truncation (`tests/test_render.py`) |
 | R10 | Deviation | [fields renamed before the first release](./surfaces/4_decisions.md#cli-output-fields-renamed-before-the-first-release) |
-| R11, R12, R13 | Complies | typed values; stdout carries only the payload; `EPIPE` ends quietly (`surfaces/cli.py`) |
-| R14 | Complies | borderless tables, one line per record, `-` for absent, right-aligned numbers (`surfaces/output.py::render`) |
+| R11, R12, R13 | Complies | typed values; stdout carries only the payload; `EPIPE` ends quietly (`surfaces/cli/main.py`) |
+| R14 | Complies | borderless tables, one line per record, `-` for absent, right-aligned numbers (`surfaces/cli/render.py::render`) |
 | R15, R16 | Complies | `…` only for a known width, full values in `--json`; an empty list prints nothing on stdout (JSON: `writes: []`) and a stderr notice, exit 0 |
-| R17 | Deviation | one decision point (`surfaces/output.py::resolve_terminal`), except argparse wrapping `--help`: [renders for its reader](./surfaces/4_decisions.md#the-cli-renders-for-its-reader-as-orbits-does) |
-| R18 | Complies | one role table (`surfaces/output.py::ROLES`), cells only, 16 colors; stripping escapes loses nothing (test) |
-| R19 | Complies | `error: <message>` on stderr, or one JSON object in JSON mode; usage errors pre-scan argv and `PULSAR_FORMAT` (`surfaces/cli.py::main`) |
+| R17 | Deviation | one decision point (`surfaces/cli/render.py::resolve_terminal`), except argparse wrapping `--help`: [renders for its reader](./surfaces/4_decisions.md#the-cli-renders-for-its-reader-as-orbits-does) |
+| R18 | Complies | one role table (`surfaces/cli/render.py::ROLES`), cells only, 16 colors; stripping escapes loses nothing (test) |
+| R19 | Complies | `error: <message>` on stderr, or one JSON object in JSON mode; usage errors pre-scan argv and `PULSAR_FORMAT` (`surfaces/cli/main.py::main`) |
 | R20 | Deviation | [`orbit-tool` exits 0 when it answered](./surfaces/4_decisions.md#pulsar-orbit-tool-exits-0-when-it-answered); other commands use 0/1/2 |
 | R21 | Complies | messages name the input and a remedy pinned to the home (`login_command`, `home_command`) |
 | R22, R23 | Complies | every command and flag has help; no task ids in user text |

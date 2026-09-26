@@ -48,7 +48,7 @@ translates requests and errors; it never decides policy and never touches a cred
 | Concern | File | Task |
 |---------|------|------|
 | MCP server, tools, annotations | [surfaces/mcp.py](../../../src/pulsar/surfaces/mcp.py) | [ORB-12124], [ORB-13028] |
-| CLI: auth, operator verbs, `serve`, `orbit-tool` | [surfaces/cli.py](../../../src/pulsar/surfaces/cli.py) | [ORB-13027], [ORB-13028], [ORB-13029] |
+| CLI: auth, operator verbs, `serve`, `orbit-tool` | [surfaces/cli/](../../../src/pulsar/surfaces/cli/) | [ORB-13027], [ORB-13028], [ORB-13029] |
 | Operator verbs | [surfaces/ops.py](../../../src/pulsar/surfaces/ops.py) | [ORB-13028] |
 | Orbit exec backend | [surfaces/orbit_tool.py](../../../src/pulsar/surfaces/orbit_tool.py) | [ORB-13029] |
 | Plugin manifest, launcher | [plugin.yaml](../../../plugin.yaml), [bin/pulsar](../../../bin/pulsar) | [ORB-13029] |

@@ -37,7 +37,17 @@ Inside `surfaces`, a module imports only modules of a lower rank:
 | 0 | `runtime.py` | composition: joins settings, storage, the ledger and providers into a `Runtime` |
 | 1 | `health.py`, `ops.py` | the reports and operator verbs, as functions returning `(report, exit_code)` |
 | 2 | `mcp.py`, `orbit_tool.py` | the MCP server and the Orbit exec backend |
-| 3 | `cli.py` | the one dispatcher: parses argv, prints, maps errors to exit codes |
+| 3 | `cli/` | the one dispatcher: parses argv, prints, maps errors to exit codes |
+
+Inside `cli/`, the same rule:
+
+| Rank | Module | Role |
+|---|---|---|
+| 0 | `render.py`, `errors.py` | output modes and rendering; failure printing and exit codes |
+| 1 | `views.py`, `parser.py` | each payload's human view; the argparse pieces commands declare with |
+| 2 | `context.py` | what a handler gets (`Context`) and how it prints (`emit`, `notice`) |
+| 3 | `commands/` | one module per command (or per help group): its parser and handler |
+| 4 | `main.py` | builds the tree from `commands/`, resolves the mode once, dispatches |
 
 ## Ambient state
 

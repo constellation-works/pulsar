@@ -132,7 +132,7 @@ Python with `PYTHONPATH` at the plugin's `src/`.
 
 **Recorded:** 2026-09-26 · [ORB-13138]
 **Deviates from:** STD-01@2 §R1, §R2
-**Code anchors:** `src/pulsar/surfaces/cli.py::build_parser`
+**Code anchors:** `src/pulsar/surfaces/cli/main.py::build_parser`
 
 ### Context
 
@@ -157,7 +157,7 @@ tell apart; `auth` is the only resource with verbs of its own. New commands go u
 **Recorded:** 2026-09-26 · [ORB-13138]
 **Superseded by:** [The CLI renders for its reader, as orbit's does](#the-cli-renders-for-its-reader-as-orbits-does)
 **Deviates from:** STD-01@2 §R8, §R14, §R17
-**Code anchors:** `src/pulsar/surfaces/cli.py::_out`
+**Code anchors:** `src/pulsar/surfaces/cli/context.py::emit`
 
 ### Context
 
@@ -185,7 +185,7 @@ prints the version as plain text.
 
 **Recorded:** 2026-09-26 · [ORB-13248]
 **Deviates from:** STD-01@2 §R17
-**Code anchors:** `src/pulsar/surfaces/output.py::resolve_mode`, `src/pulsar/surfaces/output.py::resolve_terminal`, `src/pulsar/surfaces/views.py`, `src/pulsar/surfaces/cli.py::CommandParser`
+**Code anchors:** `src/pulsar/surfaces/cli/render.py::resolve_mode`, `src/pulsar/surfaces/cli/render.py::resolve_terminal`, `src/pulsar/surfaces/cli/views.py`, `src/pulsar/surfaces/cli/parser.py::CommandParser`
 
 ### Context
 
@@ -237,7 +237,7 @@ means the backend crashed and its output is discarded.
 ## Renamed flags stay for one release
 
 **Recorded:** 2026-09-26 · [ORB-13138]
-**Code anchors:** `src/pulsar/surfaces/cli.py::_publish`, `src/pulsar/surfaces/cli.py::_auth_status`
+**Code anchors:** `src/pulsar/surfaces/cli/commands/publish.py::_publish`, `src/pulsar/surfaces/cli/commands/auth.py::_status`
 
 ### Context
 
@@ -371,7 +371,7 @@ the next rename follows §R35.
 
 **Recorded:** 2026-09-26 · [ORB-13138]
 **Deviates from:** STD-01@2 §R5
-**Code anchors:** `src/pulsar/surfaces/ops.py::reconcile_report`, `src/pulsar/surfaces/cli.py::_migrate_quietly`, `src/pulsar/surfaces/runtime.py::Runtime.writer`
+**Code anchors:** `src/pulsar/surfaces/ops.py::reconcile_report`, `src/pulsar/surfaces/cli/commands/auth.py::_migrate_quietly`, `src/pulsar/surfaces/runtime.py::Runtime.writer`
 
 ### Context
 

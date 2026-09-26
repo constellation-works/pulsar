@@ -50,38 +50,68 @@ def test_layer_imports_stay_inside_their_boundary(layer):
 
 
 # Inside surfaces: composition first, then the reports built on it, then the
-# front ends. A module imports only modules of a lower rank; the CLI is the one
-# dispatcher, so nothing imports it.
+# front ends. A module (or subpackage) imports only modules of a lower rank;
+# the CLI is the one dispatcher, so nothing imports it.
 SURFACE_RANK = {
     "runtime": 0,
-    "output": 0,
     "health": 1,
     "ops": 1,
-    "views": 1,
     "mcp": 2,
     "orbit_tool": 2,
     "cli": 3,
 }
 
+# Inside the CLI: rendering and errors first, then what commands share, then
+# the commands, then the entry point that registers them.
+CLI_RANK = {
+    "render": 0,
+    "errors": 0,
+    "views": 1,
+    "parser": 1,
+    "context": 2,
+    "commands": 3,
+    "main": 4,
+}
 
-def test_surface_modules_are_all_ranked():
-    found = {p.stem for p in (SRC / "surfaces").glob("*.py") if p.stem != "__init__"}
-    assert found == set(SURFACE_RANK), "rank every surfaces module in SURFACE_RANK"
+RANKED = {"pulsar.surfaces": SURFACE_RANK, "pulsar.surfaces.cli": CLI_RANK}
 
 
-@pytest.mark.parametrize("module", sorted(SURFACE_RANK))
-def test_surface_imports_point_down(module):
+def _package_dir(package: str) -> Path:
+    return SRC.parent.joinpath(*package.split("."))
+
+
+def _members(package: str) -> set[str]:
+    """A package's modules and subpackages; its dunder entry points are not ranked."""
+    root = _package_dir(package)
+    modules = {p.stem for p in root.glob("*.py") if not p.stem.startswith("__")}
+    return modules | {p.parent.name for p in root.glob("*/__init__.py")}
+
+
+@pytest.mark.parametrize("package", sorted(RANKED))
+def test_members_are_all_ranked(package):
+    assert _members(package) == set(RANKED[package]), f"rank every member of {package}"
+
+
+@pytest.mark.parametrize(
+    ("package", "member"), [(pkg, m) for pkg, ranks in RANKED.items() for m in sorted(ranks)]
+)
+def test_imports_point_down(package, member):
+    ranks = RANKED[package]
+    prefix = package.split(".")
+    root = _package_dir(package)
+    files = [root / f"{member}.py"] if (root / f"{member}.py").exists() else []
+    files += sorted((root / member).rglob("*.py"))
+    assert files, f"{package}.{member} has no source"
     offenders = []
-    for name in _imports(SRC / "surfaces" / f"{module}.py"):
-        parts = name.split(".")
-        if parts[:2] != ["pulsar", "surfaces"] or len(parts) < 3:
-            continue
-        target = parts[2]
-        if target in SURFACE_RANK and SURFACE_RANK[target] >= SURFACE_RANK[module]:
-            offenders.append(f"surfaces/{module} imports surfaces/{target}")
-    assert not offenders, "surfaces import upward or sideways:\n" + "\n".join(
-        sorted(set(offenders))
-    )
+    for path in files:
+        for name in _imports(path):
+            parts = name.split(".")
+            if parts[: len(prefix)] != prefix or len(parts) <= len(prefix):
+                continue
+            target = parts[len(prefix)]
+            if target != member and target in ranks and ranks[target] >= ranks[member]:
+                offenders.append(f"{path.relative_to(SRC)} imports {package}.{target}")
+    assert not offenders, "imports point upward or sideways:\n" + "\n".join(sorted(set(offenders)))
 
 
 # core takes the environment, the cwd and the home as arguments (STD-02 §R3).

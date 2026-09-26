@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from .output import Block, Table, col, dig, fields
+from .render import Block, Table, col, dig, fields
 
 NOTE = "note"
 
