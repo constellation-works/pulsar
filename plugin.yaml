@@ -1,0 +1,84 @@
+schemaVersion: 2
+kind: Plugin
+metadata:
+  name: pulsar
+  version: 0.1.0
+  description: >-
+    Publish to social accounts (X today) through one ledger: plan digests, budgets,
+    idempotent retries and reconcile. Credentials stay in the plugin's state.
+  homepage: https://github.com/constellation-works/pulsar
+spec:
+  requires:
+    orbit: ">=0.24.0 <1.0.0"
+    host_api: 1
+    platforms: [linux, macos]
+    programs: [uv]
+
+  backend:
+    type: exec
+    command: bin/pulsar
+    args: [orbit-tool]
+    timeout_ms: 60000
+    sandbox: default
+
+  permissions:
+    fs:
+      # Plan sources and media are read from the workspace; the home (token,
+      # ledger, config.toml) and the uv environment live in the plugin state.
+      read: ["{{workspace}}"]
+      write: ["{{plugin_state}}"]
+    # X's API; also the first call's dependency sync (uv, from PyPI).
+    network: any
+
+  tools:
+    - name: status
+      description: >-
+        Accounts, token health (offline: no refresh is attempted), budget and daily-cap
+        use, writes with an unknown outcome, and the last publication per account.
+      execution_kind: read_only
+      mcp_scope: workspace
+      input_schema: { $ref: schemas/status.request.json }
+      output_schema: { $ref: schemas/status.response.json }
+    - name: validate
+      description: >-
+        Check a plan offline and report, per account, the exact posts, weighted lengths,
+        media, estimated cost and the plan digest that approval binds. Pass an inline
+        `plan` or a workspace-relative YAML `source`. Sends and records nothing; an
+        invalid plan is `valid: false` with the error code and detail.
+      execution_kind: read_only
+      mcp_scope: workspace
+      input_schema: { $ref: schemas/validate.request.json }
+      output_schema: { $ref: schemas/validate.response.json }
+      cli: { verb: validate, positional: [source] }
+    - name: history
+      description: >-
+        The newest ledger rows (posts, threads, deletes, uploads, imports, skips) with
+        state, URL and estimated cost. Offline.
+      execution_kind: read_only
+      mcp_scope: workspace
+      input_schema: { $ref: schemas/history.request.json }
+      output_schema: { $ref: schemas/history.response.json }
+
+  skills: [skills/publish]
+
+  config:
+    # pulsar's settings live in config.toml in its home, the one source every
+    # surface sharing the ledger reads; this section takes no keys.
+    schema: schemas/config.json
+
+  web:
+    panels:
+      - id: status
+        title: Pulsar accounts
+        source: tool:status
+        render: kv
+        group: operations
+        refresh_ms: 60000
+      - id: recent
+        title: Recent publications
+        source: tool:history
+        render: table
+        group: operations
+        refresh_ms: 60000
+
+  tests: [tests/conformance/*.yaml]

@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "valid"
+  ],
+  "properties": {
+    "valid": {
+      "type": "boolean"
+    },
+    "error": {
+      "type": "object",
+      "required": [
+        "code",
+        "message",
+        "retryable"
+      ],
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "detail": {}
+      },
+      "additionalProperties": false
+    },
+    "accounts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "account",
+          "provider",
+          "digest",
+          "estimated_cost_usd",
+          "posts"
+        ],
+        "properties": {
+          "account": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "digest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "estimated_cost_usd": {
+            "type": "number"
+          },
+          "posts": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        }
+      }
+    }
+  },
+  "additionalProperties": false
+}

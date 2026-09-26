@@ -1,0 +1,57 @@
+#!/bin/sh
+# Orbit exec backend launcher (plugin.yaml backend.command).
+#
+# The plugin root is read-only under the sandbox and may not contain a venv
+# (the installer refuses symlinks), so the environment, uv's cache, any
+# uv-managed interpreter, bytecode and temp files all live under the plugin's
+# own state dir. The first call syncs the locked dependencies (network); later
+# calls reuse them. pulsar itself runs from the plugin root's src/.
+set -eu
+
+fail() {
+    # Drain the request so Orbit reads our envelope rather than EPIPE.
+    cat >/dev/null 2>&1 || true
+    printf '{"ok":false,"error":{"code":"%s","message":"%s","retryable":false}}\n' "$1" "$2"
+    exit 0
+}
+
+[ -n "${ORBIT_PLUGIN_ROOT:-}" ] || fail launcher_env "ORBIT_PLUGIN_ROOT is not set"
+[ -n "${ORBIT_PLUGIN_STATE:-}" ] || fail launcher_env "ORBIT_PLUGIN_STATE is not set"
+
+# Orbit grants the uv it resolved at enable (requires.programs); older hosts
+# only let a backend execute programs in the caller's PATH. `[ -x ]` is not
+# proof under Landlock (access(2) can say yes while exec is refused), so probe.
+uv_bin=$(command -v uv 2>/dev/null || true)
+if [ -z "$uv_bin" ]; then
+    for candidate in "$HOME/.local/bin/uv" "$HOME/.cargo/bin/uv" /opt/homebrew/bin/uv /usr/local/bin/uv; do
+        if "$candidate" --version >/dev/null 2>&1; then uv_bin=$candidate; break; fi
+    done
+fi
+[ -n "$uv_bin" ] || fail uv_not_found "uv is not executable by the plugin backend; put it on the caller PATH and re-run orbit plugin enable pulsar"
+
+venv="$ORBIT_PLUGIN_STATE/venv"
+export UV_PROJECT_ENVIRONMENT="$venv"
+export UV_CACHE_DIR="$ORBIT_PLUGIN_STATE/uv-cache"
+export UV_PYTHON_INSTALL_DIR="$ORBIT_PLUGIN_STATE/uv-python"
+export UV_PYTHON_BIN_DIR="$ORBIT_PLUGIN_STATE/uv-python/bin"
+export UV_TOOL_DIR="$ORBIT_PLUGIN_STATE/uv-tools"
+export UV_NO_PROGRESS=1
+export UV_LINK_MODE=hardlink
+export PYTHONPYCACHEPREFIX="$ORBIT_PLUGIN_STATE/pycache"
+export PYTHONPATH="$ORBIT_PLUGIN_ROOT/src"
+export TMPDIR="$ORBIT_PLUGIN_STATE/tmp"
+mkdir -p "$TMPDIR"
+
+# Sync the locked dependencies only when uv.lock changed (a new plugin
+# version); pulsar itself is not installed, it runs from src/ above. Warm
+# calls skip uv entirely. Nothing here may write to stdout.
+lock=$(cksum <"$ORBIT_PLUGIN_ROOT/uv.lock")
+stamp="$venv/.pulsar-lock"
+if [ ! -x "$venv/bin/python" ] || [ "$(cat "$stamp" 2>/dev/null || true)" != "$lock" ]; then
+    "$uv_bin" sync --frozen --no-dev --no-install-project --quiet \
+        --project "$ORBIT_PLUGIN_ROOT" </dev/null >&2 \
+        || fail dependency_sync "uv sync failed (the first call needs network to fetch dependencies); see stderr"
+    printf '%s\n' "$lock" >"$stamp"
+fi
+
+exec "$venv/bin/python" -m pulsar.surfaces.orbit_tool

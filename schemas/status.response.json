@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "default_account",
+    "healthy",
+    "attention",
+    "accounts"
+  ],
+  "properties": {
+    "default_account": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "healthy": {
+      "type": "boolean",
+      "description": "Every account is authorized with nothing unresolved."
+    },
+    "attention": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "accounts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "alias",
+          "status",
+          "authorized",
+          "reauth_required",
+          "healthy",
+          "unresolved",
+          "last_published"
+        ],
+        "properties": {
+          "alias": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "expected_handle": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "authorized": {
+            "type": "boolean"
+          },
+          "reauth_required": {
+            "type": "boolean"
+          },
+          "token_state": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "access_token_expires_in_s": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "healthy": {
+            "type": "boolean"
+          },
+          "posts": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "day": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "month": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quiet": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "unresolved": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "last_published": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "key": {
+                "type": "string"
+              },
+              "url": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "at": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

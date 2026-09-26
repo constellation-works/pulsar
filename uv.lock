@@ -432,6 +432,7 @@ dependencies = [
 dev = [
     { name = "anyio" },
     { name = "basedpyright" },
+    { name = "jsonschema" },
     { name = "pytest" },
     { name = "ruff" },
     { name = "types-pyyaml" },
@@ -450,6 +451,7 @@ requires-dist = [
 dev = [
     { name = "anyio", specifier = ">=4" },
     { name = "basedpyright", specifier = ">=1.40.1" },
+    { name = "jsonschema", specifier = ">=4.26.0" },
     { name = "pytest", specifier = ">=8" },
     { name = "ruff", specifier = ">=0.6" },
     { name = "types-pyyaml", specifier = ">=6.0.12.20260906" },

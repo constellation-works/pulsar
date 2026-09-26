@@ -1,0 +1,162 @@
+# Goldens for `orbit plugin test .`: an empty plugin state and workspace, no network.
+# Regenerate by running each input through `python -m pulsar.surfaces.orbit_tool` and
+# reading the diff; outputs are compared exactly.
+schemaVersion: 1
+kind: PluginTest
+tests:
+- name: status_on_an_empty_home
+  tool: status
+  input: {}
+  expect:
+    output:
+      default_account: null
+      healthy: false
+      attention:
+      - no account is bound (`pulsar auth login --account x:<handle>`)
+      accounts: []
+- name: validate_reports_a_thread_with_digest_and_cost
+  tool: validate
+  input:
+    plan:
+      account: x:constworks
+      posts:
+      - text: Orbit v0.26 is out
+      - text: 'Release notes: https://example.com/notes'
+  expect:
+    output:
+      valid: true
+      accounts:
+      - account: x:constworks
+        provider: x
+        digest: sha256:cda630805b79544143bd8d16f7c012185102571d9ec85ad5dd6284aa3cc825b2
+        estimated_cost_usd: 0.215
+        reply_to: null
+        quote: null
+        not_before: null
+        posts:
+        - text: Orbit v0.26 is out
+          length: 18
+          max_length: 280
+          has_url: false
+          estimated_cost_usd: 0.015
+          media: []
+        - text: 'Release notes: https://example.com/notes'
+          length: 38
+          max_length: 280
+          has_url: true
+          estimated_cost_usd: 0.2
+          media: []
+        pricing_note: from the configured price table; verify on the provider's portal
+- name: validate_counts_weighted_length
+  tool: validate
+  input:
+    plan:
+      account: x:constworks
+      text: héllo 👋 wörld
+  expect:
+    output:
+      valid: true
+      accounts:
+      - account: x:constworks
+        provider: x
+        digest: sha256:ea966286504437f987adfa3de088bd17867ebca5e085e89d76cd67214ce55f91
+        estimated_cost_usd: 0.015
+        reply_to: null
+        quote: null
+        not_before: null
+        posts:
+        - text: héllo 👋 wörld
+          length: 14
+          max_length: 280
+          has_url: false
+          estimated_cost_usd: 0.015
+          media: []
+        pricing_note: from the configured price table; verify on the provider's portal
+- name: validate_reports_an_empty_plan_as_invalid
+  tool: validate
+  input:
+    plan:
+      account: x:constworks
+      posts: []
+  expect:
+    output:
+      valid: false
+      error:
+        code: invalid_plan
+        message: 'plan.posts: must not be empty'
+        retryable: false
+        detail:
+          at: plan.posts
+- name: validate_reports_an_over_length_post
+  tool: validate
+  input:
+    plan:
+      account: x:constworks
+      text: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+  expect:
+    output:
+      valid: false
+      error:
+        code: invalid_text
+        message: text is 281 weighted characters; limit is 280
+        retryable: false
+        detail:
+          weighted_length: 281
+          limit: 280
+          post: 0
+- name: validate_reports_a_credential_in_the_text
+  tool: validate
+  input:
+    plan:
+      account: x:constworks
+      text: deploy key ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  expect:
+    output:
+      valid: false
+      error:
+        code: secret_detected
+        message: post text contains something that looks like a credential
+        retryable: false
+        detail:
+          matched:
+          - github token
+          post: 0
+- name: validate_without_an_account_or_default
+  tool: validate
+  input:
+    plan:
+      text: hello
+  expect:
+    output:
+      valid: false
+      error:
+        code: auth_expired
+        message: no account is bound on this host; a human runs `pulsar auth login --account provider:handle`
+        retryable: false
+- name: validate_needs_exactly_one_of_plan_or_source
+  tool: validate
+  input: {}
+  expect:
+    error:
+      code: invalid_argument
+- name: validate_refuses_a_source_outside_the_workspace
+  tool: validate
+  input:
+    source: ../outside.yaml
+  expect:
+    error:
+      code: invalid_argument
+- name: history_on_an_empty_ledger
+  tool: history
+  input:
+    limit: 5
+  expect:
+    output:
+      rows: []
+- name: history_for_an_unknown_account
+  tool: history
+  input:
+    account: x:nobody
+  expect:
+    error:
+      code: unknown_account

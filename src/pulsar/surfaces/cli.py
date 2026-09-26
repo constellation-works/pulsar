@@ -345,6 +345,12 @@ def _import_posted(args: argparse.Namespace) -> int:
     return _emit(asyncio.run(import_report(default_paths(), args.source, account=args.account)))
 
 
+def _orbit_tool(_args: argparse.Namespace) -> int:
+    from .orbit_tool import main as orbit_tool_main
+
+    return orbit_tool_main()
+
+
 def _serve(args: argparse.Namespace) -> int:
     from .mcp import Runtime, build_server
 
@@ -463,6 +469,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     serve.add_argument("--port", type=int, default=8977)
     serve.set_defaults(func=_serve)
+
+    p_orbit = sub.add_parser(
+        "orbit-tool",
+        help="answer one Orbit plugin request (envelope on stdin, response on stdout)",
+    )
+    p_orbit.set_defaults(func=_orbit_tool)
 
     args = parser.parse_args(argv)
     return int(args.func(args))

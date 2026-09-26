@@ -1,0 +1,6 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "pulsar takes no [plugins.pulsar] keys: accounts, policy and prices live in config.toml in the pulsar home ($ORBIT_PLUGIN_STATE/home), which the CLI and MCP surfaces read too.",
+  "type": "object",
+  "additionalProperties": false
+}

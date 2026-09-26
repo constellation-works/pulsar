@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "plan": {
+      "type": "object",
+      "description": "An inline plan: {account|accounts, text | posts[{text, media[{path, alt}]}], reply_to | quote, variants, not_before}. See pulsar's README, Operator commands."
+    },
+    "source": {
+      "type": "string",
+      "minLength": 1,
+      "description": "A plan YAML file, relative to the workspace root and inside it."
+    },
+    "account": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Account alias, provider:handle (e.g. x:constworks). Default: the configured default account."
+    }
+  },
+  "additionalProperties": false
+}

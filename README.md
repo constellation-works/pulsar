@@ -14,7 +14,8 @@ tools: `whoami`, `validate_post`, `validate_plan`, `create_post`,
 `upload_media`, `delete_post`. Every post goes through one publisher: offline
 checks, the secret scanner, the policy (budgets, daily cap, quiet hours) and
 the ledger, before anything is sent. The operator side is the `pulsar` CLI
-([Operator commands](#operator-commands)).
+([Operator commands](#operator-commands)); Orbit reaches the same ledger
+through the [Orbit plugin](#orbit-plugin).
 
 Reads (timeline, search) are out of scope — the existing X plugin covers them.
 
@@ -600,6 +601,58 @@ upload facts. Plan rows add `account_alias`, `plan_digest` and `items`
 (`[{idx, state, post_id}]`); their `post_id` and `text_sha256` are the first
 post's. Never post text, media bytes, or credentials.
 
+## Orbit plugin
+
+pulsar is also an [Orbit](https://github.com/constellation-works/orbit)
+plugin (`plugin.yaml`, namespace `pulsar`, exec backend). For now it
+carries the read-only tools; publishing, approvals and delete arrive with the
+draft and approval flow. Install it on the posting host from an export of a
+commit, which leaves out the virtualenv and anything untracked:
+
+```sh
+mkdir /tmp/pulsar-plugin && git archive agent-main | tar -x -C /tmp/pulsar-plugin
+orbit plugin add /tmp/pulsar-plugin --enable \
+  --grant 'fs={{workspace}},{{plugin_state}}' --grant network
+orbit plugin test /tmp/pulsar-plugin --grant fs,network   # the conformance goldens
+```
+
+| Tool | CLI | What it returns |
+|---|---|---|
+| `pulsar.status` | `orbit pulsar status` | per account: token health (offline; never refreshes), budget and cap use, unknown-outcome writes, the last publication; `healthy` and `attention` summarise what needs a human |
+| `pulsar.validate` | `orbit pulsar validate PLAN.yaml` | `validate` above for an inline `plan` or a workspace-relative `source`; an invalid plan is `{valid: false, error: {code, message, detail}}` |
+| `pulsar.history` | `orbit pulsar history` | the newest ledger rows flattened for a table (`limit` 1–100) |
+
+The dashboard's Plugins tab shows two panels: *Pulsar accounts* (`status`)
+and *Recent publications* (`history`). The plugin's skill (`skills/publish`,
+linked as `pulsar-publish`) tells agents when and how to use them.
+
+How the plugin runs:
+
+- **Home.** The backend's pulsar home is `$ORBIT_PLUGIN_STATE/home`
+  (`~/.orbit/state/plugins/pulsar/home`): the sandbox lets it write only its
+  plugin state. The CLI and the standalone MCP server share that home, so one
+  ledger and one policy, with `PULSAR_HOME=~/.orbit/state/plugins/pulsar/home`.
+  Accounts are bound there with `pulsar auth login` as above.
+- **Settings.** The home's `config.toml` stays the one source of settings.
+  `[plugins.pulsar]` takes no keys (its schema is closed) and a call that
+  carries any is refused with `invalid_argument`.
+- **Paths.** A `source` and plan media resolve against the workspace root and
+  must stay inside it (symlinks included). Configured `media.roots` are
+  replaced by the workspace for plugin calls, since the sandbox reads nothing
+  else.
+- **Grants.** `fs` covers reading the workspace and writing the plugin state;
+  `network` is for X and for the first call's dependency sync.
+- **Launcher.** `bin/pulsar` keeps the virtualenv, uv's cache and any
+  uv-managed Python under the plugin state. It runs `uv sync --frozen --no-dev`
+  once per `uv.lock` (network, about 10 s) and afterwards starts the
+  environment's Python directly. `requires.programs: [uv]` makes Orbit resolve
+  uv at enable; hosts older than that must have uv on the caller's `PATH`.
+- **Protocol.** `pulsar orbit-tool` answers one envelope on stdin with one
+  JSON line on stdout and exits 0; errors are `{ok: false, error: {code,
+  message, retryable, detail?}}` with the codes in the table above. Orbit
+  0.24 passes only `code` and `message` on to the caller, which is why
+  `validate` reports plan errors as a result instead.
+
 ## Development
 
 ```sh
@@ -613,7 +666,10 @@ src/pulsar/core/          provider-neutral: plan, publisher, ledger, policy, cha
                           (adapter.py), account registry, credential store, media confinement,
                           secret scanner, settings, errors (no HTTP)
 src/pulsar/providers/x/   X: channel adapter, OAuth 2.0 PKCE flow, v2 API client, text rules, limits
-src/pulsar/surfaces/      front ends: mcp.py (standalone MCP server), cli.py, ops.py (operator verbs)
+src/pulsar/surfaces/      front ends: mcp.py (standalone MCP server), cli.py, ops.py (operator verbs),
+                          orbit_tool.py (Orbit exec backend)
+plugin.yaml, bin/pulsar   the Orbit plugin manifest and its launcher; schemas/ (tool I/O),
+                          skills/publish/, tests/conformance/ (goldens for `orbit plugin test`)
 ```
 
 `tests/test_layering.py` enforces the boundaries on the import graph: `core`

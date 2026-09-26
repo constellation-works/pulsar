@@ -14,6 +14,11 @@
 - `agent-main` is the landing branch; commit directly, no PR gate. Daniel owns
   releases and any change to the X app registration.
 - Layout: `src/pulsar/core` (provider-neutral, no HTTP), `providers/<name>`
-  (one channel adapter each), `surfaces` (MCP server, CLI). Keep `core` free
+  (one channel adapter each), `surfaces` (MCP server, CLI, Orbit exec backend
+  `orbit_tool.py`). Keep `core` free
   of provider and transport imports; `tests/test_layering.py` enforces it.
+- The Orbit plugin is `plugin.yaml` + `bin/pulsar` + `schemas/` +
+  `skills/publish/` + `tests/conformance/`. A tool change updates its schema
+  and goldens; `orbit plugin test <clean export> --grant fs,network` runs them
+  under the sandbox. No symlinks in the tree: the installer refuses them.
 - Run `make check` (ruff, basedpyright strict, pytest) before handing off.
