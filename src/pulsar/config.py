@@ -28,6 +28,8 @@ COST_URL_POST_USD = 0.20
 MAX_POST_WEIGHTED_LENGTH = 280
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
 IMAGE_MIME_TYPES = frozenset({"image/png", "image/jpeg", "image/gif", "image/webp"})
+MAX_VIDEO_BYTES = 100 * 1024 * 1024
+VIDEO_MIME_TYPES = frozenset({"video/mp4"})
 
 
 def pulsar_home() -> Path:

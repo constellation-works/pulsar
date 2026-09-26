@@ -66,6 +66,10 @@ class FakeX:
     fail_auth_once: bool = False
     tweet_status: int | None = None
     tweet_body: dict[str, Any] | None = None
+    media_finalize_info: dict[str, Any] | None = field(
+        default_factory=lambda: {"state": "succeeded"}
+    )
+    media_status_info: list[dict[str, Any]] = field(default_factory=list)
     requests: list[httpx.Request] = field(default_factory=list)
 
     def transport(self) -> httpx.MockTransport:
@@ -131,9 +135,13 @@ class FakeX:
         if path.endswith("/append"):
             return httpx.Response(204)
         if path.endswith("/finalize"):
-            return httpx.Response(
-                200, json={"data": {"id": "710000", "processing_info": {"state": "succeeded"}}}
-            )
+            data = {"id": "710000"}
+            if self.media_finalize_info is not None:
+                data["processing_info"] = self.media_finalize_info
+            return httpx.Response(200, json={"data": data})
+        if path.endswith("/media/upload") and request.method == "GET":
+            info = self.media_status_info.pop(0) if self.media_status_info else {"state": "pending"}
+            return httpx.Response(200, json={"data": {"id": "710000", "processing_info": info}})
         return httpx.Response(404, json={"title": "Not Found"})
 
 

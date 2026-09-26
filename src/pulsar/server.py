@@ -29,12 +29,19 @@ from mcp.server.mcpserver import MCPServer
 from mcp.types import ToolAnnotations
 
 from . import __version__
-from .config import IMAGE_MIME_TYPES, MAX_IMAGE_BYTES, Paths, default_paths
-from .errors import INVALID_MEDIA, PulsarError
-from .guard import validate_text
+from .config import (
+    IMAGE_MIME_TYPES,
+    MAX_IMAGE_BYTES,
+    MAX_VIDEO_BYTES,
+    VIDEO_MIME_TYPES,
+    Paths,
+    default_paths,
+)
+from .errors import INVALID_MEDIA, SECRET_DETECTED, PulsarError
+from .guard import scan_for_secrets, validate_text
 from .store import TokenStore
 from .writelog import WriteLog
-from .xapi import XClient
+from .xapi import MediaProcessingError, XClient
 
 TOOL_NAMES = ("whoami", "validate_post", "create_post", "upload_media", "delete_post")
 
@@ -104,8 +111,11 @@ def _load_media(path: str | None, base64_data: str | None, mime: str | None) -> 
         p = Path(path).expanduser()
         if not p.is_file():
             raise PulsarError(INVALID_MEDIA, f"no such file: {path}")
-        data = p.read_bytes()
         mime = mime or mimetypes.guess_type(p.name)[0]
+        size = p.stat().st_size
+        if mime in VIDEO_MIME_TYPES and size > MAX_VIDEO_BYTES:
+            raise PulsarError(INVALID_MEDIA, f"video is {size} bytes; limit is {MAX_VIDEO_BYTES}")
+        data = p.read_bytes()
     else:
         try:
             data = base64.b64decode(base64_data or "", validate=True)
@@ -115,14 +125,27 @@ def _load_media(path: str | None, base64_data: str | None, mime: str | None) -> 
         raise PulsarError(
             INVALID_MEDIA, "mime is required when the type cannot be guessed from the path"
         )
-    if mime not in IMAGE_MIME_TYPES:
+    if mime not in IMAGE_MIME_TYPES | VIDEO_MIME_TYPES:
         raise PulsarError(
-            INVALID_MEDIA, f"unsupported media type {mime}; v1 accepts {sorted(IMAGE_MIME_TYPES)}"
+            INVALID_MEDIA,
+            f"unsupported media type {mime}; accepts {sorted(IMAGE_MIME_TYPES | VIDEO_MIME_TYPES)}",
         )
     if not data:
         raise PulsarError(INVALID_MEDIA, "media is empty")
-    if len(data) > MAX_IMAGE_BYTES:
-        raise PulsarError(INVALID_MEDIA, f"media is {len(data)} bytes; limit is {MAX_IMAGE_BYTES}")
+    limit = MAX_VIDEO_BYTES if mime in VIDEO_MIME_TYPES else MAX_IMAGE_BYTES
+    if len(data) > limit:
+        raise PulsarError(INVALID_MEDIA, f"media is {len(data)} bytes; limit is {limit}")
+    # Scan ASCII runs in binary media before any X write; overlap catches a
+    # credential pattern split between chunks without decoding the whole file.
+    for start in range(0, len(data), 4 * 1024 * 1024):
+        segment = data[max(0, start - 128) : start + 4 * 1024 * 1024]
+        hits = scan_for_secrets(segment.decode("ascii", errors="replace"))
+        if hits:
+            raise PulsarError(
+                SECRET_DETECTED,
+                "media contains something that looks like a credential; refusing to upload",
+                detail={"matched": hits},
+            )
     return data, mime
 
 
@@ -211,8 +234,9 @@ def build_server(runtime: Runtime | None = None) -> MCPServer:
 
     @server.tool(
         description=(
-            "Upload an image (png/jpeg/gif/webp, <=5MB) for a later create_post. "
-            "Pass `path` or `base64`+`mime`. Returns {media_id}."
+            "Upload an image (png/jpeg/gif/webp, <=5 MiB) or MP4 video "
+            "(video/mp4, <=100 MiB) for a later create_post. Pass `path` or "
+            "`base64`+`mime`. Video waits for X processing to succeed. Returns {media_id}."
         ),
         annotations=PUBLISHES,
     )
@@ -224,11 +248,30 @@ def build_server(runtime: Runtime | None = None) -> MCPServer:
         caller: str | None = None,
     ) -> dict[str, Any]:
         data, resolved_mime = _load_media(path, base64, mime)
-        media_id = await rt.client.upload_image(data, resolved_mime)
+        try:
+            media_id, processing_state = await rt.client.upload_media(data, resolved_mime)
+        except PulsarError as exc:
+            rt.log.append(
+                tool="upload_media",
+                caller=caller,
+                extra={
+                    "mime": resolved_mime,
+                    "bytes": len(data),
+                    "processing_state": (
+                        exc.processing_state if isinstance(exc, MediaProcessingError) else "error"
+                    ),
+                },
+            )
+            raise
         rt.log.append(
             tool="upload_media",
             caller=caller,
-            extra={"media_id": media_id, "mime": resolved_mime, "bytes": len(data)},
+            extra={
+                "media_id": media_id,
+                "mime": resolved_mime,
+                "bytes": len(data),
+                "processing_state": processing_state,
+            },
         )
         return {"ok": True, "media_id": media_id, "mime": resolved_mime, "bytes": len(data)}
 

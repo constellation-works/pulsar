@@ -62,7 +62,7 @@ claude mcp add pulsar -- uv --directory /path/to/pulsar run pulsar serve
 | `whoami` | read-only | `GET /2/users/me` | cached; `{user_id, username}` of the bound account |
 | `validate_post` | read-only | — | `text`, optional `reply_to_post_id`, `quote_post_id`; no network, no log |
 | `create_post` | publishes | `POST /2/tweets` | `text`, optional `reply_to_post_id`, `quote_post_id`, `media_ids`, `dry_run` (legacy) |
-| `upload_media` | publishes | `POST /2/media/upload/initialize` → `/{id}/append` → `/{id}/finalize` | images only in v1; `path` or `base64` + `mime` → `{media_id}` |
+| `upload_media` | publishes | `POST /2/media/upload/initialize` → `/{id}/append` → `/{id}/finalize`; `GET /2/media/upload` for video status | png/jpeg/gif/webp images ≤5 MiB or MP4 video (`video/mp4`) ≤100 MiB; `path` or `base64` + `mime` → `{media_id}` after video processing succeeds |
 | `delete_post` | destructive | `DELETE /2/tweets/:id` | `post_id` → `{ok: true}` |
 
 `validate_post` returns `{ok: true, text, weighted_length, has_url,
@@ -84,9 +84,19 @@ Failures never raise into the client; they come back as
 | `auth_expired` | no token, or refresh failed (revoked / app reset) | stop; a human runs `pulsar auth login` |
 | `invalid_text` | empty, over 280 weighted chars, control chars, reply+quote together | rewrite |
 | `secret_detected` | text matches a credential pattern | rewrite; never retry verbatim |
-| `invalid_media` | bad path/base64, non-image, >5MB | fix the input |
+| `invalid_media` | bad path/base64, unsupported MIME, oversized media, or failed/timed-out video processing | fix the input or inspect X's processing detail |
 | `duplicate` / `forbidden` / `rate_limited` / `not_found` | X's reason, passed through in `detail` | duplicate: change text; rate_limited: wait |
 | `api_error` | anything else from X or the network | retry later, report |
+
+The 100 MiB video cap is a local connector limit; X also checks the account's
+video size and duration entitlement when media is uploaded and attached to a
+post. Upload MP4 by file path (MIME is inferred from `.mp4`) or pass a base64
+payload with `mime: "video/mp4"`. Video uses 4 MiB chunks and waits up to five
+minutes for X's processing state to become `succeeded` before returning a
+`media_id`. If X reports `failed` or processing times out, `upload_media`
+returns `invalid_media` with the last processing detail and no `media_id`.
+Each upload log entry records MIME, byte count, and processing state, never
+the media bytes or credentials.
 
 Off-box callers (Grok Bot) can use the streamable-HTTP transport instead of
 stdio: `uv run pulsar serve --transport http --port 8977` binds loopback only;
@@ -126,7 +136,8 @@ who claimed to make a write, after the fact.
   the `caller` argument).
 - Text that looks like a secret (`sk-…`, `ghp_…`, `github_pat_…`, `xoxb-…`,
   AWS keys, PEM blocks, …) is rejected with `secret_detected` before any
-  network call — including on `dry_run`.
+  network call — including on `dry_run`. Media bytes are scanned for the same
+  patterns before upload.
 - `create_post` is meant to be called only on explicit user intent in the
   calling chat, or from a standing routine the owner enabled. The connector
   cannot verify intent; that rule lives with the caller (and is repeated in the

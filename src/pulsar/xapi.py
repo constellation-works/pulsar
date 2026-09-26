@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import httpx
@@ -27,6 +27,15 @@ from .errors import (
 from .store import TokenBundle, TokenStore
 
 REFRESH_AHEAD_SECONDS = 120
+IMAGE_CHUNK_BYTES = 1024 * 1024
+VIDEO_CHUNK_BYTES = 4 * 1024 * 1024
+PROCESSING_TIMEOUT_SECONDS = 300
+
+
+class MediaProcessingError(PulsarError):
+    def __init__(self, state: str, message: str, *, detail: Any) -> None:
+        super().__init__(INVALID_MEDIA, message, detail=detail)
+        self.processing_state = state
 
 
 def _error_detail(resp: httpx.Response) -> Any:
@@ -77,12 +86,16 @@ class XClient:
         base_url: str = X_API_BASE,
         token_url: str = X_TOKEN_URL,
         now: Callable[[], float] = time.time,
+        monotonic: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         timeout: float = 30.0,
     ) -> None:
         self.store = store
         self.base_url = base_url.rstrip("/")
         self.token_url = token_url
         self._now = now
+        self._monotonic = monotonic
+        self._sleep = sleep
         self._http = httpx.AsyncClient(transport=transport, timeout=timeout)
         self._refresh_lock = asyncio.Lock()
 
@@ -190,12 +203,17 @@ class XClient:
         data = (await self.request("DELETE", f"/tweets/{post_id}")).json()
         return bool(data.get("data", {}).get("deleted", False))
 
-    async def upload_image(self, data: bytes, mime: str, *, chunk_size: int = 1024 * 1024) -> str:
-        """v2 chunked upload: initialize → append segments → finalize."""
+    async def upload_media(
+        self, data: bytes, mime: str, *, chunk_size: int | None = None
+    ) -> tuple[str, str]:
+        """Upload media and return its ID and processing state."""
+        is_video = mime == "video/mp4"
+        category = "tweet_video" if is_video else "tweet_image"
+        chunk_size = chunk_size or (VIDEO_CHUNK_BYTES if is_video else IMAGE_CHUNK_BYTES)
         init = await self.request(
             "POST",
             "/media/upload/initialize",
-            json={"media_type": mime, "total_bytes": len(data), "media_category": "tweet_image"},
+            json={"media_type": mime, "total_bytes": len(data), "media_category": category},
         )
         media_id = str(init.json()["data"]["id"])
         for index, start in enumerate(range(0, len(data), chunk_size)):
@@ -207,7 +225,54 @@ class XClient:
                 files={"media": (f"segment-{index}", chunk, mime)},
             )
         fin = (await self.request("POST", f"/media/upload/{media_id}/finalize")).json()
-        state = (fin.get("data") or {}).get("processing_info", {}).get("state")
-        if state and state not in ("succeeded", "pending", "in_progress"):
-            raise PulsarError(INVALID_MEDIA, f"X media processing state: {state}", detail=fin)
+        info = (fin.get("data") or {}).get("processing_info")
+        if is_video and info is not None:
+            state = await self._wait_for_processing(media_id, info)
+        else:
+            state = (info or {}).get("state", "succeeded")
+            if state not in ("succeeded", "pending", "in_progress"):
+                raise MediaProcessingError(state, f"X media processing state: {state}", detail=info)
+        return media_id, state
+
+    async def _wait_for_processing(self, media_id: str, info: dict[str, Any]) -> str:
+        deadline = self._monotonic() + PROCESSING_TIMEOUT_SECONDS
+        while True:
+            state = info.get("state")
+            if state == "succeeded":
+                return state
+            if state == "failed":
+                error = info.get("error") or info
+                message = error.get("message") if isinstance(error, dict) else str(error)
+                raise MediaProcessingError(
+                    state,
+                    f"X media processing failed: {message or 'no detail from X'}",
+                    detail=info,
+                )
+            if state not in ("pending", "in_progress"):
+                raise MediaProcessingError(
+                    "unknown", f"X media processing state: {state}", detail=info
+                )
+            remaining = deadline - self._monotonic()
+            if remaining <= 0:
+                raise MediaProcessingError("timed_out", "X media processing timed out", detail=info)
+            check_after = info.get("check_after_secs")
+            delay = check_after if isinstance(check_after, (int, float)) and check_after > 0 else 1
+            await self._sleep(min(delay, remaining))
+            if self._monotonic() >= deadline:
+                raise MediaProcessingError("timed_out", "X media processing timed out", detail=info)
+            status = await self.request(
+                "GET", "/media/upload", params={"command": "STATUS", "media_id": media_id}
+            )
+            body = status.json()
+            info = (body.get("data") or {}).get("processing_info")
+            if info is None:
+                raise MediaProcessingError(
+                    "unknown", "X media status has no processing_info", detail=body
+                )
+
+    async def upload_image(
+        self, data: bytes, mime: str, *, chunk_size: int = IMAGE_CHUNK_BYTES
+    ) -> str:
+        """Compatibility wrapper for image callers."""
+        media_id, _ = await self.upload_media(data, mime, chunk_size=chunk_size)
         return media_id

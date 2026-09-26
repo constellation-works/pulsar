@@ -4,7 +4,7 @@ import time
 import pytest
 
 from pulsar.errors import AuthExpired, PulsarError
-from pulsar.xapi import XClient
+from pulsar.xapi import MediaProcessingError, XClient
 
 from .conftest import ACCESS, ROTATED_ACCESS, ROTATED_REFRESH
 
@@ -121,3 +121,109 @@ async def test_upload_image_is_chunked_init_append_finalize(client, authed, fake
         "total_bytes": len(data),
         "media_category": "tweet_image",
     }
+
+
+class FakeClock:
+    def __init__(self):
+        self.elapsed = 0.0
+        self.sleeps = []
+
+    def monotonic(self):
+        return self.elapsed
+
+    async def sleep(self, seconds):
+        self.sleeps.append(seconds)
+        self.elapsed += seconds
+
+
+async def test_upload_video_chunks_and_waits_for_success(store, authed, fake_x):
+    fake_x.media_finalize_info = {"state": "pending", "check_after_secs": 2}
+    fake_x.media_status_info = [
+        {"state": "in_progress", "check_after_secs": 3},
+        {"state": "succeeded"},
+    ]
+    clock = FakeClock()
+    client = XClient(
+        store, transport=fake_x.transport(), monotonic=clock.monotonic, sleep=clock.sleep
+    )
+    try:
+        data = b"0" * (8 * 1024 * 1024 + 1)
+        assert await client.upload_media(data, "video/mp4") == ("710000", "succeeded")
+    finally:
+        await client.aclose()
+    assert clock.sleeps == [2, 3]
+    assert json.loads(fake_x.calls("POST", "/media/upload/initialize")[0].content) == {
+        "media_type": "video/mp4",
+        "total_bytes": len(data),
+        "media_category": "tweet_video",
+    }
+    assert len(fake_x.calls("POST", "/append")) == 3
+    for index, request in enumerate(fake_x.calls("POST", "/append")):
+        assert f'name="segment_index"\r\n\r\n{index}'.encode() in request.content
+        assert len(request.content) < 5 * 1024 * 1024
+    status_calls = fake_x.calls("GET", "/media/upload")
+    assert len(status_calls) == 2
+    assert all(
+        dict(request.url.params) == {"command": "STATUS", "media_id": "710000"}
+        for request in status_calls
+    )
+
+
+async def test_upload_video_processing_failure_preserves_x_detail(client, authed, fake_x):
+    fake_x.media_finalize_info = {
+        "state": "failed",
+        "error": {"code": 3, "message": "Unsupported codec"},
+    }
+    with pytest.raises(MediaProcessingError) as exc:
+        await client.upload_media(b"video", "video/mp4")
+    assert exc.value.code == "invalid_media"
+    assert exc.value.processing_state == "failed"
+    assert exc.value.detail["error"]["message"] == "Unsupported codec"
+    assert "Unsupported codec" in exc.value.message
+    assert fake_x.calls("GET", "/media/upload") == []
+
+
+async def test_upload_video_status_failure_preserves_x_detail(store, authed, fake_x):
+    fake_x.media_finalize_info = {"state": "pending", "check_after_secs": 2}
+    fake_x.media_status_info = [
+        {"state": "failed", "error": {"code": 3, "message": "Transcoding rejected"}}
+    ]
+    clock = FakeClock()
+    client = XClient(
+        store, transport=fake_x.transport(), monotonic=clock.monotonic, sleep=clock.sleep
+    )
+    try:
+        with pytest.raises(MediaProcessingError) as exc:
+            await client.upload_media(b"video", "video/mp4")
+    finally:
+        await client.aclose()
+    assert exc.value.code == "invalid_media"
+    assert exc.value.detail["error"]["message"] == "Transcoding rejected"
+    assert clock.sleeps == [2]
+    assert len(fake_x.calls("GET", "/media/upload")) == 1
+
+
+async def test_upload_video_without_processing_info_is_ready(client, authed, fake_x):
+    fake_x.media_finalize_info = None
+    assert await client.upload_media(b"video", "video/mp4") == ("710000", "succeeded")
+    assert fake_x.calls("GET", "/media/upload") == []
+
+
+async def test_upload_video_processing_timeout(store, authed, fake_x, monkeypatch):
+    monkeypatch.setattr("pulsar.xapi.PROCESSING_TIMEOUT_SECONDS", 3)
+    fake_x.media_finalize_info = {"state": "pending", "check_after_secs": 2}
+    fake_x.media_status_info = [{"state": "in_progress", "check_after_secs": 2}]
+    clock = FakeClock()
+    client = XClient(
+        store, transport=fake_x.transport(), monotonic=clock.monotonic, sleep=clock.sleep
+    )
+    try:
+        with pytest.raises(MediaProcessingError) as exc:
+            await client.upload_media(b"video", "video/mp4")
+    finally:
+        await client.aclose()
+    assert exc.value.code == "invalid_media"
+    assert exc.value.processing_state == "timed_out"
+    assert exc.value.detail["state"] == "in_progress"
+    assert clock.sleeps == [2, 1]
+    assert len(fake_x.calls("GET", "/media/upload")) == 1
