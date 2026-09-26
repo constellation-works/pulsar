@@ -1,0 +1,7 @@
+{"key": "release:orbit:v0.20.0", "ts": "2026-09-13T01:08:12+00:00", "post_id": null, "note": "baseline — existed before the routine started; never post"}
+{"key": "release:orbit:v0.21.0", "ts": "2026-09-13T01:08:12+00:00", "post_id": null, "note": "baseline — existed before the routine started; never post"}
+{"key": "repo:example", "ts": "2026-09-13T01:11:52+00:00", "post_id": "1000000000000000001", "text": "New in the constellation: example — a synthetic fixture repo. https://github.com/example/example"}
+{"key": "pr:example:4", "ts": "2026-09-13T18:43:21+00:00", "post_id": null, "note": "skipped — JSON shape tweak, not a feature"}
+{"key": "pr:example:5", "ts": "2026-09-13T18:43:21+00:00", "post_id": "1000000000000000002", "text": "example: provenance on nodes — `--task` links a node to its task."}
+{"key": "release:orbit:v0.22.1", "ts": "2026-09-16T16:11:00Z", "post_id": "1000000000000000004", "text": "Orbit v0.22.1 — a synthetic release note.", "superseded_post_id": "1000000000000000003", "superseded_note": "originally landed on @otheraccount (wrong token); reposted to @constworks"}
+{"key": "pr:example:10", "ts": "2026-09-14T01:12:39+00:00", "post_id": "1000000000000000005", "text": "example: weekly maintenance report — stale items and dangling links."}
