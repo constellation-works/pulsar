@@ -213,12 +213,12 @@ async def test_refresh_failure_surfaces_as_auth_expired(session, authed, fake_x)
     fake_x.fail_auth_once = True
     fake_x.refresh_status = 401
     out = _payload(await session.call_tool("create_post", {"text": "hello"}))
-    assert out == {
-        "ok": False,
-        "code": "auth_expired",
-        "message": "X authorization expired; a human must re-run `pulsar auth login`",
-        "retryable": False,
-    }
+    assert out["ok"] is False and out["code"] == "auth_expired"
+    assert out["retryable"] is False
+    # The remedy names the account and the home it lives under.
+    assert out["message"].startswith("X refused the refresh token (HTTP 401)")
+    assert "PULSAR_HOME=" in out["message"]
+    assert "pulsar auth login --account x:constworks" in out["message"]
 
 
 async def test_upload_media_by_path_then_attach(session, authed, fake_x, media_dir):

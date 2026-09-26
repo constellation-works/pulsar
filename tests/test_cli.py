@@ -28,6 +28,7 @@ def _other_bundle(bundle):
 def _config(paths, text):
     paths.ensure()
     paths.settings_file.write_text(text)
+    paths.settings_file.chmod(0o600)  # config.toml must not be group/world-writable
 
 
 async def test_default_reads_the_cache_and_says_refresh_is_unproven(paths, fake_x):

@@ -41,6 +41,7 @@ def _plan(tmp_path, text=THREAD) -> Path:
 def _config(paths, text):
     paths.ensure()
     paths.settings_file.write_text(text)
+    paths.settings_file.chmod(0o600)  # config.toml must not be group/world-writable
 
 
 def _clean(out) -> None:
