@@ -29,17 +29,21 @@ core         plan, publisher, ledger, policy, accounts, store, media, guard, set
 An arrow points at what a layer imports. The CLI starts the other two front ends (`serve`,
 `orbit-tool`).
 
-`main.py` builds `App` (the verbs, bound to one home and one transport) and hands it to the
-CLI. Tests hand in an `App` on the fake transport the same way.
+`main.py` builds a `LocalApp` (the verbs, bound to one home and one transport) and hands it to
+the CLI, which types it as `App`, the protocol it codes against. Tests hand in a `LocalApp` on
+the fake transport the same way. Every injected dependency is typed by such a protocol
+(`App`, `Runtime`, `Ledger`, `CredentialStore`, `Channel`, `XApi`); only the code that builds
+it names the implementation (`LocalApp`, `LocalRuntime`, `SqliteLedger`, `FernetFileStore`,
+`XChannel`, `XClient`).
 
 | Layer | Owns |
 |---|---|
 | `core` | plans, the publisher, the ledger, policy, accounts and credential storage, media loading, the secret scanner, settings; no HTTP, no MCP |
 | `providers/<name>` | one channel: its HTTP client, OAuth, and the `Channel` adapter |
-| `app` | `App`, over the `Runtime` that joins settings, storage, the ledger and providers (`runtime.py`), the operator verbs (`ops.py`) and account health (`health.py`), each returning `(report, exit_code)` |
+| `app` | the `App` and `Runtime` protocols (`interfaces.py`); `LocalApp` (`facade.py`), over the `LocalRuntime` that joins settings, storage, the ledger and providers (`runtime.py`), the operator verbs (`ops.py`) and account health (`health.py`), each returning `(report, exit_code)` |
 | `mcp.py`, `orbit_tool.py` | the MCP server and the Orbit exec backend |
 | `cli/` | the dispatcher: `main.py` (`run`) parses argv and dispatches to `commands/` (one module per command, each declaring itself in `register`), which print and fail through `toolkit/` (`parser`, `context`, `render`, `views`, `errors`) |
-| `main.py` | the entry point: reads the environment, cwd and `$HOME`, builds `App` and runs the CLI with it |
+| `main.py` | the entry point: reads the environment, cwd and `$HOME`, builds `LocalApp` and runs the CLI with it |
 
 ## Ambient state
 
@@ -51,7 +55,7 @@ below receives them from there:
   (`app.default_paths`). The Orbit backend refuses a `PULSAR_HOME` that names another home
   (`orbit_tool.check_plugin_home`). Orbit runs the backend as `pulsar orbit-tool`, so it gets
   the same `App`.
-- **Relative media paths** start from the `media_base` `App.runtime` passes to `Runtime`: the
+- **Relative media paths** start from the `media_base` `App.runtime` passes to the `Runtime`: the
   process cwd for the CLI and MCP server, the workspace root for the Orbit backend. Core
   refuses a relative path with no base.
 - **Caller label.** `Runtime.caller` reads `PULSAR_CALLER` from the environment `App` was given.

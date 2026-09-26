@@ -21,7 +21,7 @@ from pulsar.core.adapter import (
     RemotePost,
 )
 from pulsar.core.errors import AuthExpired, OutcomeUnknown, PulsarError
-from pulsar.core.ledger import ItemIntent, Ledger
+from pulsar.core.ledger import ItemIntent, SqliteLedger
 from pulsar.core.plan import Plan, PostSpec
 from pulsar.core.publisher import RECONCILE_GRACE, STALE_SUBMITTING, Bound, Publisher
 from pulsar.core.settings import PolicyConfig, Prices, Settings
@@ -164,7 +164,7 @@ def make_publisher(paths, clock, media_root, **policy) -> Publisher:
         policy=PolicyConfig(**policy),
     )
     return Publisher(
-        ledger=Ledger(paths, clock=lambda: clock[0]),
+        ledger=SqliteLedger(paths, clock=lambda: clock[0]),
         settings=settings,
         deny=(paths.home,),
         now=lambda: clock[0],
@@ -619,7 +619,7 @@ async def test_a_bug_in_reconcile_is_internal_not_a_provider_error(paths, clock,
     assert result["error"]["code"] == "internal" and result["error"]["retryable"] is False
 
 
-class FailingLedger(Ledger):
+class FailingLedger(SqliteLedger):
     """A ledger whose settle writes fail, as under a held lock or a full disk."""
 
     def item_unknown(self, *args, **kwargs):

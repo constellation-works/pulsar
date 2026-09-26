@@ -42,13 +42,11 @@ from pulsar.core import (
 )
 from pulsar.providers.x import post_url
 
-from .runtime import Runtime
+from .interfaces import Report, Runtime
 
 CLI_CALLER = "pulsar-cli"
 HISTORY_LIMIT_DEFAULT = 20
 HISTORY_LIMIT_MAX = 100
-
-Report = tuple[dict[str, Any], int]
 
 
 def read_plan(path: Path) -> Plan:

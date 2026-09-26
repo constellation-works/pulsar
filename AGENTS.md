@@ -32,6 +32,12 @@
   example, `pulsar.main` builds the `App` and passes it to `pulsar.cli.run`.
   If a module is used by only one higher module, move it beneath that module
   instead: `cli/toolkit/` sits under `cli/` because only the CLI uses it.
+- **Type an injected dependency by its interface.** The parameter's type is a
+  `typing.Protocol` named for the role (`Ledger`, `CredentialStore`,
+  `Channel`), not the class that implements it. The implementation satisfies
+  the protocol structurally and is named for how it does the job
+  (`SqliteLedger`, `FernetFileStore`, `XChannel`). Only the code that builds
+  the dependency names the implementation.
 - **Each package exposes what others use in its `__init__.py`.** Everything
   imported from outside a package is re-exported in its `__init__.py` and
   listed in `__all__`. Callers import the package, not its leaf files: for

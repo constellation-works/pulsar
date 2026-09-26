@@ -1,9 +1,10 @@
 """Composition: the one place that joins configuration, storage and the core.
 
-A ``Runtime`` is built from resolved inputs (the home, the settings, the
-process environment, the directory relative media paths start from) that
-the entry point (``pulsar.main``) read once and ``App`` hands down; nothing
-here or below reads the environment, the cwd or ``$HOME`` itself.
+``LocalRuntime``, the ``Runtime`` over one home, is built from resolved inputs
+(the home, the settings, the process environment, the directory relative
+media paths start from) that the entry point (``pulsar.main``) read once and
+``LocalApp`` hands down; nothing here or below reads the environment, the
+cwd or ``$HOME`` itself.
 """
 
 from __future__ import annotations
@@ -32,12 +33,12 @@ from pulsar.core import (
     Bound,
     FernetFileStore,
     Identity,
-    Ledger,
     Paths,
     Plan,
     Publisher,
     PulsarError,
     Settings,
+    SqliteLedger,
     WriteLog,
     alias_provider,
     login_command,
@@ -100,7 +101,7 @@ def default_paths(environ: Mapping[str, str], user_home: Path) -> Paths:
     return Paths.from_environ(environ, user_home)
 
 
-class Runtime:
+class LocalRuntime:
     """Everything the verbs and tools need: ``App.runtime`` builds one per server or call.
 
     Accounts are resolved per call, not at start-up: a login, logout or
@@ -129,7 +130,7 @@ class Runtime:
         self.settings = settings
         self.registry = AccountRegistry(self.paths)
         self.log = WriteLog(self.paths)
-        self.ledger = Ledger(self.paths, export=self.log.export, read_only=read_only)
+        self.ledger = SqliteLedger(self.paths, export=self.log.export, read_only=read_only)
         self.publisher = Publisher(
             ledger=self.ledger,
             settings=self.settings,
@@ -143,7 +144,7 @@ class Runtime:
         self._clients: dict[str, XClient] = {}
         self._migrated = False
 
-    async def __aenter__(self) -> Runtime:
+    async def __aenter__(self) -> LocalRuntime:
         return self
 
     async def __aexit__(self, *_exc: object) -> None:

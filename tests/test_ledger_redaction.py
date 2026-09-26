@@ -14,7 +14,7 @@ import pytest
 
 import pulsar.core.ledger.text as text_mod
 from pulsar.core.errors import OutcomeUnknown, PulsarError
-from pulsar.core.ledger import Ledger
+from pulsar.core.ledger import SqliteLedger
 from pulsar.core.ledger.text import REDACTED_COLUMNS
 from pulsar.core.writelog import WriteLog
 
@@ -52,7 +52,7 @@ STRUCTURED = {
 
 
 def test_every_text_column_is_either_redacted_or_structured(paths):
-    Ledger(paths).migrate()
+    SqliteLedger(paths).migrate()
     columns = {
         f"{table}.{name}"
         for table in ("writes", "items")
@@ -72,7 +72,7 @@ def marked(monkeypatch):
 
 
 def test_every_writer_of_free_text_goes_through_the_hook(paths, marked):
-    ledger = Ledger(paths)
+    ledger = SqliteLedger(paths)
     # Legacy single-request rows: caller, meta, error message.
     ledger.claim(key="up", tool="upload_media", digest="u", account=ME, caller="bot",
                  meta={"mime": "image/png", "nested": {"why": "free text"}})  # fmt: skip
@@ -123,7 +123,7 @@ def stored_bytes(paths) -> bytes:
 
 
 def test_a_credential_in_an_error_message_is_stored_masked(paths):
-    ledger = Ledger(paths)
+    ledger = SqliteLedger(paths)
     ledger.claim(key="up", tool="upload_media", digest="u", account=ME, caller="bot",
                  meta={"echo": LEAKED})  # fmt: skip
     ledger.fail("up", PulsarError("provider_error", f"X said: {LEAKED}"))

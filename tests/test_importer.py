@@ -18,7 +18,7 @@ from pulsar.core.ledger import (
     SKIPPED,
     AccountRef,
     ItemIntent,
-    Ledger,
+    SqliteLedger,
     request_digest,
 )
 from pulsar.core.writelog import WriteLog
@@ -66,7 +66,7 @@ def claim(ledger, key, *, account=ACCT, admit=None):
 
 
 def test_fixture_imports_every_row_shape(paths):
-    ledger = Ledger(paths)
+    ledger = SqliteLedger(paths)
     report = run(ledger)
     assert (report.imported_published, report.imported_skipped) == (4, 3)
     assert report.already_present == 0 and report.conflicts == [] and report.errors == []
@@ -94,7 +94,7 @@ def test_fixture_imports_every_row_shape(paths):
 
 
 def test_a_dry_run_reports_the_same_counts_and_writes_nothing(paths):
-    ledger = Ledger(paths)
+    ledger = SqliteLedger(paths)
     dry = import_posted(ledger, FIXTURE, account=ACCT, url_for=url_for, apply=False)
     assert dry.applied is False and dry.to_dict()["applied"] is False
     assert ledger.history() == []
@@ -119,21 +119,21 @@ def test_a_dry_run_classifies_a_repeated_key_as_the_real_run_does(paths, tmp_pat
         keys = [(n, k) for n, k, _ in report.conflicts]
         return (report.imported_published, report.imported_skipped, report.already_present, keys)
 
-    dry = import_posted(Ledger(paths), path, account=ACCT, url_for=url_for, apply=False)
-    real = run(Ledger(paths), path)
+    dry = import_posted(SqliteLedger(paths), path, account=ACCT, url_for=url_for, apply=False)
+    real = run(SqliteLedger(paths), path)
     assert counts(dry) == counts(real)
     assert real.already_present == 1 and len(real.conflicts) == 1
 
 
 def test_timestamps_are_normalised_to_utc(paths):
-    ledger = Ledger(paths)
+    ledger = SqliteLedger(paths)
     run(ledger)
     row = ledger.get_plan("release:orbit:v0.22.1")  # "…Z" in the file
     assert row.created_at == "2026-09-16T16:11:00.000+00:00"
 
 
 def test_superseded_facts_are_kept_in_meta(paths):
-    ledger = Ledger(paths)
+    ledger = SqliteLedger(paths)
     run(ledger)
     row = ledger.get_plan("release:orbit:v0.22.1")
     assert row.meta == {
@@ -145,7 +145,7 @@ def test_superseded_facts_are_kept_in_meta(paths):
 
 
 def test_second_run_is_all_already_present(paths):
-    ledger = Ledger(paths)
+    ledger = SqliteLedger(paths)
     run(ledger)
     before = [r.to_dict() for r in ledger.history(limit=50)]
     again = run(ledger)
@@ -155,7 +155,7 @@ def test_second_run_is_all_already_present(paths):
 
 
 def test_imported_keys_replay_or_stay_skipped(paths):
-    ledger = Ledger(paths)
+    ledger = SqliteLedger(paths)
     run(ledger)
 
     def refuse(_usage) -> None:
@@ -175,7 +175,7 @@ def test_imported_keys_replay_or_stay_skipped(paths):
 
 
 def test_imports_cost_nothing_and_write_no_text_or_export(paths):
-    ledger = Ledger(paths, export=WriteLog(paths).export)
+    ledger = SqliteLedger(paths, export=WriteLog(paths).export)
     run(ledger)
     usage = ledger.usage("x:constworks", day_start=DAY, month_start=MONTH)
     assert usage.spent_day_usd == 0 and usage.spent_month_usd == 0
@@ -189,7 +189,7 @@ def test_imports_cost_nothing_and_write_no_text_or_export(paths):
 
 
 def test_key_taken_by_another_write_is_a_conflict(paths):
-    ledger = Ledger(paths)
+    ledger = SqliteLedger(paths)
     claim(ledger, "repo:example")
     report = run(ledger)
     assert report.imported_published == 3 and report.imported_skipped == 3
@@ -200,7 +200,7 @@ def test_key_taken_by_another_write_is_a_conflict(paths):
 
 
 def test_imported_row_that_disagrees_with_its_line_is_a_conflict(paths, tmp_path):
-    ledger = Ledger(paths)
+    ledger = SqliteLedger(paths)
     run(ledger)
     changed = []
     for line in lines():
@@ -244,7 +244,7 @@ def test_malformed_lines_are_reported_and_the_rest_imported(paths, tmp_path):
         ("\n".join([good[0], *bad[:4], "", good[1], *bad[4:], *good[2:]]) + "\n").encode()
         + b'{"key": "\xff"}\n'
     )
-    ledger = Ledger(paths)
+    ledger = SqliteLedger(paths)
     report = run(ledger, path)
     assert (report.imported_published, report.imported_skipped) == (4, 3)
     assert [number for number, _ in report.errors] == [2, 3, 4, 5, 8, 9, 10, 11, 17]
@@ -260,7 +260,7 @@ def test_malformed_lines_are_reported_and_the_rest_imported(paths, tmp_path):
 def test_report_to_dict(paths, tmp_path):
     path = tmp_path / "posted.jsonl"
     path.write_text("oops\n")
-    report = run(Ledger(paths), path)
+    report = run(SqliteLedger(paths), path)
     assert report.to_dict() == {
         "applied": True,
         "imported_published": 0,

@@ -1,4 +1,4 @@
-"""The plan API against ``Ledger`` directly: claims, the item compare-and-set,
+"""The plan API against ``SqliteLedger`` directly: claims, the item compare-and-set,
 threads, skips, and a live sender racing reconcile."""
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ from pulsar.core.ledger import (
     SKIPPED,
     SUBMITTING,
     UNKNOWN,
-    Ledger,
+    SqliteLedger,
 )
 from pulsar.core.paths import Paths
 from pulsar.core.usage import Usage
@@ -54,7 +54,7 @@ from .test_ledger import (
 
 
 def test_claim_plan_inserts_pending_row_and_items(paths):
-    ledger = Ledger(paths)
+    ledger = SqliteLedger(paths)
     seen: list[Usage] = []
     rec = claim_plan(ledger, n=3, admit=seen.append)
     assert seen == [Usage(0.0, 0.0, 0)]
@@ -75,7 +75,7 @@ def test_claim_plan_inserts_pending_row_and_items(paths):
     ids=["digest", "account", "tool"],
 )
 def test_claim_plan_same_key_different_request_is_a_conflict(paths, change):
-    ledger = Ledger(paths)
+    ledger = SqliteLedger(paths)
     claim_plan(ledger)
     with pytest.raises(PulsarError) as exc:
         claim_plan(ledger, **change)
@@ -84,7 +84,7 @@ def test_claim_plan_same_key_different_request_is_a_conflict(paths, change):
 
 
 def test_claim_plan_key_of_a_legacy_write_is_a_conflict(paths):
-    ledger = Ledger(paths)
+    ledger = SqliteLedger(paths)
     ledger.claim(key="k", tool="create_post", digest="d", account=ME, caller="t")
     ledger.publish("k", post_id="1")
     with pytest.raises(PulsarError) as exc:
@@ -93,7 +93,7 @@ def test_claim_plan_key_of_a_legacy_write_is_a_conflict(paths):
 
 
 def test_claim_plan_refuses_bad_arguments_before_writing(paths):
-    ledger = Ledger(paths)
+    ledger = SqliteLedger(paths)
     for kwargs in ({"items": []}, {"provider": "mastodon"}):
         args = {
             "key": "bad",
@@ -120,7 +120,7 @@ def test_claim_plan_refuses_bad_arguments_before_writing(paths):
 
 
 def test_claim_plan_published_replays_without_admission(paths):
-    ledger = Ledger(paths)
+    ledger = SqliteLedger(paths)
     claim_plan(ledger, n=2)
     done = send_all(ledger, "plan-1", 2)
     assert done.state == PUBLISHED
@@ -135,7 +135,7 @@ def test_claim_plan_published_replays_without_admission(paths):
 
 @pytest.mark.parametrize("outcome", [UNKNOWN, SUBMITTING])
 def test_claim_plan_blocks_on_unknown_or_in_flight(paths, outcome):
-    ledger = Ledger(paths)
+    ledger = SqliteLedger(paths)
     claim_plan(ledger)
     ledger.begin_item("plan-1", 0)
     if outcome == UNKNOWN:
@@ -149,7 +149,7 @@ def test_claim_plan_blocks_on_unknown_or_in_flight(paths, outcome):
 
 
 def test_claim_plan_pending_row_is_safe_to_reclaim(paths):
-    ledger = Ledger(paths)
+    ledger = SqliteLedger(paths)
     claim_plan(ledger, n=2)
     calls: list[Usage] = []
     again = claim_plan(ledger, n=2, admit=calls.append)
@@ -157,7 +157,7 @@ def test_claim_plan_pending_row_is_safe_to_reclaim(paths):
 
 
 def test_claim_plan_failed_row_is_rearmed(paths):
-    ledger = Ledger(paths)
+    ledger = SqliteLedger(paths)
     claim_plan(ledger, n=1)
     ledger.begin_item("plan-1", 0)
     ledger.item_failed("plan-1", 0, PulsarError("api_error", "connect refused"))
@@ -170,7 +170,7 @@ def test_claim_plan_failed_row_is_rearmed(paths):
 
 
 def test_admit_raising_writes_nothing(paths):
-    ledger = Ledger(paths)
+    ledger = SqliteLedger(paths)
 
     def over_budget(usage: Usage) -> None:
         raise PulsarError("budget_exceeded", "daily budget spent")
@@ -196,7 +196,7 @@ def test_admit_raising_writes_nothing(paths):
 
 
 def test_begin_item_cas_two_ledgers_one_home(paths):
-    a, b = Ledger(paths), Ledger(paths)
+    a, b = SqliteLedger(paths), SqliteLedger(paths)
     assert claim_plan(a, n=2).state == PENDING
     assert claim_plan(b, n=2).state == PENDING  # nothing sent yet: both may hold it
     a.begin_item("plan-1", 0)
@@ -215,14 +215,14 @@ def test_begin_item_cas_two_ledgers_one_home(paths):
 
 
 def test_begin_item_many_threads_admit_exactly_one(paths):
-    claim_plan(Ledger(paths))
+    claim_plan(SqliteLedger(paths))
     n = 8
     barrier = threading.Barrier(n)
     outcomes: list[str] = []
     lock = threading.Lock()
 
     def worker() -> None:
-        ledger = Ledger(paths)
+        ledger = SqliteLedger(paths)
         barrier.wait()
         try:
             ledger.begin_item("plan-1", 0)
@@ -241,7 +241,7 @@ def test_begin_item_many_threads_admit_exactly_one(paths):
 
 
 def _begin_in_process(home: str, go, results) -> None:
-    ledger = Ledger(Paths(Path(home)))
+    ledger = SqliteLedger(Paths(Path(home)))
     go.wait(30)
     try:
         ledger.begin_item("plan-proc", 0)
@@ -251,7 +251,7 @@ def _begin_in_process(home: str, go, results) -> None:
 
 
 def test_begin_item_cas_across_processes(paths):
-    claim_plan(Ledger(paths), "plan-proc")
+    claim_plan(SqliteLedger(paths), "plan-proc")
     ctx = multiprocessing.get_context("spawn")
     go = ctx.Event()
     results = ctx.Queue()
@@ -272,7 +272,7 @@ def test_begin_item_cas_across_processes(paths):
 
 
 def test_begin_item_refuses_out_of_order_and_closed_rows(paths):
-    ledger = Ledger(paths)
+    ledger = SqliteLedger(paths)
     claim_plan(ledger, n=3)
     with pytest.raises(PulsarError) as exc:
         ledger.begin_item("plan-1", 1)
@@ -295,7 +295,7 @@ def test_begin_item_refuses_out_of_order_and_closed_rows(paths):
 
 
 def test_thread_failing_at_second_post_is_partial_and_resumes(paths):
-    ledger = Ledger(paths, export=WriteLog(paths).export)
+    ledger = SqliteLedger(paths, export=WriteLog(paths).export)
     claim_plan(ledger, "thread", n=3)
     ledger.begin_item("thread", 0)
     ledger.item_published("thread", 0, post_id="500", url="https://x.com/constworks/status/500")
@@ -324,7 +324,7 @@ def open_items(record):
 
 
 def test_unknown_blocks_reclaim_until_settled_absent(paths):
-    ledger = Ledger(paths)
+    ledger = SqliteLedger(paths)
     claim_plan(ledger, n=2)
     ledger.begin_item("plan-1", 0)
     ledger.item_failed("plan-1", 0, OutcomeUnknown("ReadTimeout"))  # ambiguous stays unknown
@@ -350,7 +350,7 @@ def test_unknown_blocks_reclaim_until_settled_absent(paths):
 
 
 def test_unknown_settled_as_published_resumes_after_it(paths):
-    ledger = Ledger(paths)
+    ledger = SqliteLedger(paths)
     claim_plan(ledger, n=2)
     ledger.begin_item("plan-1", 0)
     ledger.item_unknown("plan-1", 0, OutcomeUnknown("HTTP 503"))
@@ -364,7 +364,7 @@ def test_unknown_settled_as_published_resumes_after_it(paths):
 
 def test_stale_submitting_row_is_unresolved_and_finishes_unknown(paths):
     clock = Clock()
-    ledger = Ledger(paths, clock=clock)
+    ledger = SqliteLedger(paths, clock=clock)
     t0 = clock.now
     claim_plan(ledger, n=2)
     ledger.begin_item("plan-1", 0)
@@ -381,7 +381,7 @@ def test_stale_submitting_row_is_unresolved_and_finishes_unknown(paths):
 
 
 def test_item_transitions_are_checked(paths):
-    ledger = Ledger(paths)
+    ledger = SqliteLedger(paths)
     claim_plan(ledger)
     with pytest.raises(PulsarError) as exc:
         ledger.item_published("plan-1", 0, post_id="1", url="u")  # never begun
@@ -396,7 +396,7 @@ def test_item_transitions_are_checked(paths):
 
 
 def test_finishing_a_row_without_posts_is_an_internal_error(paths):
-    ledger = Ledger(paths)
+    ledger = SqliteLedger(paths)
     ledger.skip(key="s", provider="x", account=ACCT, caller="t", note=None)
     with pytest.raises(PulsarError) as exc:
         ledger.finish("s")
@@ -407,7 +407,7 @@ def test_finishing_a_row_without_posts_is_an_internal_error(paths):
 
 
 def test_skip_records_a_decision_never_to_post(paths):
-    ledger = Ledger(paths, export=WriteLog(paths).export)
+    ledger = SqliteLedger(paths, export=WriteLog(paths).export)
     rec = ledger.skip(key="pr:4", provider="x", account=ACCT, caller="t", note="not a feature")
     assert rec.state == SKIPPED and rec.note == "not a feature" and rec.items == ()
     assert ledger.skip(key="pr:4", provider="x", account=ACCT, caller="t", note="again") == rec
@@ -426,7 +426,7 @@ def test_skip_records_a_decision_never_to_post(paths):
 
 
 def test_skip_conflicts_with_published_or_in_flight(paths):
-    ledger = Ledger(paths)
+    ledger = SqliteLedger(paths)
     claim_plan(ledger, "pub")
     send_all(ledger, "pub", 1)
     claim_plan(ledger, "flying")
@@ -445,7 +445,7 @@ def test_skip_conflicts_with_published_or_in_flight(paths):
 
 
 def test_skip_a_pending_row_stops_a_holder_from_sending(paths):
-    ledger = Ledger(paths)
+    ledger = SqliteLedger(paths)
     claim_plan(ledger)
     ledger.skip(key="plan-1", provider="x", account=ACCT, caller="t", note="changed our mind")
     with pytest.raises(OutcomeUnknown):
@@ -458,7 +458,7 @@ def test_skip_a_pending_row_stops_a_holder_from_sending(paths):
 
 def test_item_sending_is_a_compare_and_set_on_the_senders_stamp(paths):
     clock = Clock()
-    ledger = Ledger(paths, clock=clock)
+    ledger = SqliteLedger(paths, clock=clock)
     claim_plan(ledger, n=1)
     stamp = ledger.begin_item("plan-1", 0)
     assert ledger.item_sending("plan-1", 0, "2000-01-01T00:00:00.000+00:00") is None
@@ -473,7 +473,7 @@ def test_item_sending_is_a_compare_and_set_on_the_senders_stamp(paths):
 
 def test_settle_writes_nothing_when_the_row_changed_since_it_was_listed(paths):
     clock = Clock()
-    ledger = Ledger(paths, clock=clock)
+    ledger = SqliteLedger(paths, clock=clock)
     claim_plan(ledger, n=2)
     stamp = ledger.begin_item("plan-1", 0)
     seen = open_items(ledger.get_plan("plan-1"))
@@ -491,7 +491,7 @@ def test_settle_writes_nothing_when_the_row_changed_since_it_was_listed(paths):
 
 
 def test_settle_records_a_found_post_and_finishes(paths):
-    ledger = Ledger(paths, clock=Clock(datetime(2026, 9, 26, 9, 0, tzinfo=UTC)))
+    ledger = SqliteLedger(paths, clock=Clock(datetime(2026, 9, 26, 9, 0, tzinfo=UTC)))
     claim_plan(ledger, n=1)
     ledger.begin_item("plan-1", 0)
     ledger.item_unknown("plan-1", 0, OutcomeUnknown("ReadTimeout"))

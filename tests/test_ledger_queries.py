@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta, timezone
 
 from pulsar.core.errors import OutcomeUnknown, PulsarError
-from pulsar.core.ledger import PUBLISHED, Ledger
+from pulsar.core.ledger import PUBLISHED, SqliteLedger
 from pulsar.core.usage import Usage
 from pulsar.core.writelog import WriteLog
 
@@ -25,7 +25,7 @@ from .test_ledger import (
 
 def test_usage_windows(paths):
     clock = Clock(datetime(2026, 9, 25, 10, 0, tzinfo=UTC))  # yesterday: month only
-    ledger = Ledger(paths, clock=clock)
+    ledger = SqliteLedger(paths, clock=clock)
     claim_plan(ledger, "yesterday", n=2, cost=0.2)
     send_all(ledger, "yesterday", 2)
 
@@ -60,7 +60,7 @@ def test_usage_windows(paths):
 
 def test_history_newest_first_and_per_account(paths):
     clock = Clock()
-    ledger = Ledger(paths, clock=clock)
+    ledger = SqliteLedger(paths, clock=clock)
     for i, account in enumerate([ACCT, OTHER, ACCT]):
         clock.now = DAY + timedelta(minutes=i)
         claim_plan(ledger, f"k{i}", account=account)
@@ -70,7 +70,7 @@ def test_history_newest_first_and_per_account(paths):
 
 
 def test_count_is_the_total_history_matches_without_its_limit(paths):
-    ledger = Ledger(paths)
+    ledger = SqliteLedger(paths)
     assert ledger.count() == 0
     for i, account in enumerate([ACCT, OTHER, ACCT]):
         claim_plan(ledger, f"k{i}", account=account)
@@ -82,7 +82,7 @@ def test_count_is_the_total_history_matches_without_its_limit(paths):
 def test_last_published_filters_before_the_limit(paths):
     """60 newer unpublished rows do not hide the published one."""
     clock = Clock(DAY)
-    ledger = Ledger(paths, clock=clock)
+    ledger = SqliteLedger(paths, clock=clock)
     assert ledger.last_published("x:constworks") is None
     claim_plan(ledger, "old-post")
     send_all(ledger, "old-post", 1)
@@ -102,7 +102,7 @@ def test_last_published_filters_before_the_limit(paths):
 
 
 def test_plan_export_lines_carry_ids_and_hashes_never_text(paths):
-    ledger = Ledger(paths, export=WriteLog(paths).export)
+    ledger = SqliteLedger(paths, export=WriteLog(paths).export)
     claim_plan(ledger, "thread", n=3)
     send_all(ledger, "thread", 3)
     (line,) = jsonl(paths)
@@ -126,6 +126,6 @@ def test_failed_export_does_not_fail_finish(paths):
     def broken(_record) -> None:
         raise OSError("disk full")
 
-    ledger = Ledger(paths, export=broken)
+    ledger = SqliteLedger(paths, export=broken)
     claim_plan(ledger)
     assert send_all(ledger, "plan-1", 1).state == PUBLISHED

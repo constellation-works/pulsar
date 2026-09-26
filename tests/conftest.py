@@ -17,7 +17,7 @@ from urllib.parse import parse_qs
 import httpx
 import pytest
 
-from pulsar.app import App, Runtime
+from pulsar.app import LocalApp, LocalRuntime
 from pulsar.core import guard
 from pulsar.core.accounts import Account, AccountRegistry
 from pulsar.core.paths import Paths
@@ -88,10 +88,10 @@ def make_runtime(
     environ: Any = None,
     media_base: Path | None = None,
     **kwargs: Any,
-) -> Runtime:
+) -> LocalRuntime:
     """A runtime as ``App.runtime`` builds one: the home's settings, this
     process's environment and cwd, unless a test gives its own."""
-    return Runtime(
+    return LocalRuntime(
         paths,
         load_settings(paths) if settings is None else settings,
         environ=os.environ if environ is None else environ,
@@ -100,9 +100,9 @@ def make_runtime(
     )
 
 
-def make_app(paths: Paths, *, transport: httpx.AsyncBaseTransport | None = None) -> App:
+def make_app(paths: Paths, *, transport: httpx.AsyncBaseTransport | None = None) -> LocalApp:
     """The app the entry point would build over ``paths``, on ``transport`` when given."""
-    return App(paths, environ=os.environ, cwd=Path.cwd(), transport=transport)
+    return LocalApp(paths, environ=os.environ, cwd=Path.cwd(), transport=transport)
 
 
 @pytest.fixture(autouse=True)

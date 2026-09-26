@@ -36,7 +36,7 @@ paid post and lets a human or reconcile settle the first.
 
 ## Read-Only Opens
 
-`Ledger(paths, read_only=True)` serves reports.
+`SqliteLedger(paths, read_only=True)` serves reports.
 
 - It never creates the home or the file, never switches the journal mode, never migrates and
   never takes a write lock. Every state change on it raises `internal`.

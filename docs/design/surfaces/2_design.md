@@ -74,7 +74,7 @@ authenticates it.
 
 [cli/](../../../src/pulsar/cli/), verbs in [ops.py](../../../src/pulsar/app/ops.py),
 health in [health.py](../../../src/pulsar/app/health.py). The entry point `pulsar/main.py`
-builds the `App` and runs the CLI with it; `cli/main.py` builds the command tree and dispatches; each command declares its parser and holds its handler in `cli/commands/`;
+builds a `LocalApp` and runs the CLI with it; `cli/main.py` builds the command tree and dispatches; each command declares its parser and holds its handler in `cli/commands/`;
 beneath them, `cli/toolkit/` holds what they are written against: `context.py` prints a payload and `errors.py` a failure.
 
 - **Help.** `pulsar` or `pulsar auth` alone prints that level's help on stderr and exits 2.

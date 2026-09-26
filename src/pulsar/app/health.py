@@ -38,12 +38,10 @@ from pulsar.core import (
 )
 from pulsar.providers.x import REFRESH_AHEAD_SECONDS, load_client_id
 
-from .runtime import Runtime
+from .interfaces import Report, Runtime
 
 Health = Literal["healthy", "unverified", "unhealthy"]
 TokenState = Literal["valid", "expiring", "expired"]
-
-Report = tuple[dict[str, Any], int]
 
 
 def token_state(expires_in_s: int) -> TokenState:

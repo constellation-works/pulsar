@@ -1,4 +1,5 @@
-"""``Ledger``: one connection per operation, one transaction per state change.
+"""``SqliteLedger``, the ``Ledger`` over SQLite: one connection per operation,
+one transaction per state change.
 
 The SQL lives in the sibling modules; this class owns the connection, the
 schema-version check, the clock and the ``writes.jsonl`` export.
@@ -39,7 +40,7 @@ def _now() -> str:
     return iso(datetime.now(UTC))
 
 
-class Ledger:
+class SqliteLedger:
     """The ledger at ``paths.ledger_db``.
 
     ``read_only=True`` is for reports: it creates no
@@ -66,12 +67,12 @@ class Ledger:
         self._clock = clock
         self._ready = False
 
-    def reader(self) -> Ledger:
+    def reader(self) -> SqliteLedger:
         """A read-only view of the same file: for checks that must not create,
         migrate or write it (a dry run, a report)."""
         if self.read_only:
             return self
-        return Ledger(
+        return SqliteLedger(
             self.paths, busy_timeout_ms=self._busy_timeout_ms, clock=self._clock, read_only=True
         )
 

@@ -34,7 +34,7 @@ translates requests and errors; it never decides policy and never touches a cred
 ## 2. Core Concepts
 
 - **Runtime.** A surface's handle on one home: settings, registry, ledger, publisher
-  (`mcp.py` `Runtime`).
+  (the `Runtime` protocol in `app/interfaces.py`; `LocalRuntime` implements it).
 - **Tool annotations.** MCP `readOnlyHint` / `destructiveHint` / `idempotentHint`, so a
   harness can gate by tool without parsing arguments.
 - **Operator verbs.** `pulsar status | history | validate | publish | reconcile |

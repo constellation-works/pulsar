@@ -1,7 +1,8 @@
-"""What every front end calls: ``App`` (the verbs, bound to one home, which the
-entry point ``pulsar.main`` builds and supplies), the runtime that joins
-providers to the core, the operator verbs (``ops``) and account health
-(``health``).
+"""What every front end calls. ``App`` and ``Runtime`` are the interfaces a
+front end and the verbs code against; ``LocalApp`` and ``LocalRuntime``
+implement them over one home, and the entry point (``pulsar.main``) builds
+the app and supplies it. Behind them: the operator verbs (``ops``) and
+account health (``health``).
 What the front ends need from ``core`` and ``providers`` is re-exported here.
 """
 
@@ -48,8 +49,9 @@ from pulsar.providers.x import (
     validate_text,
 )
 
-from .facade import App
+from .facade import LocalApp
 from .health import attention, auth_report
+from .interfaces import App, Report, Runtime
 from .ops import (
     CLI_CALLER,
     HISTORY_LIMIT_DEFAULT,
@@ -57,16 +59,20 @@ from .ops import (
     budget_report,
     check_limit,
 )
-from .runtime import PLUGIN_STATE_ENV, Runtime, configure_logging, default_paths
+from .runtime import PLUGIN_STATE_ENV, LocalRuntime, configure_logging, default_paths
 
 __all__ = [
-    # the verbs, bound to a home: what the entry point supplies
+    # the interfaces the front ends and verbs code against
     "App",
+    "Report",
+    "Runtime",
+    # their implementations over one home: what the entry point builds
+    "LocalApp",
+    "LocalRuntime",
     # runtime
     "configure_logging",
     "PLUGIN_STATE_ENV",
     "default_paths",
-    "Runtime",
     # ops: the operator verbs
     "CLI_CALLER",
     "HISTORY_LIMIT_DEFAULT",

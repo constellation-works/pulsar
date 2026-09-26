@@ -38,7 +38,7 @@ credentials.
 ``writes.jsonl`` is an export: every terminal transition appends one line
 there through ``WriteLog.export``. The ledger is the source of truth.
 
-``Ledger(paths, read_only=True)`` serves reports: it never creates,
+``SqliteLedger(paths, read_only=True)`` serves reports: it never creates,
 migrates or locks anything, and refuses a file older than this pulsar with
 the remedy (``pulsar migrate --confirm``). Every connection re-reads the schema
 version, so a running process stops writing once a newer pulsar migrates
@@ -48,13 +48,15 @@ Layout: ``records`` (``State`` and row values), ``keys`` (idempotency keys
 and digests), ``text`` (the redaction hook for free text), ``schema`` (DDL,
 migrations, transactions), ``connection`` (read-write and read-only opens),
 ``queries`` (reads), ``single`` (the legacy single-request API), ``plans``
-(the plan API), ``imports`` (historic rows) and ``facade`` (``Ledger``).
+(the plan API), ``imports`` (historic rows), ``interfaces`` (``Ledger``, the
+protocol callers type against) and ``facade`` (``SqliteLedger``, its implementation).
 Import from this package, not from the modules.
 """
 
 from __future__ import annotations
 
-from .facade import Export, Ledger
+from .facade import Export, SqliteLedger
+from .interfaces import Ledger
 from .keys import MAX_KEY_LENGTH, check_key, check_note, default_key, request_digest
 from .records import (
     COMMITTED_ITEM_STATES,
@@ -111,6 +113,7 @@ __all__ = [
     "ItemIntent",
     "ItemRecord",
     "Ledger",
+    "SqliteLedger",
     "PlanRecord",
     "State",
     "WriteRecord",

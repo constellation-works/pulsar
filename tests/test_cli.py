@@ -8,10 +8,10 @@ from pathlib import Path
 
 import pytest
 
-from pulsar.app import App, default_paths
+from pulsar.app import LocalApp, default_paths
 from pulsar.cli import build_parser, run
 from pulsar.core.accounts import AccountRegistry
-from pulsar.core.ledger import SCHEMA_VERSION, Ledger
+from pulsar.core.ledger import SCHEMA_VERSION, SqliteLedger
 from pulsar.main import main as entry_point
 from pulsar.providers.x import auth as x_auth
 
@@ -42,7 +42,7 @@ def _verified(paths, bundle, alias=ALIAS, handle="constworks", user_id="12345678
 def main(argv, *, transport=None):
     """``pulsar`` with the app the entry point would build, on the fake X when given."""
     environ = os.environ
-    app = App(
+    app = LocalApp(
         default_paths(environ, Path.home()), environ=environ, cwd=Path.cwd(), transport=transport
     )
     return run(argv, app)
@@ -409,14 +409,14 @@ def test_publish_with_confirm_posts_and_records(paths, authed, fake_x, tmp_path,
     [receipt] = json.loads(out)["results"]
     assert code == 0 and receipt["state"] == "published"
     assert len(fake_x.calls("POST", "/tweets")) == 2
-    [row] = Ledger(paths).history()
+    [row] = SqliteLedger(paths).history()
     assert row.caller == "pulsar-cli"
 
 
 def test_publish_labels_writes_with_pulsar_caller(paths, authed, fake_x, tmp_path, monkeypatch):
     monkeypatch.setenv("PULSAR_CALLER", "routine:release-notes")
     assert main(["publish", _plan(tmp_path), "--confirm"], transport=fake_x.transport()) == 0
-    [row] = Ledger(paths).history()
+    [row] = SqliteLedger(paths).history()
     assert row.caller == "routine:release-notes"
 
 
@@ -440,10 +440,10 @@ def test_import_posted_needs_confirm_to_write(paths, authed, fake_x, capsys):
     argv = ["import-posted", str(FIXTURE)]
     code, out, _ = _run(capsys, argv, transport=fake_x.transport())
     assert code == 0 and json.loads(out)["applied"] is False
-    assert Ledger(paths).history() == []
+    assert SqliteLedger(paths).history() == []
     code, out, _ = _run(capsys, [*argv, "--confirm"], transport=fake_x.transport())
     assert code == 0 and json.loads(out)["applied"] is True
-    assert Ledger(paths).history() != []
+    assert SqliteLedger(paths).history() != []
 
 
 def test_serve_binds_only_loopback(capsys):

@@ -1,7 +1,7 @@
 """The write ledger through the legacy MCP tools: idempotency, outcome
 classification, persistence and export as a tool contract.
 
-The storage properties are tested against ``Ledger`` directly in the
+The storage properties are tested against ``SqliteLedger`` directly in the
 ``test_ledger_*`` modules, which share the helpers at the end of this one.
 """
 
@@ -30,7 +30,7 @@ from pulsar.core.ledger import (
     UNKNOWN,
     AccountRef,
     ItemIntent,
-    Ledger,
+    SqliteLedger,
     request_digest,
 )
 from pulsar.core.ledger.schema import SCHEMA_V1
@@ -233,7 +233,7 @@ async def test_unexpected_exception_mid_post_is_outcome_unknown(session, authed,
 
 async def test_crash_mid_post_leaves_a_submitting_row(paths, authed, flaky_x):
     """A process that dies after claiming leaves evidence, and blocks a re-post."""
-    ledger = Ledger(paths)
+    ledger = SqliteLedger(paths)
     digest = request_digest(
         "create_post", text="lost", reply_to_post_id=None, quote_post_id=None, media_ids=[]
     )
@@ -431,7 +431,7 @@ TEXTS = ["first of three", "second of three", "third of three"]
 
 
 class Clock:
-    """A settable clock for ``Ledger(clock=...)``: assign or advance ``now``."""
+    """A settable clock for ``SqliteLedger(clock=...)``: assign or advance ``now``."""
 
     def __init__(self, now: datetime = datetime(2026, 9, 26, 12, 0, tzinfo=UTC)) -> None:
         self.now = now
@@ -520,7 +520,7 @@ def build_v1_ledger(paths) -> None:
 
 
 def sql(paths, query: str, *args):
-    """Rows straight from the file, bypassing ``Ledger``."""
+    """Rows straight from the file, bypassing ``SqliteLedger``."""
     conn = sqlite3.connect(paths.ledger_db)
     try:
         return conn.execute(query, args).fetchall()

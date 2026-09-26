@@ -17,7 +17,7 @@ import pytest
 import yaml
 
 from pulsar import orbit_tool
-from pulsar.app import App, default_paths, ops
+from pulsar.app import LocalApp, default_paths, ops
 from pulsar.core.paths import Paths
 from pulsar.main import main as pulsar_main
 
@@ -31,9 +31,9 @@ GOLDENS = yaml.safe_load((ROOT / "tests" / "conformance" / "pulsar.yaml").read_t
 assert GOLDENS, "tests/conformance/pulsar.yaml has no cases"
 
 
-def plugin_app(environ: dict[str, str]) -> App:
+def plugin_app(environ: dict[str, str]) -> LocalApp:
     """The app ``pulsar.main`` builds for ``pulsar orbit-tool`` under ``environ``."""
-    return App(default_paths(environ, Path.home()), environ=environ, cwd=Path.cwd())
+    return LocalApp(default_paths(environ, Path.home()), environ=environ, cwd=Path.cwd())
 
 
 @pytest.fixture

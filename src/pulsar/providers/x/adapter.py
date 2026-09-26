@@ -49,8 +49,9 @@ from pulsar.core import (
     obj,
 )
 
-from .client import XClient, check_x_id
+from .client import check_x_id
 from .config import MAX_POST_WEIGHTED_LENGTH
+from .interfaces import XApi
 from .text import URL_RE, validate_text
 
 MAX_MEDIA_PER_POST = 4
@@ -109,7 +110,7 @@ def remote_fingerprint(text: str) -> str:
 class XChannel:
     """X, bound to one account: its client (credentials) and bound identity."""
 
-    def __init__(self, client: XClient, *, user_id: str, handle: str) -> None:
+    def __init__(self, client: XApi, *, user_id: str, handle: str) -> None:
         self.client = client
         self.user_id = user_id
         self.handle = handle

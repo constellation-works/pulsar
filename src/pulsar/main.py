@@ -10,14 +10,14 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-from pulsar.app import App, configure_logging, default_paths
+from pulsar.app import LocalApp, configure_logging, default_paths
 from pulsar.cli import run
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     configure_logging()
     environ = os.environ
-    app = App(default_paths(environ, Path.home()), environ=environ, cwd=Path.cwd())
+    app = LocalApp(default_paths(environ, Path.home()), environ=environ, cwd=Path.cwd())
     return run(argv, app)
 
 

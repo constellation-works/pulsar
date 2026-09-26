@@ -8,7 +8,7 @@ import pytest
 from pulsar.app.ops import HISTORY_LIMIT_MAX
 from pulsar.core.accounts import AccountRegistry
 from pulsar.core.errors import OutcomeUnknown, PulsarError
-from pulsar.core.ledger import Ledger
+from pulsar.core.ledger import SqliteLedger
 
 from .conftest import ALIAS, SECRETS, make_app, make_runtime, register
 from .test_ledger import call, claim_plan, open_session
@@ -88,7 +88,7 @@ async def test_publish_without_confirm_only_validates(paths, authed, fake_x, tmp
     out, code = await make_app(paths, transport=fake_x.transport()).publish(_plan(tmp_path))
     assert code == 0 and out["published"] is False and "--confirm" in out["note"]
     assert fake_x.requests == []
-    assert Ledger(paths).history() == []
+    assert SqliteLedger(paths).history() == []
 
 
 async def test_publish_posts_a_thread_once_then_replays(paths, authed, fake_x, tmp_path):
@@ -133,7 +133,7 @@ async def test_publish_prepares_every_account_before_sending_any(paths, authed, 
         await make_app(paths, transport=fake_x.transport()).publish(plan, confirm=True)
     assert exc.value.code == "auth_expired" and "x:other" in exc.value.message
     assert fake_x.calls("POST", "/tweets") == [], "the first account did not post either"
-    assert Ledger(paths).history() == []
+    assert SqliteLedger(paths).history() == []
 
 
 async def test_status_counts_what_the_ledger_committed(paths, authed, fake_x, tmp_path):
@@ -159,7 +159,7 @@ async def test_import_without_confirm_reports_and_writes_nothing(paths, authed, 
     out, code = await make_app(paths, transport=fake_x.transport()).import_posted(FIXTURE)
     assert code == 0 and out["applied"] is False and "--confirm" in out["note"]
     assert out["imported_published"] + out["imported_skipped"] > 0
-    assert fake_x.requests == [] and Ledger(paths).history() == []
+    assert fake_x.requests == [] and SqliteLedger(paths).history() == []
 
 
 async def test_import_posted_is_idempotent_and_blocks_reposts(paths, authed, fake_x, tmp_path):
@@ -251,7 +251,7 @@ async def test_create_post_refuses_over_budget_before_any_post(paths, authed, fa
         await rt.aclose()
     assert out["code"] == "budget_exceeded"
     assert fake_x.calls("POST", "/tweets") == []
-    assert Ledger(paths).history() == [], "a refused write leaves no row"
+    assert SqliteLedger(paths).history() == [], "a refused write leaves no row"
 
 
 async def test_validate_plan_tool_is_offline(paths, authed, fake_x):
@@ -269,7 +269,7 @@ async def test_validate_plan_tool_is_offline(paths, authed, fake_x):
 
 async def test_reconcile_marks_the_account_when_its_credentials_expired(paths, bundle, fake_x):
     register(paths, bundle, handle="constworks", provider_user_id="1234567890")
-    ledger = Ledger(paths)
+    ledger = SqliteLedger(paths)
     claim_plan(ledger, "lost", n=1)
     ledger.begin_item("lost", 0)
     ledger.item_unknown("lost", 0, OutcomeUnknown("ReadTimeout"))

@@ -1,4 +1,4 @@
-"""``App``: pulsar's verbs, bound to one home and one transport.
+"""``LocalApp``: the ``App`` over one home on this host, and one transport.
 
 The entry point (``pulsar.main``) builds one from what it read of the process
 (the environment, the cwd, the home) and hands it to a front end; the front
@@ -20,12 +20,11 @@ from pulsar.core import AccountRegistry, Paths, PulsarError, Settings, load_sett
 from pulsar.providers.x import load_client_id, login
 
 from . import health, ops
-from .runtime import Runtime
+from .interfaces import Report
+from .runtime import LocalRuntime
 
-Report = tuple[dict[str, Any], int]
 
-
-class App:
+class LocalApp:
     """The verbs over ``paths``.
 
     ``environ`` is the process environment (``PULSAR_CALLER``, Orbit's), ``cwd``
@@ -55,10 +54,10 @@ class App:
         read_only: bool = False,
         settings: Settings | None = None,
         media_base: Path | None = None,
-    ) -> Runtime:
+    ) -> LocalRuntime:
         """A runtime over this home: the home's settings unless ``settings``,
         media paths from ``media_base`` else the cwd."""
-        return Runtime(
+        return LocalRuntime(
             self.paths,
             load_settings(self.paths) if settings is None else settings,
             environ=self.environ,

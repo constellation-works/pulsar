@@ -5,6 +5,7 @@ from __future__ import annotations
 from .adapter import XChannel, post_url
 from .auth import load_client_id, login
 from .client import REFRESH_AHEAD_SECONDS, MediaProcessingError, XClient, check_x_id
+from .interfaces import XApi
 from .text import validate_text
 
 __all__ = [
@@ -19,6 +20,8 @@ __all__ = [
     "MediaProcessingError",
     "XClient",
     "check_x_id",
+    # interfaces
+    "XApi",
     # text
     "validate_text",
 ]

@@ -1,4 +1,4 @@
-"""``Ledger(read_only=True)``: reports that create, lock and migrate nothing.
+"""``SqliteLedger(read_only=True)``: reports that create, lock and migrate nothing.
 
 Most of these run against a home the test makes read-only (0500), then
 compare every file's mode, mtime and digest before and after.
@@ -21,7 +21,7 @@ import pytest
 
 import pulsar.core.ledger.connection as connection_mod
 from pulsar.core.errors import INTERNAL, INVALID_CONFIG, PulsarError
-from pulsar.core.ledger import SCHEMA_VERSION, Ledger
+from pulsar.core.ledger import SCHEMA_VERSION, SqliteLedger
 from pulsar.core.paths import Paths
 from pulsar.core.usage import Usage
 
@@ -65,7 +65,7 @@ def read_only_home(paths: Paths) -> Iterator[None]:
         os.chmod(paths.home, 0o700)
 
 
-def every_read(ledger: Ledger) -> dict[str, Any]:
+def every_read(ledger: SqliteLedger) -> dict[str, Any]:
     return {
         "get": ledger.get("delete:9"),
         "get_plan": ledger.get_plan("thread"),
@@ -93,7 +93,7 @@ EMPTY = {
 
 
 def populate(paths: Paths) -> None:
-    ledger = Ledger(paths)
+    ledger = SqliteLedger(paths)
     claim_plan(ledger, "thread", n=2)
     send_all(ledger, "thread", 2)
     claim_plan(ledger, "pending")
@@ -116,12 +116,12 @@ def spy_on_opens(monkeypatch) -> list[str]:
 
 def test_every_read_in_a_read_only_home_changes_nothing(paths, monkeypatch):
     populate(paths)
-    expected = every_read(Ledger(paths))
+    expected = every_read(SqliteLedger(paths))
     assert not paths.ledger_db.with_name("ledger.sqlite3-wal").exists(), "fully checkpointed"
     opened = spy_on_opens(monkeypatch)
     with read_only_home(paths):
         before = snapshot(paths.home)
-        got = every_read(Ledger(paths, read_only=True))
+        got = every_read(SqliteLedger(paths, read_only=True))
         after = snapshot(paths.home)
     assert after == before
     assert got == expected
@@ -136,7 +136,7 @@ def test_a_file_that_changes_during_an_immutable_read_is_read_again(paths, monke
     monkeypatch.setattr(connection_mod, "_fingerprint", lambda _path: next(stamps))
     opened = spy_on_opens(monkeypatch)
     with read_only_home(paths), pytest.raises(PulsarError) as exc:
-        Ledger(paths, read_only=True).count()
+        SqliteLedger(paths, read_only=True).count()
     assert exc.value.code == INTERNAL and exc.value.retryable is True
     assert opened == ["mode=ro", "mode=ro&immutable=1"] * connection_mod.READ_ATTEMPTS
 
@@ -144,23 +144,23 @@ def test_a_file_that_changes_during_an_immutable_read_is_read_again(paths, monke
     monkeypatch.setattr(connection_mod, "_fingerprint", lambda _path: next(seen))
     opened.clear()
     with read_only_home(paths):
-        assert Ledger(paths, read_only=True).count() == 3
+        assert SqliteLedger(paths, read_only=True).count() == 3
     assert opened == ["mode=ro", "mode=ro&immutable=1"] * 2
 
 
 def test_reads_see_the_write_ahead_log_while_a_writer_holds_it(paths):
-    Ledger(paths).migrate()
+    SqliteLedger(paths).migrate()
     holder = sqlite3.connect(paths.ledger_db)  # keeps the log from being checkpointed away
     try:
         holder.execute("SELECT count(*) FROM writes").fetchall()
         populate(paths)
         wal = paths.ledger_db.with_name("ledger.sqlite3-wal")
         assert wal.stat().st_size > 0, "the rows are in the log, not the main file"
-        expected = every_read(Ledger(paths))
+        expected = every_read(SqliteLedger(paths))
         with read_only_home(paths):
             names = sorted(p.name for p in paths.home.iterdir())
             db, log = paths.ledger_db.read_bytes(), wal.read_bytes()
-            got = every_read(Ledger(paths, read_only=True))
+            got = every_read(SqliteLedger(paths, read_only=True))
             assert sorted(p.name for p in paths.home.iterdir()) == names
             assert (paths.ledger_db.read_bytes(), wal.read_bytes()) == (db, log)
         assert got == expected
@@ -169,7 +169,7 @@ def test_reads_see_the_write_ahead_log_while_a_writer_holds_it(paths):
 
 
 def test_a_log_without_its_index_in_a_read_only_home_is_refused_with_the_remedy(paths, tmp_path):
-    Ledger(paths).migrate()
+    SqliteLedger(paths).migrate()
     holder = sqlite3.connect(paths.ledger_db)
     try:
         holder.execute("SELECT count(*) FROM writes").fetchall()
@@ -183,7 +183,7 @@ def test_a_log_without_its_index_in_a_read_only_home_is_refused_with_the_remedy(
     with read_only_home(copy):
         before = snapshot(copy.home)
         with pytest.raises(PulsarError) as exc:
-            Ledger(copy, read_only=True).history()
+            SqliteLedger(copy, read_only=True).history()
         assert snapshot(copy.home) == before
     assert exc.value.code == INVALID_CONFIG
     assert str(copy.ledger_db) in exc.value.message and "chmod u+w" in exc.value.message
@@ -195,10 +195,10 @@ def test_a_missing_ledger_reads_empty_and_creates_nothing(paths, home_exists):
         paths.home.mkdir(mode=0o700)
         with read_only_home(paths):
             before = snapshot(paths.home)
-            got = every_read(Ledger(paths, read_only=True))
+            got = every_read(SqliteLedger(paths, read_only=True))
             assert snapshot(paths.home) == before
     else:
-        got = every_read(Ledger(paths, read_only=True))
+        got = every_read(SqliteLedger(paths, read_only=True))
         assert not paths.home.exists()
     assert got == EMPTY
 
@@ -207,14 +207,14 @@ def test_a_file_no_schema_was_applied_to_reads_empty(paths):
     paths.home.mkdir(mode=0o700)
     paths.ledger_db.write_bytes(b"")
     with read_only_home(paths):
-        assert every_read(Ledger(paths, read_only=True)) == EMPTY
+        assert every_read(SqliteLedger(paths, read_only=True)) == EMPTY
 
 
 def test_an_older_schema_is_refused_with_the_migrate_remedy_and_left_alone(paths):
     build_v1_ledger(paths)
     before = snapshot(paths.home)  # writable home: nothing may change here either
     with pytest.raises(PulsarError) as exc:
-        Ledger(paths, read_only=True).history()
+        SqliteLedger(paths, read_only=True).history()
     assert snapshot(paths.home) == before
     assert exc.value.code == INVALID_CONFIG
     assert str(paths.ledger_db) in exc.value.message and "pulsar migrate" in exc.value.message
@@ -228,16 +228,16 @@ def test_an_older_schema_is_refused_with_the_migrate_remedy_and_left_alone(paths
 
 
 def test_a_newer_schema_is_refused(paths):
-    Ledger(paths).migrate()
+    SqliteLedger(paths).migrate()
     conn = sqlite3.connect(paths.ledger_db)
     conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION + 1}")
     conn.close()
     with read_only_home(paths), pytest.raises(PulsarError) as exc:
-        Ledger(paths, read_only=True).get("k")
+        SqliteLedger(paths, read_only=True).get("k")
     assert exc.value.code == INVALID_CONFIG and f"v{SCHEMA_VERSION + 1}" in exc.value.message
 
 
-def _mutations(ledger: Ledger) -> list[Callable[[], object]]:
+def _mutations(ledger: SqliteLedger) -> list[Callable[[], object]]:
     err = PulsarError("api_error", "down")
     return [
         ledger.migrate,
@@ -282,7 +282,7 @@ def _mutations(ledger: Ledger) -> list[Callable[[], object]]:
 
 
 def test_every_state_change_on_a_read_only_ledger_raises(paths):
-    ledger = Ledger(paths, read_only=True)
+    ledger = SqliteLedger(paths, read_only=True)
     for mutate in _mutations(ledger):
         with pytest.raises(PulsarError) as exc:
             mutate()

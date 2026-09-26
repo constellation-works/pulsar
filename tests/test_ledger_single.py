@@ -1,4 +1,4 @@
-"""The single-request API (``claim`` / ``publish`` / ``fail``) against ``Ledger`` directly."""
+"""The single-request API (``claim`` / ``publish`` / ``fail``) against ``SqliteLedger`` directly."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from pulsar.core.errors import (
     OutcomeUnknown,
     PulsarError,
 )
-from pulsar.core.ledger import PUBLISHED, SUBMITTING, Ledger
+from pulsar.core.ledger import PUBLISHED, SUBMITTING, SqliteLedger
 from pulsar.core.paths import Paths
 
 from .test_ledger import ME, Clock, states
@@ -24,7 +24,7 @@ STALE = timedelta(minutes=10)
 
 @pytest.mark.parametrize("trial", range(10))
 def test_concurrent_claims_from_many_processes_admit_exactly_one(tmp_path, trial):
-    """Separate Ledger objects stand in for processes; each opens its own connection.
+    """Separate SqliteLedger objects stand in for processes; each opens its own connection.
 
     Each trial starts from a new file, so the racers also race to create the
     schema and switch it to WAL (which once failed with ``database is locked``).
@@ -36,7 +36,7 @@ def test_concurrent_claims_from_many_processes_admit_exactly_one(tmp_path, trial
     lock = threading.Lock()
 
     def worker() -> None:
-        ledger = Ledger(paths)
+        ledger = SqliteLedger(paths)
         barrier.wait()
         try:
             rec = ledger.claim(key="k", tool="create_post", digest="d", account=ME, caller="t")
@@ -55,7 +55,7 @@ def test_concurrent_claims_from_many_processes_admit_exactly_one(tmp_path, trial
 
 
 def test_key_from_another_account_is_a_conflict(paths):
-    ledger = Ledger(paths)
+    ledger = SqliteLedger(paths)
     ledger.claim(key="k", tool="create_post", digest="d", account=ME, caller="t")
     ledger.publish("k", post_id="1")
     other = {"user_id": "999", "username": "someone"}
@@ -65,7 +65,7 @@ def test_key_from_another_account_is_a_conflict(paths):
 
 
 def test_legacy_create_post_rows_mirror_one_item(paths):
-    ledger = Ledger(paths)
+    ledger = SqliteLedger(paths)
     ledger.claim(key="k", tool="create_post", digest="d", account=ME, caller="t", text_sha256="h")
     plan = ledger.get_plan("k")
     assert plan.account_alias == "x:constworks" and states(plan) == [SUBMITTING]
@@ -80,7 +80,7 @@ def test_legacy_create_post_rows_mirror_one_item(paths):
 
 
 def test_settling_an_unclaimed_key_is_an_internal_error(paths):
-    ledger = Ledger(paths)
+    ledger = SqliteLedger(paths)
     for settle in (
         lambda: ledger.publish("never-claimed", post_id="1"),
         lambda: ledger.fail("never-claimed", PulsarError("api_error", "down")),
@@ -105,7 +105,7 @@ def claim_delete(ledger, **kwargs):
 )
 def test_a_stale_submitting_delete_or_upload_is_re_armed(paths, tool, key):
     clock = Clock()
-    ledger = Ledger(paths, clock=clock)
+    ledger = SqliteLedger(paths, clock=clock)
     first = ledger.claim(key=key, tool=tool, digest="d", account=ME, caller="t")
     assert first.state == SUBMITTING  # ...and the sender dies before settling it
 
@@ -125,7 +125,7 @@ def test_a_stale_submitting_delete_or_upload_is_re_armed(paths, tool, key):
 
 def test_a_stale_submitting_post_is_never_re_armed(paths):
     clock = Clock()
-    ledger = Ledger(paths, clock=clock)
+    ledger = SqliteLedger(paths, clock=clock)
     ledger.claim(key="k", tool="create_post", digest="d", account=ME, caller="t")
     clock.now += timedelta(days=1)
     with pytest.raises(OutcomeUnknown) as exc:
@@ -138,7 +138,7 @@ def test_a_stale_submitting_post_is_never_re_armed(paths):
 
 def test_re_arm_still_refuses_a_different_request(paths):
     clock = Clock()
-    ledger = Ledger(paths, clock=clock)
+    ledger = SqliteLedger(paths, clock=clock)
     claim_delete(ledger)
     clock.now += timedelta(hours=1)
     with pytest.raises(PulsarError) as exc:
@@ -151,5 +151,5 @@ def test_re_arm_still_refuses_a_different_request(paths):
 
 def test_stale_after_must_be_positive(paths):
     with pytest.raises(PulsarError) as exc:
-        claim_delete(Ledger(paths), stale_after=timedelta(0))
+        claim_delete(SqliteLedger(paths), stale_after=timedelta(0))
     assert exc.value.code == INVALID_ARGUMENT

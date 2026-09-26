@@ -18,7 +18,7 @@ from pulsar.core.ledger import (
     SUBMITTING,
     UNKNOWN,
     ItemRecord,
-    Ledger,
+    SqliteLedger,
     State,
     derive_state,
     is_ambiguous,
@@ -39,7 +39,7 @@ def test_states_store_and_export_as_the_same_strings(paths):
     assert COMMITTED_ITEM_STATES == ("submitting", "published", "unknown")
     assert OPEN_ROW_STATES == ("pending", "submitting")
 
-    ledger = Ledger(paths)
+    ledger = SqliteLedger(paths)
     claim_plan(ledger)
     record = send_all(ledger, "plan-1", 1)
     assert record.state is State.PUBLISHED and record.items[0].state is State.PUBLISHED

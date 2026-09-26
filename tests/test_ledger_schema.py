@@ -8,7 +8,7 @@ from datetime import timedelta
 import pytest
 
 from pulsar.core.errors import INVALID_CONFIG, OUTCOME_UNKNOWN, OutcomeUnknown, PulsarError
-from pulsar.core.ledger import FAILED, PENDING, PUBLISHED, SCHEMA_VERSION, UNKNOWN, Ledger
+from pulsar.core.ledger import FAILED, PENDING, PUBLISHED, SCHEMA_VERSION, UNKNOWN, SqliteLedger
 from pulsar.core.ledger.schema import is_busy
 from pulsar.core.paths import Paths
 
@@ -21,7 +21,7 @@ def schema_of(paths) -> list[tuple[str, str, str, str | None]]:
 
 def test_v1_database_migrates_in_place(paths):
     build_v1_ledger(paths)
-    ledger = Ledger(paths)
+    ledger = SqliteLedger(paths)
     before = ["k-pub", "k-unk", "k-fail", "delete:9", "upload:u1"]
     assert all(ledger.get(key) is not None for key in before)
     assert ledger.count() == len(before)
@@ -69,7 +69,7 @@ def test_v1_database_migrates_in_place(paths):
 
 def test_v1_database_new_ids_do_not_reuse_old_ones(paths):
     build_v1_ledger(paths)
-    ledger = Ledger(paths)
+    ledger = SqliteLedger(paths)
     claim_plan(ledger, "after-migration")
     ids = [r[0] for r in sql(paths, "SELECT id FROM writes ORDER BY id")]
     orphans = sql(paths, "SELECT count(*) FROM items WHERE write_id NOT IN (SELECT id FROM writes)")
@@ -79,38 +79,38 @@ def test_v1_database_new_ids_do_not_reuse_old_ones(paths):
 def test_fresh_and_upgraded_ledgers_have_identical_schemas(paths, tmp_path):
     """A new file and one migrated from v1 end the same."""
     build_v1_ledger(paths)
-    Ledger(paths).migrate()
+    SqliteLedger(paths).migrate()
     fresh = Paths(tmp_path / "fresh-home")
-    Ledger(fresh).migrate()
+    SqliteLedger(fresh).migrate()
     assert schema_of(fresh) == schema_of(paths)
     assert sql(fresh, "PRAGMA user_version") == sql(paths, "PRAGMA user_version")
 
 
 def test_migrate_reports_the_versions_it_moved_between(paths, tmp_path):
     build_v1_ledger(paths)
-    ledger = Ledger(paths)
+    ledger = SqliteLedger(paths)
     assert ledger.migrate() == (1, SCHEMA_VERSION)
     assert ledger.migrate() == (SCHEMA_VERSION, SCHEMA_VERSION)
     new = Paths(tmp_path / "new-home")
-    assert Ledger(new).migrate() == (0, SCHEMA_VERSION)
+    assert SqliteLedger(new).migrate() == (0, SCHEMA_VERSION)
     assert new.ledger_db.exists()
 
 
 def test_newer_schema_is_refused(paths):
-    Ledger(paths).get("x")
+    SqliteLedger(paths).get("x")
     bump(paths, SCHEMA_VERSION + 1)
     with pytest.raises(PulsarError) as exc:
-        Ledger(paths).get("x")
+        SqliteLedger(paths).get("x")
     assert exc.value.code == INVALID_CONFIG
     with pytest.raises(PulsarError) as exc:
-        Ledger(paths).migrate()
+        SqliteLedger(paths).migrate()
     assert exc.value.code == INVALID_CONFIG
     assert sql(paths, "PRAGMA user_version") == [(SCHEMA_VERSION + 1,)], "never migrated down"
 
 
 def test_a_running_ledger_stops_once_a_newer_pulsar_migrates_the_file(paths):
     """The check is per connection, not once per process."""
-    ledger = Ledger(paths)
+    ledger = SqliteLedger(paths)
     ledger.claim(key="k", tool="delete_post", digest="d", account=ME, caller="t")
     bump(paths, SCHEMA_VERSION + 1)
     with pytest.raises(PulsarError) as write:
@@ -136,7 +136,7 @@ def bump(paths, version: int) -> None:
 
 def test_busy_is_classified_from_the_result_code(paths):
     """Not from the message text."""
-    Ledger(paths).migrate()
+    SqliteLedger(paths).migrate()
     holder = sqlite3.connect(paths.ledger_db, isolation_level=None)
     other = sqlite3.connect(paths.ledger_db, timeout=0, isolation_level=None)
     try:
