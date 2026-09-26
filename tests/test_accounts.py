@@ -32,6 +32,7 @@ from pulsar.providers.x.client import XClient
 from pulsar.surfaces.mcp import Runtime, build_server
 
 from .conftest import ALIAS, REFRESH, ROTATED_ACCESS, SECRETS, register
+from .lock_probe import blocked_on_lock
 from .media_samples import PNG
 
 pytestmark = pytest.mark.anyio
@@ -229,7 +230,7 @@ def test_login_refuses_a_handle_other_than_the_configured_one(paths, bundle, fak
     assert AccountRegistry(paths).accounts() == {}
 
 
-def test_login_rebinds_under_the_accounts_lock(paths, bundle, fake_x):
+def test_login_rebinds_under_the_accounts_lock(paths, bundle, fake_x, monkeypatch):
     register(paths, bundle)
     store = FernetFileStore.for_account(paths, ALIAS)
     relogin = _bundle(bundle, access_token=ROTATED_ACCESS, refresh_token="r2")
@@ -240,11 +241,12 @@ def test_login_rebinds_under_the_accounts_lock(paths, bundle, fake_x):
             complete_login(paths, Settings(), ALIAS, "cid", relogin, transport=fake_x.transport())
         )
 
+    blocked = blocked_on_lock(monkeypatch)
     with store.refresh_lock_sync(5):
         thread = threading.Thread(target=login)
         thread.start()
-        time.sleep(0.2)
-        assert thread.is_alive(), "login waits for a refresh in flight"
+        assert blocked.wait(5), "login waits for a refresh in flight"
+        assert thread.is_alive() and not done
     thread.join(5)
     assert done and store.load().access_token == ROTATED_ACCESS
     assert AccountRegistry(paths).get(ALIAS).binding_id == store.load().binding_id
@@ -253,7 +255,7 @@ def test_login_rebinds_under_the_accounts_lock(paths, bundle, fake_x):
 # -- two accounts, one key -------------------------------------------------------------
 
 
-async def test_two_accounts_refresh_independently(paths, bundle):
+async def test_two_accounts_refresh_independently(paths, bundle, monkeypatch):
     expired = time.time() - 10
     a = register(paths, _bundle(bundle, expires_at=expired, refresh_token="refresh-a"))
     b = register(paths, _bundle(bundle, expires_at=expired, refresh_token="refresh-b"), OTHER)
@@ -278,9 +280,10 @@ async def test_two_accounts_refresh_independently(paths, bundle):
     try:
         async with a.refresh_lock(5):  # account A is mid-refresh in another process
             fresh_b = await asyncio.wait_for(client_b.refresh(b.load()), 2)
+            blocked = blocked_on_lock(monkeypatch)
             waiting_a = asyncio.create_task(client_a.refresh(a.load()))
-            await asyncio.sleep(0.2)
-            assert not waiting_a.done(), "A waits for its own lock"
+            assert await asyncio.to_thread(blocked.wait, 5), "A waits for its own lock"
+            assert not waiting_a.done()
         fresh_a = await asyncio.wait_for(waiting_a, 5)
     finally:
         await client_a.aclose()
@@ -344,14 +347,15 @@ async def test_a_failed_refresh_marks_the_account_reauth_required(paths, authed,
 # -- logout -----------------------------------------------------------------------------
 
 
-async def test_logout_revokes_under_the_lock_and_keeps_history(paths, bundle, fake_x):
+async def test_logout_revokes_under_the_lock_and_keeps_history(paths, bundle, fake_x, monkeypatch):
     store = register(paths, bundle, handle="constworks", provider_user_id="1")
     registry = AccountRegistry(paths)
+    blocked = blocked_on_lock(monkeypatch)
     with store.refresh_lock_sync(5):
         thread = threading.Thread(target=registry.logout, args=(ALIAS,))
         thread.start()
-        time.sleep(0.2)
-        assert thread.is_alive(), "logout waits for a refresh in flight"
+        assert blocked.wait(5), "logout waits for a refresh in flight"
+        assert thread.is_alive()
         assert registry.get(ALIAS).status == "active"
     thread.join(5)
     row = registry.get(ALIAS)
@@ -518,7 +522,7 @@ def test_migration_converges_after_a_crash_at_any_step(
     assert AccountRegistry(paths).migrate_legacy(Settings()).state == "none"
 
 
-def test_migration_holds_the_legacy_refresh_lock(paths, bundle, legacy_store):
+def test_migration_holds_the_legacy_refresh_lock(paths, bundle, legacy_store, monkeypatch):
     _legacy(paths, legacy_store, bundle)
     done = threading.Event()
 
@@ -526,10 +530,11 @@ def test_migration_holds_the_legacy_refresh_lock(paths, bundle, legacy_store):
         AccountRegistry(paths).migrate_legacy(Settings())
         done.set()
 
+    blocked = blocked_on_lock(monkeypatch)
     with legacy_store.refresh_lock_sync(5):  # a phase 1 process mid-refresh
         thread = threading.Thread(target=migrate)
         thread.start()
-        time.sleep(0.2)
+        assert blocked.wait(5)
         assert not done.is_set() and paths.token_file.exists()
     thread.join(5)
     assert done.is_set() and not paths.token_file.exists()
@@ -551,3 +556,142 @@ def test_migrated_bundle_refreshes_as_the_account(paths, bundle, legacy_store, t
     fresh = asyncio.run(refresh())
     assert store.load() == fresh
     assert fresh.binding_id == AccountRegistry(paths).get(ALIAS).binding_id, "binding carried"
+
+
+# -- non-mutating legacy status -----------------------------------------------------------
+
+
+def _snapshot(root):
+    """Every path under ``root`` with its bytes (None for directories) and mtime."""
+    out = {}
+    for p in sorted(root.rglob("*")):
+        st = p.lstat()
+        out[str(p)] = (None if p.is_dir() else p.read_bytes(), st.st_mtime_ns, st.st_mode)
+    return out
+
+
+@pytest.mark.parametrize(
+    ("setup", "settings", "state", "alias"),
+    [
+        ("whoami", Settings(), "pending", ALIAS),
+        ("no-name", Settings(), "needs_alias", None),
+        ("no-name", "default", "pending", ALIAS),
+        ("beside-accounts", Settings(), "ignored", None),
+        ("orphan", Settings(), "pending", None),
+        ("nothing", Settings(), "none", None),
+    ],
+)
+def test_legacy_status_reports_without_changing_anything(
+    paths, bundle, legacy_store, setup, settings, state, alias
+):
+    if settings == "default":
+        settings = _settings(default=ALIAS)
+    if setup in ("whoami", "beside-accounts"):
+        _legacy(paths, legacy_store, bundle)
+    elif setup == "no-name":
+        _legacy(paths, legacy_store, bundle, whoami=None)
+    if setup == "beside-accounts":
+        register(paths, _bundle(bundle, access_token="a2"), OTHER)
+    if setup == "orphan":
+        FernetFileStore.for_account(paths, ALIAS).save(bundle)  # moved, no row yet
+    if setup == "nothing":
+        register(paths, bundle)
+    before = _snapshot(paths.home)
+    result = AccountRegistry(paths).legacy_status(settings)
+    assert (result.state, result.alias) == (state, alias)
+    if setup == "orphan":
+        assert result.adopted == (ALIAS,)
+    assert _snapshot(paths.home) == before, "legacy_status must not touch the home"
+    if state in ("pending", "needs_alias", "ignored"):
+        assert result.message
+
+
+def test_legacy_status_predicts_what_migrate_does(paths, bundle, legacy_store):
+    _legacy(paths, legacy_store, bundle)
+    registry = AccountRegistry(paths)
+    predicted = registry.legacy_status(Settings())
+    done = registry.migrate_legacy(Settings())
+    assert (predicted.state, predicted.alias) == ("pending", done.alias)
+    assert done.state == "migrated"
+    assert registry.legacy_status(Settings()).state == "none"
+
+
+def test_legacy_status_of_a_missing_home_creates_nothing(paths):
+    assert AccountRegistry(paths).legacy_status(Settings()).state == "none"
+    assert not paths.home.exists()
+
+
+# -- bounded accounts lock, newer registries --------------------------------------------
+
+
+def test_the_accounts_lock_times_out_naming_its_holder(paths, bundle, monkeypatch):
+    from pulsar.core.fsutil import hold_lock
+
+    register(paths, bundle)
+    monkeypatch.setattr("pulsar.core.accounts.ACCOUNTS_LOCK_WAIT_SECONDS", 0.2)
+    held, release = threading.Event(), threading.Event()
+
+    def holder():
+        with hold_lock(paths.accounts_lock, label="a stuck login", what="t", timeout=5):
+            held.set()
+            release.wait(10)
+
+    thread = threading.Thread(target=holder)
+    thread.start()
+    assert held.wait(5)
+    try:
+        err = _codes(lambda: AccountRegistry(paths).mark_status(ALIAS, "revoked"))
+    finally:
+        release.set()
+        thread.join(5)
+    assert err.code == "lock_timeout" and err.retryable is True
+    assert err.detail["holder"]["label"] == "a stuck login"
+    assert "a stuck login" in err.message and str(paths.accounts_lock) in err.message
+    assert AccountRegistry(paths).get(ALIAS).status == "active"
+
+
+def _newer_registry(paths):
+    doc = json.loads(paths.accounts_file.read_text())
+    doc["version"] = 2
+    doc["accounts"][ALIAS]["posting_window"] = "weekdays"  # a field this pulsar does not know
+    paths.accounts_file.write_text(json.dumps(doc))
+    return paths.accounts_file.read_bytes()
+
+
+def test_a_newer_registry_is_read_but_never_rewritten(paths, bundle, fake_x):
+    register(paths, bundle, handle="constworks", provider_user_id="1")
+    before = _newer_registry(paths)
+    registry = AccountRegistry(paths)
+    assert registry.resolve(None, Settings()).alias == ALIAS, "reading is fine"
+    for write in (
+        lambda: registry.mark_status(ALIAS, "revoked"),
+        lambda: registry.put(Account(alias=OTHER, provider="x")),
+        lambda: registry.logout(ALIAS),
+        lambda: complete_login(
+            paths,
+            Settings(),
+            ALIAS,
+            "cid",
+            _bundle(bundle, access_token=ROTATED_ACCESS),
+            transport=fake_x.transport(),
+        ),
+    ):
+        err = _codes(write)
+        assert err.code == "invalid_config"
+        assert str(paths.accounts_file) in err.message and "version 2" in err.message
+        assert err.detail == {"path": str(paths.accounts_file), "version": 2, "supported": 1}
+    assert paths.accounts_file.read_bytes() == before
+    assert FernetFileStore.for_account(paths, ALIAS).load() == bundle, "login stored nothing"
+
+
+def test_a_registry_error_names_the_resolved_file(paths, bundle):
+    register(paths, bundle)
+    paths.accounts_file.write_text('{"version": "one", "accounts": {}}')
+    err = _codes(AccountRegistry(paths).accounts)
+    assert err.code == "invalid_config" and err.message.startswith(f"{paths.accounts_file}: ")
+
+
+def test_an_unknown_alias_names_the_home_in_its_remedy(paths, bundle):
+    register(paths, bundle)
+    err = _codes(lambda: AccountRegistry(paths).resolve("x:nobody", Settings()))
+    assert f"PULSAR_HOME={paths.home} pulsar auth login --account x:nobody" in err.message

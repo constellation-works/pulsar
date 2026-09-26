@@ -1,18 +1,23 @@
 """Where the X token bundle lives, and what that storage does and does not protect.
 
 ``CredentialStore`` is the interface the rest of pulsar codes against.
-``TokenStore`` (``FernetFileStore``) is today's implementation: a Fernet
-ciphertext (``tokens.enc``) beside a host-local key file (``key``), both 0600
-in a 0700 pulsar home. Orbit's host-held secrets (ORB-13009) are meant to drop
-in behind the same protocol, which is why ``save`` already takes an
+``FernetFileStore`` is today's implementation: a Fernet ciphertext
+(``tokens.enc``) beside a host-local key file (``key``), both 0600 in a 0700
+pulsar home. Orbit's host-held secrets (ORB-13009) are meant to drop in
+behind the same protocol, which is why ``save`` already takes an
 ``expected_previous`` bundle for compare-and-swap rotation.
 
 What the file store protects against: the bundle showing up in plaintext in
 a backup, a ``cat`` or ``grep`` over the home directory, a stray ``git add``,
 or being read by *another* local user. Loading refuses a home directory
-wider than 0700, or a key or bundle wider than 0600 or owned by someone else
-(``insecure_storage``), rather than quietly using a credential others could
-have copied.
+wider than 0700, or a key or bundle wider than 0600, owned by someone else,
+or reached through a symlink (``insecure_storage``), rather than quietly
+using a credential others could have copied or swapped.
+
+A bundle that is there but cannot be read — the key was replaced, the file
+is corrupt, or a newer pulsar wrote fields this one does not know — is
+``credentials_unreadable``, never "not logged in": that would send the
+operator to re-login, which overwrites the bundle instead of recovering it.
 
 What it does not protect against: any process running as the same uid can
 read the key and the ciphertext and decrypt them — encryption here is not a
@@ -28,7 +33,7 @@ use, so two processes sharing one home must never refresh at the same time.
 refresher holds across load → token POST → save. ``rebind`` (login) and
 ``clear`` (logout) take the same lock, so a refresh in flight can never
 write the previous account's rotated tokens over a new login, or back after
-a logout.
+a logout. Waiting for it is bounded (``lock_timeout``, naming the holder).
 
 Each login mints a ``binding_id`` that refreshes carry forward. The cached
 identity (the account's row in ``accounts.json``; ``whoami.json`` in the
@@ -45,28 +50,32 @@ migration.
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
-import fcntl
+import dataclasses
 import json
-import os
-import tempfile
+import shlex
 import time
 import uuid
 from collections.abc import AsyncGenerator, Callable, Generator
 from contextlib import AbstractAsyncContextManager
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 from cryptography.fernet import Fernet, InvalidToken
 
-from .errors import API_ERROR, INSECURE_STORAGE, AuthExpired, PulsarError
-from .fsutil import FILE_MODE, ensure_private_dir, require_private, write_private_atomic
-from .jsonx import obj
-from .paths import Paths
+from .errors import CREDENTIALS_UNREADABLE, INSECURE_STORAGE, INTERNAL, PulsarError
+from .fsutil import (
+    ensure_private_dir,
+    hold_lock,
+    hold_lock_async,
+    publish_new_private,
+    require_private,
+    write_private_atomic,
+)
+from .jsonx import as_object, obj
+from .paths import Paths, alias_from_slug
 
-LOCK_POLL_SECONDS = 0.05
 # Longer than one token POST (the HTTP timeout) so a waiter outlasts a live refresher.
 REFRESH_LOCK_WAIT_SECONDS = 45.0
 
@@ -96,23 +105,65 @@ class TokenBundle:
         if not isinstance(access, str) or not access:
             raise ValueError("token response has no access_token")
         refresh = fields.get("refresh_token")
+        # No ``expires_in`` means we do not know when the token dies. Rather
+        # than invent a lifetime (STD-02 §R16), treat it as expiring now: the
+        # next call refreshes first, which costs one token POST at worst.
+        expires_in = fields.get("expires_in")
         return cls(
             access_token=access,
             refresh_token=refresh if isinstance(refresh, str) and refresh else None,
-            expires_at=now + float(fields.get("expires_in", 7200)),
+            expires_at=now + float(expires_in) if expires_in is not None else now,
             scope=str(fields.get("scope", "")),
             client_id=client_id,
             token_type=str(fields.get("token_type", "bearer")),
         )
 
 
+_BUNDLE_FIELDS = frozenset(f.name for f in dataclasses.fields(TokenBundle))
+
+
+def _is_str(value: object, *, optional: bool = False) -> bool:
+    return isinstance(value, str) or (optional and value is None)
+
+
+def _bundle_from_json(fields: dict[str, Any]) -> TokenBundle | None:
+    """The bundle ``fields`` describe, or None when a field is missing or mistyped."""
+    expires_at = fields.get("expires_at")
+    ok = (
+        _is_str(fields.get("access_token"))
+        and _is_str(fields.get("refresh_token"), optional=True)
+        and isinstance(expires_at, int | float)
+        and not isinstance(expires_at, bool)
+        and _is_str(fields.get("scope"))
+        and _is_str(fields.get("client_id"))
+        and _is_str(fields.get("token_type", "bearer"))
+        and _is_str(fields.get("binding_id"), optional=True)
+    )
+    return TokenBundle(**fields) if ok else None
+
+
 class CredentialConflict(PulsarError):
-    """A compare-and-swap save found a different bundle than the caller expected."""
+    """A compare-and-swap save found a different bundle than the caller expected.
+
+    Every refresher in pulsar catches this and adopts the stored bundle, so it
+    reaches a caller only from a call site that forgot to; that is a bug
+    (``internal``). It is still retryable: another writer saved a newer bundle,
+    and a repeat call reloads the store and uses it.
+    """
 
     def __init__(self) -> None:
         super().__init__(
-            API_ERROR, "the stored X credential changed during refresh; retry the call"
+            INTERNAL,
+            "CredentialConflict: the stored X credential changed during refresh (a writer "
+            "bypassed the refresh lock); retrying the call uses the newer bundle",
+            retryable=True,
         )
+
+
+def login_command(home: Path, alias: str | None) -> str:
+    """The command a human runs to (re)bind ``alias`` in ``home``."""
+    account = alias or "x:<handle>"
+    return f"PULSAR_HOME={shlex.quote(str(home))} pulsar auth login --account {account}"
 
 
 class CredentialStore(Protocol):
@@ -120,12 +171,17 @@ class CredentialStore(Protocol):
 
     def exists(self) -> bool: ...
 
+    def reauth_hint(self) -> str:
+        """What a human runs to bind this store's account again, for error messages."""
+        ...
+
     def load(self) -> TokenBundle | None:
         """The stored bundle, or None when this host is not authorized.
 
         Raises ``insecure_storage`` instead of returning None when a bundle is
-        there but stored unsafely: None sends the operator to re-login, which
-        does not fix a permissions problem.
+        there but stored unsafely, and ``credentials_unreadable`` when it is
+        there but cannot be decrypted or parsed: None sends the operator to
+        re-login, which fixes neither.
         """
         ...
 
@@ -155,7 +211,7 @@ class CredentialStore(Protocol):
         ...
 
     def refresh_lock(self, timeout: float) -> AbstractAsyncContextManager[None]:
-        """Exclusive across processes; failing to get it within ``timeout`` is ``api_error``."""
+        """Exclusive across processes; not getting it within ``timeout`` is ``lock_timeout``."""
         ...
 
 
@@ -170,25 +226,36 @@ class FernetFileStore:
         self.paths = paths
         self.account_dir = account_dir
         if account_dir is None:
+            self.alias: str | None = None
             self.token_file = paths.token_file
             self.lock_file = paths.refresh_lock
             # The phase 1 identity cache; accounts keep theirs in the registry.
             self._identity_file: Path | None = paths.whoami_cache
-            self._dirs: tuple[Path, ...] = (paths.home,)
+            # Directories below the home that hold this store's files.
+            self._dirs: tuple[Path, ...] = ()
         else:
+            self.alias = alias_from_slug(account_dir.name)
             self.token_file = account_dir / "tokens.enc"
             self.lock_file = account_dir / "refresh.lock"
             self._identity_file = None
-            self._dirs = (paths.home, account_dir.parent, account_dir)
+            self._dirs = (account_dir.parent, account_dir)
 
     @classmethod
     def for_account(cls, paths: Paths, alias: str) -> FernetFileStore:
         """The store of the account ``alias`` (canonical; ``invalid_argument`` if unsafe)."""
         return cls(paths, account_dir=paths.account_dir(alias))
 
+    def reauth_hint(self) -> str:
+        return f"a human runs `{login_command(self.paths.home, self.alias)}`"
+
+    @property
+    def _label(self) -> str:
+        return self.alias or "the legacy root bundle"
+
     # -- permissions --------------------------------------------------------
 
     def _check(self) -> None:
+        self.paths.check_home()
         for directory in self._dirs:
             require_private(directory, is_dir=True)
         require_private(self.paths.key_file)
@@ -196,11 +263,9 @@ class FernetFileStore:
 
     def _prepare_home(self) -> None:
         """Create the home (and account dirs) 0700 if missing; refuse, never fix, unsafe ones."""
-        if self.paths.home.exists():
-            self._check()
-        else:
-            self.paths.ensure()
-        for directory in self._dirs[1:]:
+        self.paths.ensure()
+        self._check()
+        for directory in self._dirs:
             ensure_private_dir(directory)
 
     # -- key ----------------------------------------------------------------
@@ -221,25 +286,13 @@ class FernetFileStore:
     def _create_key(self) -> Fernet:
         """Create the key exactly once, even with several processes racing.
 
-        The key is written complete to a private temp file and published with
-        ``link()``, which like ``O_CREAT|O_EXCL`` fails if the name exists, but
-        never exposes a half-written key. The loser reads the winner's key, so
-        two processes can never encrypt under different keys.
+        ``publish_new_private`` never exposes a half-written key and fails if
+        the name exists; the loser reads the winner's key, so two processes
+        can never encrypt under different keys.
         """
-        key_file = self.paths.key_file
-        fd, tmp = tempfile.mkstemp(dir=key_file.parent, prefix=".key.", suffix=".tmp")
-        try:
-            os.fchmod(fd, FILE_MODE)
-            with os.fdopen(fd, "wb") as fh:
-                fh.write(Fernet.generate_key())
-                fh.flush()
-                os.fsync(fh.fileno())
-            with contextlib.suppress(FileExistsError):
-                os.link(tmp, key_file)
-        finally:
-            with contextlib.suppress(FileNotFoundError):
-                os.unlink(tmp)
-        require_private(key_file)
+        with contextlib.suppress(FileExistsError):
+            publish_new_private(self.paths.key_file, Fernet.generate_key())
+        require_private(self.paths.key_file)
         return self._read_key()
 
     def _fernet(self, create: bool) -> Fernet:
@@ -255,6 +308,13 @@ class FernetFileStore:
     def exists(self) -> bool:
         return self.token_file.exists() and self.paths.key_file.exists()
 
+    def _unreadable(self, problem: str, fix: str) -> PulsarError:
+        return PulsarError(
+            CREDENTIALS_UNREADABLE,
+            f"{self.token_file} {problem}; pulsar will not overwrite it. Fix: {fix}",
+            detail={"path": str(self.token_file), "key": str(self.paths.key_file)},
+        )
+
     def load(self) -> TokenBundle | None:
         if not self.paths.home.exists():
             return None
@@ -263,15 +323,34 @@ class FernetFileStore:
             return None
         try:
             raw = self._fernet(create=False).decrypt(self.token_file.read_bytes())
-        except (InvalidToken, FileNotFoundError):
-            return None
+        except FileNotFoundError:
+            return None  # removed (logout) between exists() and the read
+        except InvalidToken:
+            raise self._unreadable(
+                f"cannot be decrypted with {self.paths.key_file} (the key was replaced, or "
+                "the bundle is corrupt)",
+                f"restore the key that encrypted it from backup. Only if that key is lost for "
+                f"good: remove {shlex.quote(str(self.token_file))} and "
+                f"{self.reauth_hint().removeprefix('a human runs ')}",
+            ) from None
         try:
-            return TokenBundle(**json.loads(raw))
-        except (ValueError, TypeError) as exc:
-            raise AuthExpired(
-                f"the stored X token bundle is unreadable ({exc.__class__.__name__}); "
-                "a human must re-run `pulsar auth login`"
-            ) from exc
+            fields = as_object(json.loads(raw))
+        except ValueError:
+            fields = None
+        if fields is not None and set(fields) - _BUNDLE_FIELDS:
+            unknown = sorted(set(fields) - _BUNDLE_FIELDS)
+            raise self._unreadable(
+                f"was written by a newer pulsar (unknown fields {unknown})",
+                "upgrade pulsar on this host",
+            )
+        bundle = _bundle_from_json(fields) if fields is not None else None
+        if bundle is None:
+            raise self._unreadable(
+                "decrypts but is not a token bundle (corrupt)",
+                f"restore it from backup, or remove it and "
+                f"{self.reauth_hint().removeprefix('a human runs ')}",
+            )
+        return bundle
 
     def save(self, bundle: TokenBundle, *, expected_previous: TokenBundle | None = None) -> None:
         # The compare is atomic with the write only while the caller holds
@@ -286,7 +365,7 @@ class FernetFileStore:
         self, bundle: TokenBundle, *, on_bound: Callable[[TokenBundle], object] | None = None
     ) -> TokenBundle:
         bundle.binding_id = uuid.uuid4().hex
-        with self.refresh_lock_sync(REFRESH_LOCK_WAIT_SECONDS):
+        with self.refresh_lock_sync(REFRESH_LOCK_WAIT_SECONDS, purpose="login"):
             self.save(bundle)
             self._drop_identity()
             if on_bound is not None:
@@ -296,7 +375,7 @@ class FernetFileStore:
     def clear(self, *, on_cleared: Callable[[], object] | None = None) -> None:
         if not self.paths.home.exists():
             return
-        with self.refresh_lock_sync(REFRESH_LOCK_WAIT_SECONDS):
+        with self.refresh_lock_sync(REFRESH_LOCK_WAIT_SECONDS, purpose="logout"):
             if self.token_file.exists():
                 self.token_file.unlink()
             self._drop_identity()
@@ -310,53 +389,30 @@ class FernetFileStore:
 
     # -- refresh lock -------------------------------------------------------
 
-    def _lock_fd(self) -> int:
-        self._prepare_home()
-        return os.open(self.lock_file, os.O_RDWR | os.O_CREAT, FILE_MODE)
-
-    def _try_lock(self, fd: int, deadline: float, timeout: float) -> bool:
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            return True
-        except BlockingIOError:
-            if time.monotonic() >= deadline:
-                raise PulsarError(
-                    API_ERROR,
-                    f"another pulsar process held the token refresh lock for over "
-                    f"{timeout:g}s; retry later",
-                    detail={"lock": str(self.lock_file), "retryable": True},
-                ) from None
-            return False
+    def _lock_args(self, timeout: float, purpose: str) -> dict[str, Any]:
+        return {
+            "label": f"{purpose} of {self._label}",
+            "what": f"the token refresh lock of {self._label}",
+            "timeout": timeout,
+        }
 
     @contextlib.asynccontextmanager
-    async def refresh_lock(self, timeout: float) -> AsyncGenerator[None]:
-        fd = self._lock_fd()
-        try:
-            deadline = time.monotonic() + timeout
-            while not self._try_lock(fd, deadline, timeout):
-                await asyncio.sleep(LOCK_POLL_SECONDS)
-            try:
-                yield
-            finally:
-                fcntl.flock(fd, fcntl.LOCK_UN)
-        finally:
-            os.close(fd)
+    async def refresh_lock(
+        self, timeout: float, *, purpose: str = "token refresh"
+    ) -> AsyncGenerator[None]:
+        self._prepare_home()
+        async with hold_lock_async(self.lock_file, **self._lock_args(timeout, purpose)):
+            yield
 
     @contextlib.contextmanager
-    def refresh_lock_sync(self, timeout: float) -> Generator[None]:
-        """``refresh_lock`` for the synchronous CLI paths (login, logout)."""
-        fd = self._lock_fd()
-        try:
-            deadline = time.monotonic() + timeout
-            while not self._try_lock(fd, deadline, timeout):
-                time.sleep(LOCK_POLL_SECONDS)
-            try:
-                yield
-            finally:
-                fcntl.flock(fd, fcntl.LOCK_UN)
-        finally:
-            os.close(fd)
+    def refresh_lock_sync(
+        self, timeout: float, *, purpose: str = "token refresh"
+    ) -> Generator[None]:
+        """``refresh_lock`` for the synchronous CLI paths (login, logout, migration)."""
+        self._prepare_home()
+        with hold_lock(self.lock_file, **self._lock_args(timeout, purpose)):
+            yield
 
 
-# The name the rest of the codebase (and callers) have always used.
+# The old name. Only tests/conftest.py still imports it; delete it once that switches.
 TokenStore = FernetFileStore

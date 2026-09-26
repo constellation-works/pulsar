@@ -1,3 +1,5 @@
+import asyncio
+import dataclasses
 import json
 import os
 import stat
@@ -6,13 +8,17 @@ import threading
 import pytest
 from cryptography.fernet import Fernet
 
+from pulsar.core import fsutil
 from pulsar.core.errors import PulsarError
-from pulsar.core.store import CredentialConflict, FernetFileStore, TokenBundle, TokenStore
+from pulsar.core.fsutil import hold_lock, write_private_atomic
+from pulsar.core.paths import Paths
+from pulsar.core.store import CredentialConflict, FernetFileStore, TokenBundle
 from pulsar.core.writelog import WriteLog
 from pulsar.providers.x.auth import load_client_id, save_client_id
 from pulsar.surfaces.mcp import Runtime
 
 from .conftest import register
+from .lock_probe import blocked_on_lock
 
 
 def test_round_trip_and_private_modes(store, bundle, paths):
@@ -44,19 +50,26 @@ def test_clear_removes_tokens_and_cache(legacy_store, bundle, paths):
 
 def test_account_clear_keeps_the_key_and_other_accounts(store, bundle, paths):
     store.save(bundle)
-    other = TokenStore.for_account(paths, "x:other")
+    other = FernetFileStore.for_account(paths, "x:other")
     other.save(bundle)
     store.clear()
     assert store.load() is None and other.load() == bundle
     assert paths.key_file.exists()
 
 
-def test_wrong_key_yields_none(store, bundle, paths):
+def test_a_replaced_key_is_unreadable_not_logged_out(store, bundle, paths):
     store.save(bundle)
-    from cryptography.fernet import Fernet
-
+    before = store.token_file.read_bytes()
     paths.key_file.write_bytes(Fernet.generate_key())
-    assert store.load() is None
+    with pytest.raises(PulsarError) as exc:
+        store.load()
+    err = exc.value
+    assert err.code == "credentials_unreadable" and err.retryable is False
+    assert str(store.token_file) in err.message and str(paths.key_file) in err.message
+    assert "restore the key" in err.message
+    assert f"PULSAR_HOME={paths.home} pulsar auth login --account x:constworks" in err.message
+    assert err.detail == {"path": str(store.token_file), "key": str(paths.key_file)}
+    assert store.token_file.read_bytes() == before, "never overwritten"
 
 
 def test_from_token_response_defaults():
@@ -68,6 +81,12 @@ def test_from_token_response_defaults():
     assert b.token_type == "bearer"
 
 
+def test_a_token_response_without_expires_in_is_already_expiring():
+    """No invented lifetime: the next call refreshes first."""
+    b = TokenBundle.from_token_response({"access_token": "a"}, client_id="c", now=1000.0)
+    assert b.expires_at == 1000.0
+
+
 def test_rebinding_drops_the_cached_identity(legacy_store, bundle, paths):
     legacy_store.save(bundle)
     paths.whoami_cache.write_text('{"user_id": "1", "username": "old-account"}\n')
@@ -76,18 +95,44 @@ def test_rebinding_drops_the_cached_identity(legacy_store, bundle, paths):
     assert legacy_store.load() == bundle
 
 
+def test_client_id_is_saved_under_the_accounts_lock(paths, monkeypatch):
+    save_client_id(paths, "client-a")
+    blocked = blocked_on_lock(monkeypatch)
+    thread, release = _hold_in_thread(paths.accounts_lock, "another login")
+    saver = threading.Thread(target=save_client_id, args=(paths, "client-b"))
+    saver.start()
+    assert blocked.wait(5), "the save waits for the accounts lock"
+    assert load_client_id(paths) == "client-a"
+    release.set()
+    thread.join(5)
+    saver.join(5)
+    assert load_client_id(paths) == "client-b"
+
+
+def test_a_group_writable_or_symlinked_client_json_is_refused(paths, tmp_path):
+    save_client_id(paths, "client-a")
+    os.chmod(paths.client_file, 0o664)
+    with pytest.raises(PulsarError) as exc:
+        load_client_id(paths)
+    assert exc.value.code == "insecure_storage"
+    os.chmod(paths.client_file, 0o600)
+    real = tmp_path / "client.json"
+    os.replace(paths.client_file, real)
+    paths.client_file.symlink_to(real)
+    with pytest.raises(PulsarError) as exc:
+        load_client_id(paths)
+    assert "is a symlink" in exc.value.message
+
+
 def test_client_id_is_one_per_provider_and_reads_the_legacy_format(paths):
     paths.ensure()
     paths.client_file.write_text('{"client_id": "legacy-id", "redirect_uri": "x"}\n')
+    os.chmod(paths.client_file, 0o600)  # as phase 1 wrote it
     assert load_client_id(paths) == "legacy-id"
     save_client_id(paths, "client-new")
     assert load_client_id(paths) == "client-new"
     assert json.loads(paths.client_file.read_text())["x"]["client_id"] == "client-new"
     assert stat.S_IMODE(os.stat(paths.client_file).st_mode) == 0o600
-
-
-def test_token_store_is_the_fernet_file_store():
-    assert TokenStore is FernetFileStore
 
 
 # -- atomic save and key creation ---------------------------------------------
@@ -120,7 +165,7 @@ def test_losing_the_key_creation_race_adopts_the_winners_key(store, bundle, path
         os.close(fd)
         real_link(src, dst)  # now FileExistsError, as for the real loser
 
-    monkeypatch.setattr("pulsar.core.store.os.link", another_process_wins)
+    monkeypatch.setattr("pulsar.core.fsutil.os.link", another_process_wins)
     store.save(bundle)
     assert paths.key_file.read_bytes() == winner
     assert Fernet(winner).decrypt(store.token_file.read_bytes())
@@ -133,7 +178,7 @@ def test_concurrent_first_saves_share_one_key(paths, bundle):
 
     def first_save():
         barrier.wait()
-        TokenStore.for_account(paths, "x:constworks").save(bundle)
+        FernetFileStore.for_account(paths, "x:constworks").save(bundle)
         keys.append(paths.key_file.read_bytes())
 
     threads = [threading.Thread(target=first_save) for _ in range(8)]
@@ -142,7 +187,7 @@ def test_concurrent_first_saves_share_one_key(paths, bundle):
     for t in threads:
         t.join()
     assert len(set(keys)) == 1
-    assert TokenStore.for_account(paths, "x:constworks").load() == bundle
+    assert FernetFileStore.for_account(paths, "x:constworks").load() == bundle
 
 
 def test_cas_save_refuses_a_bundle_it_did_not_expect(store, bundle, paths):
@@ -184,7 +229,7 @@ def test_wide_modes_are_refused_not_treated_as_logged_out(store, authed, paths, 
 
 
 def test_foreign_owner_is_refused(store, authed, paths, monkeypatch):
-    monkeypatch.setattr("pulsar.core.store.os.geteuid", lambda: os.getuid() + 1)
+    monkeypatch.setattr("pulsar.core.fsutil.os.geteuid", lambda: os.getuid() + 1)
     with pytest.raises(PulsarError) as exc:
         store.load()
     assert exc.value.code == "insecure_storage"
@@ -239,53 +284,92 @@ def test_ensure_refuses_rather_than_silently_narrowing_a_wide_home(paths):
 
 
 @pytest.mark.anyio
-async def test_login_waits_for_a_refresh_in_flight_and_wins(store, bundle, paths):
+async def test_login_waits_for_a_refresh_in_flight_and_wins(store, bundle, paths, monkeypatch):
     """A refresher that passed its compare must not write the old account over a new login."""
-    import asyncio
-    import dataclasses
-
     store.save(bundle)
     relogin = dataclasses.replace(bundle, access_token="access-relogin", refresh_token="r2")
     rotated = dataclasses.replace(bundle, access_token="access-rotated", refresh_token="r3")
+    blocked = blocked_on_lock(monkeypatch)
     async with store.refresh_lock(5):
         assert store.load() == bundle  # the refresher's compare passes
         login = threading.Thread(target=store.rebind, args=(relogin,))
         login.start()
-        await asyncio.sleep(0.2)
-        assert login.is_alive(), "login must wait for the refresh lock"
+        assert await asyncio.to_thread(blocked.wait, 5), "login must wait for the refresh lock"
+        assert login.is_alive()
         store.save(rotated, expected_previous=bundle)
     login.join(5)
     assert store.load().access_token == "access-relogin"
 
 
 @pytest.mark.anyio
-async def test_logout_waits_for_a_refresh_in_flight(store, bundle, paths):
-    import asyncio
-
+async def test_logout_waits_for_a_refresh_in_flight(store, bundle, paths, monkeypatch):
     store.save(bundle)
+    blocked = blocked_on_lock(monkeypatch)
     async with store.refresh_lock(5):
         logout = threading.Thread(target=store.clear)
         logout.start()
-        await asyncio.sleep(0.2)
+        assert await asyncio.to_thread(blocked.wait, 5)
         assert logout.is_alive()
         store.save(bundle, expected_previous=bundle)
     logout.join(5)
     assert store.load() is None
 
 
-def test_login_gives_up_boundedly_when_the_lock_is_stuck(store, bundle, paths, monkeypatch):
+def _hold_in_thread(path, label):
+    """Hold ``path``'s lock from another thread until the returned event is set."""
+    held, release = threading.Event(), threading.Event()
+
+    def holder():
+        with hold_lock(path, label=label, what="test", timeout=5):
+            held.set()
+            release.wait(10)
+
+    thread = threading.Thread(target=holder)
+    thread.start()
+    assert held.wait(5)
+    return thread, release
+
+
+def test_login_gives_up_boundedly_and_names_the_holder(store, bundle, paths, monkeypatch):
+    monkeypatch.setattr("pulsar.core.store.REFRESH_LOCK_WAIT_SECONDS", 0.2)
+    store.save(bundle)
+    thread, release = _hold_in_thread(store.lock_file, "token refresh of x:constworks")
+    try:
+        with pytest.raises(PulsarError) as exc:
+            store.rebind(bundle)
+    finally:
+        release.set()
+        thread.join(5)
+    err = exc.value
+    assert err.code == "lock_timeout" and err.retryable is True
+    holder = err.detail["holder"]
+    assert holder["pid"] == os.getpid() and holder["label"] == "token refresh of x:constworks"
+    assert holder["acquired_at"]
+    assert f"pid {os.getpid()} (token refresh of x:constworks" in err.message
+    assert str(store.lock_file) in err.message and err.detail["lock"] == str(store.lock_file)
+
+
+def test_a_lock_timeout_without_a_holder_record_says_unknown(store, bundle, monkeypatch):
     import fcntl
 
     monkeypatch.setattr("pulsar.core.store.REFRESH_LOCK_WAIT_SECONDS", 0.2)
     store.save(bundle)
-    fd = os.open(store.lock_file, os.O_RDWR | os.O_CREAT, 0o600)
+    fd = os.open(store.lock_file, os.O_RDWR | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        fcntl.flock(fd, fcntl.LOCK_EX)  # an older pulsar: holds it, records nothing
         with pytest.raises(PulsarError) as exc:
             store.rebind(bundle)
-        assert exc.value.code == "api_error"
     finally:
         os.close(fd)
+    assert exc.value.code == "lock_timeout" and exc.value.detail["holder"] is None
+    assert "an unknown holder" in exc.value.message
+
+
+def test_the_holder_record_is_written_after_acquiring(store, bundle):
+    store.save(bundle)
+    with store.refresh_lock_sync(1, purpose="login"):
+        record = json.loads(store.lock_file.read_text())
+    assert record["pid"] == os.getpid() and record["label"] == "login of x:constworks"
 
 
 def test_refresh_keeps_the_binding_id(store, bundle):
@@ -293,13 +377,146 @@ def test_refresh_keeps_the_binding_id(store, bundle):
     assert stored.binding_id and store.load().binding_id == stored.binding_id
 
 
-def test_undecodable_bundle_is_auth_expired(store, authed, paths):
-    from cryptography.fernet import Fernet as F
-
+def _encrypt(paths, store, raw: bytes) -> None:
     key = paths.key_file.read_bytes().strip()
-    from pulsar.core.fsutil import write_private_atomic
+    write_private_atomic(store.token_file, Fernet(key).encrypt(raw))
 
-    write_private_atomic(store.token_file, F(key).encrypt(b'{"unexpected": 1}'))
+
+def test_a_bundle_from_a_newer_pulsar_is_unreadable_and_kept(store, authed, paths):
+    newer = {**dataclasses.asdict(authed), "sender_constrained": True}
+    _encrypt(paths, store, json.dumps(newer).encode())
+    before = store.token_file.read_bytes()
     with pytest.raises(PulsarError) as exc:
         store.load()
-    assert exc.value.code == "auth_expired"
+    assert exc.value.code == "credentials_unreadable"
+    assert "newer pulsar" in exc.value.message and "sender_constrained" in exc.value.message
+    assert store.token_file.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        b"not json",
+        b"[1, 2]",
+        b'{"access_token": "a"}',
+        b'{"access_token": 1, "refresh_token": null,'
+        b' "expires_at": 1, "scope": "", "client_id": "c"}',
+    ],
+)
+def test_a_corrupt_bundle_is_unreadable_not_auth_expired(store, authed, paths, raw):
+    _encrypt(paths, store, raw)
+    with pytest.raises(PulsarError) as exc:
+        store.load()
+    assert exc.value.code == "credentials_unreadable" and "corrupt" in exc.value.message
+
+
+def test_credential_conflict_is_a_retryable_internal_error():
+    err = CredentialConflict()
+    assert err.code == "internal" and err.retryable is True
+
+
+# -- symlinks are refused, never followed (STD-05 §R7, §R9) -----------------------------
+
+
+@pytest.mark.parametrize("target", ["key_file", "token_file", "accounts_file"])
+def test_a_symlinked_state_file_is_refused(store, authed, paths, tmp_path, target):
+    from pulsar.core.accounts import AccountRegistry
+
+    path = getattr(store, target, None) or getattr(paths, target)
+    elsewhere = tmp_path / f"elsewhere-{path.name}"
+    os.replace(path, elsewhere)
+    path.symlink_to(elsewhere)
+    registry = AccountRegistry(paths)
+    attempts = (
+        (registry.accounts, lambda: registry.mark_status("x:constworks", "revoked"))
+        if target == "accounts_file"
+        else (store.load, lambda: store.save(authed))
+    )
+    for attempt in attempts:
+        with pytest.raises(PulsarError) as exc:
+            attempt()
+        assert exc.value.code == "insecure_storage" and "is a symlink" in exc.value.message
+        assert str(path) in exc.value.message and str(elsewhere) in exc.value.detail["fix"]
+
+
+def test_a_symlinked_home_is_refused_with_the_real_directory(paths, bundle, tmp_path):
+    real = tmp_path / "real-home"
+    FernetFileStore.for_account(Paths(real), "x:constworks").save(bundle)
+    paths.home.symlink_to(real)
+    store = FernetFileStore.for_account(paths, "x:constworks")
+    for attempt in (store.load, lambda: store.save(bundle), paths.ensure):
+        with pytest.raises(PulsarError) as exc:
+            attempt()
+        assert exc.value.code == "insecure_storage" and "is a symlink" in exc.value.message
+        assert (
+            exc.value.detail["fix"]
+            == f"point PULSAR_HOME at the real directory: PULSAR_HOME={real}"
+        )
+
+
+def test_writes_never_follow_a_symlink(tmp_path):
+    victim = tmp_path / "victim"
+    victim.write_text("untouched")
+    for name, write in (
+        ("atomic", lambda p: write_private_atomic(p, b"x")),
+        ("append", lambda p: fsutil.append_private(p, "x")),
+    ):
+        link = tmp_path / name
+        link.symlink_to(victim)
+        with pytest.raises(PulsarError) as exc:
+            write(link)
+        assert exc.value.code == "insecure_storage"
+        assert link.is_symlink() and victim.read_text() == "untouched"
+
+
+def test_a_symlinked_lock_file_is_refused(store, bundle, tmp_path):
+    store.save(bundle)
+    victim = tmp_path / "victim"
+    victim.write_text("untouched")
+    store.lock_file.symlink_to(victim)
+    with pytest.raises(PulsarError) as exc:
+        store.rebind(bundle)
+    assert exc.value.code == "insecure_storage" and victim.read_text() == "untouched"
+
+
+# -- durable writes (STD-03 §R5) ---------------------------------------------------------
+
+
+def test_publish_new_private_creates_once_and_fsyncs_the_parent(tmp_path, monkeypatch):
+    synced: list[str] = []
+    real = fsutil.fsync_dir
+    monkeypatch.setattr(fsutil, "fsync_dir", lambda p: (synced.append(str(p)), real(p)))
+    target = tmp_path / "key"
+    fsutil.publish_new_private(target, b"first")
+    with pytest.raises(FileExistsError):
+        fsutil.publish_new_private(target, b"second")
+    assert target.read_bytes() == b"first" and stat.S_IMODE(os.stat(target).st_mode) == 0o600
+    assert synced == [str(tmp_path)] * 2
+    assert [p.name for p in tmp_path.iterdir()] == ["key"], "no temp file left behind"
+
+
+def test_ensure_private_dir_fsyncs_the_parent_of_what_it_creates(tmp_path, monkeypatch):
+    synced: list[str] = []
+    real = fsutil.fsync_dir
+    monkeypatch.setattr(fsutil, "fsync_dir", lambda p: (synced.append(str(p)), real(p)))
+    fsutil.ensure_private_dir(tmp_path / "a" / "b")
+    assert synced == [str(tmp_path), str(tmp_path / "a")]
+    for d in (tmp_path / "a", tmp_path / "a" / "b"):
+        assert stat.S_IMODE(os.stat(d).st_mode) == 0o700
+    synced.clear()
+    fsutil.ensure_private_dir(tmp_path / "a" / "b")
+    assert synced == [], "nothing created, nothing to sync"
+
+
+def test_atomic_write_closes_its_temp_file_when_fchmod_fails(tmp_path, monkeypatch):
+    opened_before = len(os.listdir("/proc/self/fd"))
+
+    def fail(*_args):
+        raise OSError("fchmod refused")
+
+    monkeypatch.setattr(fsutil.os, "fchmod", fail)
+    with pytest.raises(OSError, match="fchmod refused"):
+        write_private_atomic(tmp_path / "f", b"x")
+    monkeypatch.undo()
+    assert len(os.listdir("/proc/self/fd")) == opened_before, "the temp fd leaked"
+    assert list(tmp_path.iterdir()) == [], "the temp file was removed"

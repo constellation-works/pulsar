@@ -11,7 +11,7 @@ summary: Login with identity check, the registry, encrypted per-account bundles,
 tags: [accounts, auth, oauth, credentials, storage]
 paths: ["src/pulsar/core/accounts.py", "src/pulsar/core/store.py", "src/pulsar/core/paths.py", "src/pulsar/core/fsutil.py", "src/pulsar/providers/x/auth.py", "src/pulsar/providers/x/client.py", "src/pulsar/surfaces/cli.py"]
 related_features: [publishing, surfaces]
-related_artifacts: [ORB-13008, ORB-13009, ORB-13027, ORB-13028, ORB-13039]
+related_artifacts: [ORB-13008, ORB-13009, ORB-13027, ORB-13028, ORB-13039, ORB-13138]
 ---
 
 # Accounts — Design
@@ -38,6 +38,11 @@ characters. The mapping is injective and reversible, and no alias can name a pat
 `accounts/`. Aliases are case-insensitive and tolerate a leading `@` (`X:@ConstWorks` is
 `x:constworks`); anything else is `invalid_argument`.
 
+The home is `PULSAR_HOME`, else `~/.config/pulsar`. Core never reads the environment or `$HOME`
+itself: a surface resolves both once (`Paths.from_environ(environ, user_home)`) and passes the
+`Paths` down; `Paths.user_home` is also what `~` in `config.toml` expands against. The home
+itself must not be a symlink ([decision](./4_decisions.md#refuse-a-symlinked-home-resolve-nothing)).
+
 ## 2. Login
 
 `pulsar auth login --account x:<handle> [--client-id ID] [--no-browser]` is human-only and runs
@@ -54,7 +59,14 @@ outside every tool surface ([providers/x/auth.py](../../../src/pulsar/providers/
    cannot write the previous login's rotated tokens over the new one.
 
 `--account` defaults to `default_account`. The client id is remembered per provider in
-`client.json` (it is not a secret).
+`client.json` (it is not a secret), rewritten under `accounts.lock`.
+
+The consent URL is shown through `login(notify=...)`, stderr by default, never stdout. The
+loopback listener is not trusted for being loopback: it answers only a `Host` of exactly
+`127.0.0.1:<port>` or `localhost:<port>` (else 400 for none, 421 for another), refuses any
+`Origin` but that same `http://` authority (403), and records a redirect only when its `state`
+is this login's. A forged or stray request is refused and the wait goes on; only the real
+redirect (a `code`, or X's `error`) ends it.
 
 ## 3. Selecting and Checking an Account
 
@@ -88,16 +100,30 @@ re-login finishes after it.
 
 Refresh is automatic ([providers/x/client.py](../../../src/pulsar/providers/x/client.py)).
 Each account's refresh runs under an exclusive `flock` on `accounts/<slug>/refresh.lock`: the
-first process refreshes, the others wait (up to 45 s, then `api_error`) and reuse the bundle it
-saved. Accounts do not wait for each other.
+first process refreshes, the others wait (up to 45 s, then `lock_timeout`) and reuse the bundle
+it saved. Accounts do not wait for each other. Store reads and writes run in a worker thread,
+so a refresh never blocks the event loop; one refresh per account is in flight per process.
+
+Every lock wait is bounded ([fsutil.py](../../../src/pulsar/core/fsutil.py) `hold_lock`): the
+refresh locks at 45 s, `accounts.lock` at 15 s. Right after acquiring, the holder writes
+`{pid, label, acquired_at}` into the lock file; a waiter that times out reports it in the
+message and `detail.holder` (null, "an unknown holder", when there is no record, e.g. an older
+pulsar holds it). The record is diagnostic only and may name the previous holder for a moment;
+ownership is the `flock`. Lock order everywhere: the legacy root refresh lock, an account's
+refresh lock, then `accounts.lock`.
 
 If X still rejects a refresh token because a process that ignores the lock rotated it first,
 pulsar re-reads the store and uses the newer bundle instead of reporting `auth_expired`. A 401
 after a sibling's rotation retries once with the stored bundle without refreshing again.
 
 When a refresh fails for real (revoked, app reset), tools return `auth_expired` and the
-registry row becomes `reauth_required`; a human re-runs `auth login`. `auth logout` deletes the
-bundle under the same lock and marks the row `revoked`; the row stays for history.
+registry row becomes `reauth_required`; the message names the account and the home, as the
+command a human runs: `PULSAR_HOME=<home> pulsar auth login --account <alias>`. `auth logout`
+deletes the bundle under the same lock and marks the row `revoked`; the row stays for history.
+
+A token response without `expires_in` is stored as already expiring, so the next call
+refreshes rather than trusting an invented lifetime. A failure inside pulsar after X answered
+(the save failed) is `internal`, never `outcome_unknown`: only the token POST was sent.
 
 ## 6. Storage at Rest
 
@@ -106,25 +132,46 @@ bundle under the same lock and marks the row `revoked`; the row stays for histor
 
 - Fernet encryption with one `key` at the home root for all accounts.
 - Saves are atomic (temp file, `fsync`, rename, directory `fsync`), so a crash mid-refresh never
-  destroys the only refresh token, and concurrent first saves agree on one key.
+  destroys the only refresh token. The `key` is created once with `publish_new_private` (temp
+  file, `fsync`, `link`, directory `fsync`), so concurrent first saves agree on one key, and a
+  new directory's parent is fsynced too.
 - Every file pulsar creates is 0600 and every directory 0700, regardless of umask
   ([fsutil.py](../../../src/pulsar/core/fsutil.py)).
 - pulsar refuses to load or save credentials when the home or an account directory is wider
   than 0700, or `key` / `tokens.enc` / `accounts.json` wider than 0600 or owned by another uid:
   `insecure_storage` with the exact `chmod` in `detail.fix`. It never narrows a wide home
   itself. A corrupt `key` is also `insecure_storage`.
+- None of that state may be reached through a symlink: the checks use `lstat`, a symlinked
+  file, account directory or home is `insecure_storage` naming its target, and writes and lock
+  files are opened `O_NOFOLLOW`. `config.toml` and `client.json` are not secret but steer pulsar
+  (budgets, media roots, `expected_handle`; which OAuth app is authorized): they may be
+  world-readable but not a symlink, another user's, or group/world-writable (`chmod go-w`).
+- A bundle that is there but cannot be read is `credentials_unreadable`, never "not logged in":
+  a replaced `key` or corrupt ciphertext (restore the key; only if it is lost, remove the
+  bundle and log in again), or a bundle a newer pulsar wrote with fields this one does not
+  know (upgrade). pulsar never overwrites it on its own.
+- `accounts.json` carries a `version`. One from a newer pulsar is still read to resolve an
+  account, but every write (login, logout, status changes, migration) is refused with
+  `invalid_config` naming the file and both versions, before anything is stored.
 
 ## 7. Legacy Migration
 
-A home from before accounts has `tokens.enc` and `whoami.json` at its root. The first command
-or tool call moves the bundle to `accounts/x--<handle>/` as `default_account` if configured,
-else as `x:<username>` from a `whoami.json` that describes the stored login. If neither names
-it, every call says to run `pulsar auth migrate --account x:<handle>`. A cached identity that
-contradicts the alias is `account_mismatch` and moves nothing, and migration never overwrites
-an account that already has credentials.
+A home from before accounts has `tokens.enc` and `whoami.json` at its root.
+`migrate_legacy` moves the bundle to `accounts/x--<handle>/` as `default_account` if
+configured, else as `x:<username>` from a `whoami.json` that describes the stored login; it
+runs on first use and as `pulsar auth migrate`, which infers the alias the same way when
+`--account` is not given. If neither names it (`needs_alias`), every call says to run
+`pulsar auth migrate --account x:<handle>`. Without `--account` the bundle is only moved while
+no account is registered (`ignored` otherwise); `--account` adopts it beside registered ones.
+A cached identity that contradicts the alias is `account_mismatch` and moves nothing, and
+migration never overwrites an account that already has credentials.
 
 The move holds the old root refresh lock, renames the bundle, writes the registry row, then
 removes `whoami.json`; re-running after a crash at any step finishes the job.
+
+`legacy_status` answers what `migrate_legacy` would do (`none`, `pending` with the target
+alias, `needs_alias`, `ignored`) without taking a lock or changing anything, for read-only
+commands.
 
 ## 8. Concerns & Honest Limitations
 
@@ -140,7 +187,9 @@ removes `whoami.json`; re-running after a crash at any step finishes the job.
 - **Login needs a human with a browser and a loopback port.** Re-authorization on a headless
   host goes through SSH port forwarding; there is no device-code fallback.
 - **Refresh lock wait is bounded but blocking.** A process holding the lock for 45 s (a hung
-  token endpoint) turns every other caller's write into `api_error`.
+  token endpoint) turns every other caller's write into `lock_timeout`, which names it.
+- **Only the home's own path is checked for symlinks.** Directories above the home (say a
+  symlinked `~/.config`) are the operator's choice of `PULSAR_HOME` and are not inspected.
 
 ## Task References
 
@@ -149,5 +198,6 @@ removes `whoami.json`; re-running after a crash at any step finishes the job.
 - [ORB-13027] — added atomic owner-only storage, the refresh lock and `auth status --live`.
 - [ORB-13028] — added the registry, aliases, verified login, `expected_handle` and migration.
 - [ORB-13039] — proposed: bind the post token to the looked-up identity.
+- [ORB-13138] — aligned storage, locks, errors and the login listener with STD-02/03/05.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

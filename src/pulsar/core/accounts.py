@@ -23,13 +23,19 @@ handle equals the alias's handle and the configured ``expected_handle``.
 
 Lock order, everywhere: the legacy root refresh lock, then an account's
 refresh lock, then ``accounts.lock``. ``accounts.lock`` is only ever held for
-one short read-modify-write of ``accounts.json``.
+one short read-modify-write of a home file (``accounts.json``, or
+``client.json`` through ``locked_update``). Every wait is bounded
+(``lock_timeout`` naming the holder).
+
+``accounts.json`` carries a ``version``. A registry written by a newer pulsar
+(a higher version) can still be read to resolve an account, but this pulsar
+refuses to write it (``invalid_config``), because its rewrite would drop what
+the newer one added (STD-03 §R10).
 """
 
 from __future__ import annotations
 
 import contextlib
-import fcntl
 import json
 import os
 from collections.abc import Callable, Generator
@@ -41,24 +47,27 @@ from typing import Any
 from .adapter import Identity
 from .errors import (
     ACCOUNT_MISMATCH,
+    INTERNAL,
     INVALID_ARGUMENT,
     INVALID_CONFIG,
     UNKNOWN_ACCOUNT,
     AuthExpired,
     PulsarError,
 )
-from .fsutil import FILE_MODE, ensure_private_dir, require_private, write_private_atomic
+from .fsutil import fsync_dir, hold_lock, require_private, write_private_atomic
 from .jsonx import as_list, as_object
 from .paths import Paths, account_slug, alias_from_slug
 from .plan import alias_provider, normalize_alias
 from .settings import Settings
-from .store import REFRESH_LOCK_WAIT_SECONDS, FernetFileStore, TokenBundle
+from .store import REFRESH_LOCK_WAIT_SECONDS, FernetFileStore, TokenBundle, login_command
 
 ACTIVE = "active"
 REAUTH_REQUIRED = "reauth_required"
 REVOKED = "revoked"
 STATUSES = frozenset({ACTIVE, REAUTH_REQUIRED, REVOKED})
 REGISTRY_VERSION = 1
+# accounts.lock guards one short file rewrite, never a network call.
+ACCOUNTS_LOCK_WAIT_SECONDS = 15.0
 
 # The phase 1 layout held one X account at the home root.
 LEGACY_PROVIDER = "x"
@@ -106,10 +115,11 @@ class Account:
 
     @classmethod
     def from_json(cls, alias: str, raw: object) -> Account:
+        """Raises ``ValueError`` for a row that is not an account."""
         row = as_object(raw)
         status = row.get("status", ACTIVE) if row is not None else None
         if row is None or status not in STATUSES:
-            raise _corrupt(f"row {alias!r} is malformed")
+            raise ValueError(f"row {alias!r} is malformed")
         return cls(
             alias=alias,
             provider=alias_provider(alias),
@@ -125,14 +135,16 @@ class Account:
 
 @dataclass(frozen=True)
 class MigrationResult:
-    """What ``migrate_legacy`` did.
+    """What ``migrate_legacy`` did, or (``legacy_status``) would do.
 
     ``state``: ``none`` (nothing to migrate), ``migrated`` (the root bundle
     is now ``alias``), ``needs_alias`` (left in place: no alias could be
     named), ``ignored`` (left in place because accounts are already
-    registered and none was named). ``adopted`` lists account directories
+    registered and none was named), and from ``legacy_status`` only
+    ``pending`` (``migrate_legacy`` would move the bundle to ``alias``, or
+    finish an interrupted migration). ``adopted`` lists account directories
     that held credentials but had no row (a crash between moving a bundle
-    and recording it) and were recorded.
+    and recording it) and were (or would be) recorded.
     """
 
     state: str
@@ -141,12 +153,17 @@ class MigrationResult:
     adopted: tuple[str, ...] = field(default=())
 
 
-def _corrupt(problem: str) -> PulsarError:
+def _corrupt(path: Path, problem: str) -> PulsarError:
     return PulsarError(
         INVALID_CONFIG,
-        f"accounts.json: {problem}; restore it from backup, or remove it and re-run "
+        f"{path}: {problem}; restore it from backup, or remove it and re-run "
         "`pulsar auth login --account provider:handle` for each account",
+        detail={"path": str(path)},
     )
+
+
+def _internal(problem: str) -> PulsarError:
+    return PulsarError(INTERNAL, f"internal: {problem}")
 
 
 def canonical_alias(value: str) -> str:
@@ -192,14 +209,6 @@ def require_expected(account: Account, settings: Settings) -> None:
     check_handle(account.alias, account.handle, settings)
 
 
-def _fsync_dir(path: Path) -> None:
-    fd = os.open(path, os.O_RDONLY)
-    try:
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-
-
 class AccountRegistry:
     """``accounts.json`` plus the per-account credential stores it names."""
 
@@ -212,43 +221,73 @@ class AccountRegistry:
     # -- file ---------------------------------------------------------------
 
     @contextlib.contextmanager
-    def _lock(self) -> Generator[None]:
-        ensure_private_dir(self.paths.home)
-        fd = os.open(self.paths.accounts_lock, os.O_RDWR | os.O_CREAT, FILE_MODE)
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(fd, fcntl.LOCK_UN)
-        finally:
-            os.close(fd)
+    def locked_update(self, label: str) -> Generator[None]:
+        """Hold ``accounts.lock`` (bounded; ``lock_timeout`` names the holder).
 
-    def _read(self) -> dict[str, Account]:
+        For one short read-modify-write of a file in the home. Take it last,
+        after any refresh lock (the lock order above); ``label`` goes into
+        the holder record.
+        """
+        self.paths.ensure()
+        with hold_lock(
+            self.paths.accounts_lock,
+            label=label,
+            what="the account registry lock",
+            timeout=ACCOUNTS_LOCK_WAIT_SECONDS,
+        ):
+            yield
+
+    def _lock(self) -> contextlib.AbstractContextManager[None]:
+        return self.locked_update("accounts.json update")
+
+    def _load(self) -> tuple[int, dict[str, Account]]:
+        """The registry's version and rows; ``(REGISTRY_VERSION, {})`` when there is none."""
         path = self.paths.accounts_file
+        self.paths.check_home()
         require_private(path)
         try:
             raw = path.read_text(encoding="utf-8")
         except FileNotFoundError:
-            return {}
+            return REGISTRY_VERSION, {}
         try:
             data = as_object(json.loads(raw))
         except ValueError as exc:
-            raise _corrupt("not valid JSON") from exc
+            raise _corrupt(path, "not valid JSON") from exc
         rows = as_object(data.get("accounts")) if data is not None else None
-        if rows is None:
-            raise _corrupt("no `accounts` table")
+        if data is None or rows is None:
+            raise _corrupt(path, "no `accounts` table")
+        version = data.get("version", REGISTRY_VERSION)
+        if isinstance(version, bool) or not isinstance(version, int) or version < 1:
+            raise _corrupt(path, f"`version` is {version!r}, not a positive integer")
         out: dict[str, Account] = {}
         for alias, row in rows.items():
             try:
                 canonical = canonical_alias(alias)
+                out[canonical] = Account.from_json(canonical, row)
             except PulsarError as exc:
-                raise _corrupt(f"bad alias {alias!r}") from exc
-            out[canonical] = Account.from_json(canonical, row)
-        return out
+                raise _corrupt(path, f"bad alias {alias!r}") from exc
+            except ValueError as exc:
+                raise _corrupt(path, str(exc)) from exc
+        return version, out
+
+    def _read(self) -> dict[str, Account]:
+        return self._load()[1]
+
+    def _require_writable(self) -> None:
+        """``invalid_config`` if ``accounts.json`` is from a newer pulsar: never rewrite it."""
+        version = self._load()[0]
+        if version > REGISTRY_VERSION:
+            path = self.paths.accounts_file
+            raise PulsarError(
+                INVALID_CONFIG,
+                f"{path} is registry version {version}, newer than this pulsar understands "
+                f"(version {REGISTRY_VERSION}); nothing was written. Upgrade pulsar on this host",
+                detail={"path": str(path), "version": version, "supported": REGISTRY_VERSION},
+            )
 
     def _write(self, rows: dict[str, Account]) -> None:
-        ensure_private_dir(self.paths.home)
+        self._require_writable()
+        self.paths.ensure()
         doc = {
             "version": REGISTRY_VERSION,
             "accounts": {alias: rows[alias].to_json() for alias in sorted(rows)},
@@ -285,9 +324,8 @@ class AccountRegistry:
         With none bound at all, ``auth_expired``: a human has to log in.
         """
         rows = self._read()
-        if alias is not None or settings.default_account is not None:
-            wanted = canonical_alias(alias) if alias is not None else settings.default_account
-            assert wanted is not None
+        wanted = canonical_alias(alias) if alias is not None else settings.default_account
+        if wanted is not None:
             found = rows.get(wanted)
             if found is None:
                 raise self._unknown(wanted, rows, from_default=alias is None)
@@ -304,6 +342,8 @@ class AccountRegistry:
             )
         if not rows and self.paths.token_file.exists():
             raise AuthExpired(LEGACY_NEEDS_ALIAS)
+        # No home in this one: it is a conformance golden, and "this host" is
+        # the home the caller already resolved.
         raise AuthExpired(
             "no account is bound on this host; a human runs "
             "`pulsar auth login --account provider:handle`"
@@ -315,7 +355,7 @@ class AccountRegistry:
         hint = (
             f"; {LEGACY_NEEDS_ALIAS}"
             if not rows and self.paths.token_file.exists()
-            else f"; a human binds it with `pulsar auth login --account {alias}`"
+            else f"; a human binds it with `{login_command(self.paths.home, alias)}`"
         )
         return PulsarError(
             UNKNOWN_ACCOUNT,
@@ -338,6 +378,7 @@ class AccountRegistry:
     def put(self, account: Account) -> None:
         """Insert or replace ``account``'s row as given (no credential is touched)."""
         alias = canonical_alias(account.alias)
+        self._require_writable()
         with self._lock():
             rows = self._read()
             rows[alias] = replace(account, alias=alias, provider=alias_provider(alias))
@@ -356,6 +397,8 @@ class AccountRegistry:
         """
         alias = canonical_alias(alias)
         check_handle(alias, identity.handle, settings)
+        # Refuse before the bundle is stored, not after, when the row cannot be written.
+        self._require_writable()
         bound: list[Account] = []
 
         def record(stored: TokenBundle) -> None:
@@ -377,6 +420,8 @@ class AccountRegistry:
                 bound.append(rows[alias])
 
         self.store(alias).rebind(bundle, on_bound=record)
+        if not bound:
+            raise _internal(f"binding {alias} stored no registry row")
         return bound[0]
 
     def mark_verified(self, alias: str, identity: Identity, binding_id: str | None) -> None:
@@ -408,11 +453,14 @@ class AccountRegistry:
     def logout(self, alias: str) -> Account:
         """Delete ``alias``'s tokens under its refresh lock; the row stays, ``revoked``."""
         alias = canonical_alias(alias)
-        if alias not in self._read():
-            raise self._unknown(alias, self._read(), from_default=False)
+        rows = self._read()
+        if alias not in rows:
+            raise self._unknown(alias, rows, from_default=False)
+        self._require_writable()
         self.store(alias).clear(on_cleared=lambda: self.mark_status(alias, REVOKED))
         account = self._read().get(alias)
-        assert account is not None
+        if account is None:
+            raise _internal(f"{alias}'s registry row disappeared during logout")
         return account
 
     # -- migration from the phase 1 single-account layout ---------------------
@@ -453,16 +501,87 @@ class AccountRegistry:
             or (not legacy and bool(rows) and self.paths.whoami_cache.exists())
         )
 
+    def _ignored_message(self) -> str:
+        return (
+            f"legacy credentials at {self.paths.token_file} were not migrated "
+            "because accounts are already registered; run "
+            "`pulsar auth migrate --account x:<handle>` to adopt them"
+        )
+
+    def _migration_target(
+        self, settings: Settings, target: str | None, bundle: TokenBundle | None
+    ) -> tuple[str | None, Identity | None]:
+        """The alias the legacy bundle moves to (None: needs one), checked; and its identity."""
+        identity = self._legacy_identity(bundle)
+        alias = target or settings.default_account
+        if alias is None and identity is not None:
+            alias = canonical_alias(f"{LEGACY_PROVIDER}:{identity.handle}")
+        if alias is None:
+            return None, identity
+        if alias_provider(alias) != LEGACY_PROVIDER:
+            raise PulsarError(
+                INVALID_ARGUMENT,
+                f"the legacy credentials are X credentials; {alias} is not an x: account",
+                detail={"account": alias},
+            )
+        if identity is not None:
+            check_handle(alias, identity.handle, settings)
+        return alias, identity
+
+    def legacy_status(self, settings: Settings, alias: str | None = None) -> MigrationResult:
+        """What ``migrate_legacy(settings, alias)`` would do now, without doing any of it.
+
+        For read-only commands: it takes no lock and creates, writes, renames
+        or deletes nothing (it reads the registry, the legacy bundle and
+        ``whoami.json``). ``pending`` names the alias the bundle would move to
+        (None when only an interrupted migration would be finished);
+        ``needs_alias`` and ``ignored`` are what ``migrate_legacy`` would
+        return. Raises what ``migrate_legacy`` would raise for a target that
+        is not an X account or contradicts the cached identity.
+        """
+        target = canonical_alias(alias) if alias is not None else None
+        rows = self._read()
+        legacy = self.paths.token_file.exists()
+        if not self._migration_pending(rows, target):
+            if legacy:
+                return MigrationResult("ignored", message=self._ignored_message())
+            return MigrationResult("none")
+        adopted = tuple(self._orphans(rows))
+        if not legacy:
+            return MigrationResult(
+                "pending",
+                message="an interrupted migration is unfinished; `pulsar auth migrate` finishes it",
+                adopted=adopted,
+            )
+        if (rows or adopted) and target is None:
+            return MigrationResult("ignored", message=self._ignored_message(), adopted=adopted)
+        found, _ = self._migration_target(settings, target, FernetFileStore(self.paths).load())
+        if found is None:
+            return MigrationResult("needs_alias", message=LEGACY_NEEDS_ALIAS, adopted=adopted)
+        return MigrationResult(
+            "pending",
+            alias=found,
+            message=(
+                f"legacy credentials at {self.paths.token_file} are not migrated yet; "
+                f"`pulsar auth migrate` moves them to {found}"
+            ),
+            adopted=adopted,
+        )
+
     def migrate_legacy(self, settings: Settings, alias: str | None = None) -> MigrationResult:
         """Move the phase 1 root ``tokens.enc`` into the account layout.
 
-        Without ``alias`` (automatic, on first use) it runs only while the
-        registry is empty, and names the account ``settings.default_account``,
-        else ``x:<username>`` from a ``whoami.json`` that describes the stored
-        binding; otherwise the bundle stays where it is (``needs_alias``).
-        ``alias`` (``pulsar auth migrate``) names it explicitly. A cached
-        identity that contradicts the alias is ``account_mismatch``, and a
-        target that already has credentials is refused; neither moves anything.
+        Without ``alias`` (automatic on first use, or ``pulsar auth migrate``
+        with no ``--account``) it moves the bundle only while the registry is
+        empty, and names the account ``settings.default_account``, else
+        ``x:<username>`` from a ``whoami.json`` that describes the stored
+        binding; otherwise the bundle stays where it is (``needs_alias``, or
+        ``ignored`` when accounts are already registered). ``alias``
+        (``pulsar auth migrate --account``) names it explicitly and also
+        adopts a legacy bundle beside registered accounts. A cached identity
+        that contradicts the alias is ``account_mismatch``, and a target that
+        already has credentials is refused; neither moves anything. A registry
+        from a newer pulsar is refused before anything moves.
 
         Crash-safe and idempotent: under the legacy refresh lock (so a phase 1
         process cannot rotate the bundle mid-move) and the target's refresh
@@ -475,17 +594,11 @@ class AccountRegistry:
         rows = self._read()
         if not self._migration_pending(rows, target):
             if self.paths.token_file.exists():
-                return MigrationResult(
-                    "ignored",
-                    message=(
-                        f"legacy credentials at {self.paths.token_file} were not migrated "
-                        "because accounts are already registered; run "
-                        "`pulsar auth migrate --account x:<handle>` to adopt them"
-                    ),
-                )
+                return MigrationResult("ignored", message=self._ignored_message())
             return MigrationResult("none")
+        self._require_writable()
         legacy = FernetFileStore(self.paths)
-        with legacy.refresh_lock_sync(REFRESH_LOCK_WAIT_SECONDS):
+        with legacy.refresh_lock_sync(REFRESH_LOCK_WAIT_SECONDS, purpose="legacy migration"):
             return self._migrate_locked(settings, target, legacy)
 
     def _migrate_locked(
@@ -539,22 +652,11 @@ class AccountRegistry:
         adopted: tuple[str, ...],
     ) -> MigrationResult:
         bundle = legacy.load()
-        identity = self._legacy_identity(bundle)
-        alias = target or settings.default_account
-        if alias is None and identity is not None:
-            alias = canonical_alias(f"{LEGACY_PROVIDER}:{identity.handle}")
+        alias, identity = self._migration_target(settings, target, bundle)
         if alias is None:
             return MigrationResult("needs_alias", message=LEGACY_NEEDS_ALIAS, adopted=adopted)
-        if alias_provider(alias) != LEGACY_PROVIDER:
-            raise PulsarError(
-                INVALID_ARGUMENT,
-                f"the legacy credentials are X credentials; {alias} is not an x: account",
-                detail={"account": alias},
-            )
-        if identity is not None:
-            check_handle(alias, identity.handle, settings)
         store = self.store(alias)
-        with store.refresh_lock_sync(REFRESH_LOCK_WAIT_SECONDS):
+        with store.refresh_lock_sync(REFRESH_LOCK_WAIT_SECONDS, purpose="legacy migration"):
             if store.token_file.exists():
                 raise PulsarError(
                     INVALID_ARGUMENT,
@@ -564,8 +666,8 @@ class AccountRegistry:
                     detail={"account": alias},
                 )
             os.replace(legacy.token_file, store.token_file)
-            _fsync_dir(store.token_file.parent)
-            _fsync_dir(self.paths.home)
+            fsync_dir(store.token_file.parent)
+            fsync_dir(self.paths.home)
             with self._lock():
                 rows = self._read()
                 rows[alias] = Account(

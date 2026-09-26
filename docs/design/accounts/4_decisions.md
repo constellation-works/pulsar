@@ -9,9 +9,9 @@ doc_role: decisions
 type: design
 summary: Why logins are verified before storing, why a wide home is refused rather than fixed, and why refresh re-reads the store.
 tags: [accounts, auth, credentials]
-paths: ["src/pulsar/providers/x/auth.py", "src/pulsar/core/fsutil.py", "src/pulsar/providers/x/client.py", "src/pulsar/core/store.py"]
+paths: ["src/pulsar/providers/x/auth.py", "src/pulsar/core/fsutil.py", "src/pulsar/providers/x/client.py", "src/pulsar/core/store.py", "src/pulsar/core/paths.py"]
 related_features: [publishing]
-related_artifacts: [ORB-13027, ORB-13028]
+related_artifacts: [ORB-13027, ORB-13028, ORB-13138]
 ---
 
 # Accounts — Decisions
@@ -85,6 +85,56 @@ pulsar keeps secrets in.
 - The operator decides whether an exposed token must be rotated.
 - Cost: a harmless umask accident stops every write until a human runs one command.
 
+## Refuse a symlinked home, resolve nothing
+
+**Recorded:** 2026-09-26 · [ORB-13138]
+**Code anchors:** `src/pulsar/core/paths.py::Paths.check_home`, `src/pulsar/core/fsutil.py::require_private`
+
+### Context
+
+STD-05@1 §R9 asks that state holding secrets is not reached through a symlink. The operator
+chooses the home (`PULSAR_HOME`), so a symlinked home could be a deliberate relocation, or a
+link planted to point pulsar's key and tokens somewhere another process controls. Resolving it
+would make the check pass on whatever the link points at.
+
+### Decision
+
+The strict reading: pulsar resolves nothing. A home that is a symlink is `insecure_storage`,
+and the fix names the real directory to set `PULSAR_HOME` to. The same holds for every file
+and directory below it (`key`, `tokens.enc`, `accounts.json`, `client.json`, `config.toml`,
+the ledger, the account directories), checked with `lstat` and written `O_NOFOLLOW`.
+Directories above the home are not inspected: naming the home is the operator's act.
+
+### Consequences
+
+- A link swapped in for the home or a credential file stops pulsar instead of redirecting it.
+- Cost: an operator who keeps state behind a symlink (a dotfiles checkout, a moved disk) must
+  point `PULSAR_HOME` at the real path, and a symlinked `config.toml` has to become a file.
+
+## Unreadable credentials are not a logout
+
+**Recorded:** 2026-09-26 · [ORB-13138]
+**Code anchors:** `src/pulsar/core/store.py::FernetFileStore.load`
+
+### Context
+
+`load` used to return "no bundle" when decryption failed. Every caller then reported
+`auth_expired` and sent a human to `pulsar auth login`, which overwrites the bundle: the fix for
+a replaced key destroyed the one credential that could still have been recovered. A bundle with
+fields from a newer pulsar was treated the same way (STD-03@2 §R10, STD-02@2 §R26).
+
+### Decision
+
+A bundle that exists but cannot be decrypted, parsed, or understood is
+`credentials_unreadable`, naming the file and the key. Nothing overwrites it on its own; the
+message leads with restoring the key (or upgrading pulsar), and names logging in again only as
+the last resort once the key is gone for good.
+
+### Consequences
+
+- A replaced key or a downgrade is recoverable instead of silently turned into a re-login.
+- Cost: callers see one more code, and unattended routines stop until a human looks.
+
 ## Re-read the store when a refresh is rejected
 
 **Recorded:** 2026-09-26 · [ORB-13027]
@@ -112,5 +162,6 @@ one, use it instead of reporting `auth_expired`.
 - [ORB-12124] — built the first connector with no credential parameters.
 - [ORB-13027] — hardened storage and refresh.
 - [ORB-13028] — verified logins and `expected_handle`.
+- [ORB-13138] — strict symlink refusal and `credentials_unreadable` (standards alignment).
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
