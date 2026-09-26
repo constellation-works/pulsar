@@ -10,7 +10,11 @@ operator's default.
 Auth belongs to the connector process, never to the agent. pulsar holds an
 OAuth 2.0 user token (PKCE, `tweet.read tweet.write users.read offline.access`),
 keeps the refresh token encrypted on the host, and exposes only intent-level
-tools: `whoami`, `create_post`, `upload_media`, `delete_post`.
+tools: `whoami`, `validate_post`, `validate_plan`, `create_post`,
+`upload_media`, `delete_post`. Every post goes through one publisher: offline
+checks, the secret scanner, the policy (budgets, daily cap, quiet hours) and
+the ledger, before anything is sent. The operator side is the `pulsar` CLI
+([Operator commands](#operator-commands)).
 
 Reads (timeline, search) are out of scope — the existing X plugin covers them.
 
@@ -148,8 +152,8 @@ accounts are bound; name one"), and an alias that is not registered is
 at login, the handle the credentials belong to must equal the alias's handle
 and, if set, `expected_handle`; otherwise `account_mismatch` with `detail:
 {alias, expected_handle, bound_handle}` and nothing is sent. The `[policy]`
-keys are parsed and validated now; the plan publisher that enforces them is
-landing in phase 2 (ORB-13028), and this section will say so when it does.
+keys are enforced on every post, from `create_post` and from `pulsar publish`
+alike.
 
 Policy (`pulsar.core.policy`) is checked before any network call, against
 what the ledger has committed (in-flight, published or unknown-outcome posts;
@@ -186,6 +190,64 @@ Roots must be absolute (`~` is expanded), and `/`, the home directory and its
 ancestors are refused; name the directory the media lives in. `pulsar serve`
 prints the effective roots to stderr at startup.
 
+## Operator commands
+
+Beside `pulsar auth …` and `pulsar serve`, the CLI has the operator's verbs.
+Each prints JSON and exits 0 on success, 1 otherwise.
+
+| Command | Network | What it does |
+|---|---|---|
+| `pulsar status [--account A]` | none | per account: day and month budget, spent and remaining, posts today against the cap, quiet hours, and ledger keys still unresolved |
+| `pulsar history [--account A] [--limit N]` | none | the newest ledger rows with their items |
+| `pulsar validate PLAN.yaml [--account A]` | none | per account: the posts as they would go out, length, media facts, the plan digest and estimated cost; needs no credentials |
+| `pulsar publish PLAN.yaml [--account A] [--idempotency-key K] [--caller C] --yes` | posts | publishes the plan to each of its accounts through the publisher; without `--yes` it only validates |
+| `pulsar reconcile [--account A]` | reads the timeline only when something is unresolved | settles `unknown` and abandoned `submitting` posts (see [The ledger](#the-ledger)) |
+| `pulsar import-posted FILE [--account A]` | `GET /2/users/me` only if the identity is not cached | imports a retired routine's `posted.jsonl` (idempotent) |
+
+A **plan** is YAML (or, for `validate_plan`, the same shape as JSON):
+
+```yaml
+account: x:constworks            # or accounts: [...]; omitted = the default account
+posts:                           # a thread; `text:` / `media:` at the top level is one post
+  - text: "Orbit v0.26 is out"
+    media: [{path: releases/v0.26/banner.png, alt: "The v0.26 banner"}]
+  - text: "Notes: https://example.com/notes"
+reply_to: "1790000000000000000"  # or quote: …; never both
+variants:                        # per-provider replacement for posts
+  bsky: {posts: [{text: "Shorter copy"}]}
+not_before: 2026-10-01T16:00:00Z # refused with not_due (retryable) before then
+```
+
+Every media item needs `alt` text; paths resolve under `media.roots`. Text
+and alt are posted as Unicode NFC with outer whitespace stripped. The
+**digest** (`sha256:…`) covers the accounts, every post's text, every media
+item's content hash and alt, reply/quote and variants. The media path and
+`not_before` are left out, so renaming a file or moving the schedule keeps
+the digest (and the idempotency key). A plan without accounts is bound to the
+default account before it is digested. `publish` keys each account's row
+`digest + account` unless `--idempotency-key` is given, which works for one
+account only.
+
+What `publish` does, in order:
+1. Validate every post offline: provider rules (length, media type, size,
+   count, video and GIF alone, alt text length), reply and quote ids, the
+   secret scanner over every text and alt text, and media loaded under
+   confinement.
+2. Check the policy, and claim the ledger row, in one transaction.
+3. Upload and post item by item; each reply goes to the previous item.
+
+A definitive failure mid-thread leaves the row `partial`, and publishing
+again resumes after the last published post. A post whose outcome is
+ambiguous leaves the row `unknown` until `pulsar reconcile` settles it.
+
+Reconcile lists the account's posts since just before the first ambiguous
+send (up to 300; X bills post reads) and matches each ambiguous post by a
+fingerprint of its text. The fingerprint ignores URLs (X rewrites them to
+`t.co` and appends media links), HTML entities and whitespace. A post never
+matches a post id the ledger already holds. A post is marked absent only when
+the listing was complete and five minutes have passed since it was sent;
+otherwise it stays `unknown`.
+
 ## Run as an MCP server
 
 ```sh
@@ -204,13 +266,16 @@ claude mcp add pulsar -- uv --directory /path/to/pulsar run pulsar serve
 |---|---|---|---|
 | `whoami` | read-only | `GET /2/users/me` | optional `account`; cached; `{user_id, username}` of that account |
 | `validate_post` | read-only | — | `text`, optional `reply_to_post_id`, `quote_post_id`; no network, no log |
+| `validate_plan` | read-only | — | `plan` (the [plan](#operator-commands) as an object), optional `account`; per account `{account, digest, estimated_cost_usd, posts}`; no network, no log |
 | `create_post` | publishes | `POST /2/tweets` | `text`, optional `reply_to_post_id`, `quote_post_id`, `media_ids`, `idempotency_key`, `dry_run` (legacy) |
 | `upload_media` | publishes | `POST /2/media/upload/initialize` → `/{id}/append` → `/{id}/finalize`; `GET /2/media/upload` for video status | png/jpeg/gif/webp images ≤5 MiB or MP4 video (`video/mp4`) ≤100 MiB; `path` (a regular file inside `media.roots`) or `base64`, optional `mime` (must match the sniffed content) → `{media_id}` after video processing succeeds |
 | `delete_post` | destructive | `DELETE /2/tweets/:id` | `post_id` (numeric X id), optional `idempotency_key` (default `delete:<post_id>`) → `{ok: true, post_id, deleted}` |
 
 `validate_post` returns `{ok: true, text, weighted_length, has_url,
-estimated_cost_usd}` without touching the network. `create_post` returns
-`{ok: true, post_id, url, text}`; `dry_run: true` returns what `validate_post`
+estimated_cost_usd}` without touching the network. `create_post` is a
+one-post plan run through the publisher, so the policy applies to it
+(`budget_exceeded`, `daily_cap` and `quiet_hours` come back before anything
+is sent). It returns `{ok: true, post_id, url, text}`; `dry_run: true` returns what `validate_post`
 does plus `dry_run: true`, and is kept for callers that predate `validate_post`;
 a dry run is not a write and records nothing.
 `whoami`, `create_post`, `upload_media` and `delete_post` take an optional
@@ -242,6 +307,9 @@ key:
 - **earlier attempt's outcome is unknown, or still in flight** →
   `outcome_unknown` again; nothing is sent.
 
+`create_post` keeps the request digest it had before plans existed, so
+default keys and rows written by an older pulsar carry over unchanged.
+
 Because of the derived key, posting the exact same text again from the same
 account replays the first receipt. To post identical text deliberately (say,
 after deleting the original), pass a fresh `idempotency_key`.
@@ -251,9 +319,8 @@ repeating a delete that succeeded returns `{ok: true, post_id, deleted,
 replayed: true}` without calling X. `upload_media` records every upload in the
 ledger but does not deduplicate: an orphaned media id is harmless and expires.
 
-Plans and threads (the phase-2 publisher; the ledger side is in place, the
-tool that drives it is not yet) key one ledger row per plan and account, with
-the same rules plus three more:
+Plans and threads (`pulsar publish`) key one ledger row per plan and account,
+with the same rules plus three more:
 
 - **thread partly published** (some posts went out, a later one failed
   definitively) → the row is `partial`; calling again resumes after the last
@@ -278,8 +345,9 @@ request was sent (`ReadTimeout`, `WriteTimeout`, `ReadError`,
 readable post id. The ledger row is left `unknown` and `detail` carries the
 `cause` and the `idempotency_key`. **Do not retry blindly** — a retry that
 succeeds is a second, paid post. Check the account's timeline; if the post is
-not there and you still want it, call again with a *new* `idempotency_key`. A
-later phase adds reconcile, which settles unknown rows against X. Failures
+not there and you still want it, call again with a *new* `idempotency_key`.
+The operator's `pulsar reconcile` settles unknown rows against the account's
+timeline; once a post is settled as absent, the same key re-sends it. Failures
 that prove nothing was sent (`ConnectError`, `ConnectTimeout`, `PoolTimeout`)
 stay `api_error` with `retryable: true`.
 
@@ -306,6 +374,10 @@ succeed (`rate_limited`, `api_error`):
 | `invalid_media` | bad path/base64, path outside `media.roots` or not a regular file, content that is not png/jpeg/gif/webp/mp4 or does not match the declared/extension MIME (`detail: {declared, sniffed}`), oversized media, or failed/timed-out video processing | fix the input or inspect X's processing detail |
 | `duplicate` / `forbidden` / `rate_limited` / `not_found` | X's reason, passed through in `detail` | duplicate: change text; rate_limited: wait |
 | `idempotency_conflict` | the key was already used for a different request or account | use a new key |
+| `budget_exceeded` / `daily_cap` / `quiet_hours` | the [policy](#configuration) refused the post; nothing was sent and no row was written. `detail.retry_after` says when it can pass | wait until `retry_after`; `retryable: false` means the post can never pass on its own (split it or raise the limit) |
+| `invalid_plan` | a plan's shape is wrong (`detail.at` names where) | fix the plan |
+| `not_due` | the plan's `not_before` is in the future (`detail.retry_after`) | publish after then |
+| `unsupported` | the provider cannot do what the plan asks (a thread, reply or quote) | change the plan |
 | `outcome_unknown` | the write may have reached X; see [above](#outcome_unknown) | do **not** retry; check the timeline |
 | `api_error` | anything else from X, a network failure before the request was sent, or a token refresh that failed without X rejecting the refresh token (unreadable response, save failed) | retry later, report |
 
@@ -484,7 +556,8 @@ pulsar older than the file refuses it with `invalid_config`.
 
 **Importing `posted.jsonl`.** The retired x-updates routine's log
 (`{key, ts, post_id|null, text?, note?, superseded_post_id?,
-superseded_note?}` per line) imports with `pulsar.core.importer.import_posted`:
+superseded_note?}` per line) imports with `pulsar import-posted FILE --account
+x:<handle>` (`pulsar.core.importer.import_posted`):
 a line with a `post_id` becomes a `published` row (tool `import:posted.jsonl`)
 with one item carrying the post id, URL and the text's SHA-256 (never the
 text), costing nothing; `post_id: null` becomes `skipped` with the line's note;
@@ -511,10 +584,11 @@ make check     # ruff lint + format check + basedpyright strict + pytest (no net
 Layout:
 
 ```text
-src/pulsar/core/          provider-neutral: plan, ledger, policy, account registry, credential store,
-                          media confinement, secret scanner, settings, errors (no HTTP)
-src/pulsar/providers/x/   X: OAuth 2.0 PKCE flow, v2 API client, text rules, limits
-src/pulsar/surfaces/      front ends: mcp.py (standalone MCP server), cli.py
+src/pulsar/core/          provider-neutral: plan, publisher, ledger, policy, channel contract
+                          (adapter.py), account registry, credential store, media confinement,
+                          secret scanner, settings, errors (no HTTP)
+src/pulsar/providers/x/   X: channel adapter, OAuth 2.0 PKCE flow, v2 API client, text rules, limits
+src/pulsar/surfaces/      front ends: mcp.py (standalone MCP server), cli.py, ops.py (operator verbs)
 ```
 
 `tests/test_layering.py` enforces the boundaries on the import graph: `core`

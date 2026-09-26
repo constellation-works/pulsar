@@ -324,8 +324,14 @@ async def test_two_runtimes_on_one_home_cannot_both_post(paths, authed, flaky_x)
     assert len(flaky_x.posts()) == 1
 
 
-def test_concurrent_claims_from_many_processes_admit_exactly_one(paths):
-    """Separate Ledger objects stand in for processes; each opens its own connection."""
+@pytest.mark.parametrize("trial", range(10))
+def test_concurrent_claims_from_many_processes_admit_exactly_one(tmp_path, trial):
+    """Separate Ledger objects stand in for processes; each opens its own connection.
+
+    Each trial starts from a new file, so the racers also race to create the
+    schema and switch it to WAL (which once failed with ``database is locked``).
+    """
+    paths = Paths(home=tmp_path / f"home-{trial}")
     n = 8
     barrier = threading.Barrier(n)
     outcomes: list[str] = []

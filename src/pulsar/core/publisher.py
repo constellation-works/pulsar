@@ -18,20 +18,24 @@ The order is the safety argument:
    an ambiguous one leaves it ``unknown`` for ``reconcile``.
 
 Media are uploaded per item, just before the item is posted, so no media id
-has to outlive the call.
+has to outlive the call. The one exception is the legacy ``create_post``
+tool, whose caller uploaded earlier and passes media ids: those ride along
+as ``PreparedPost.uploaded``, and the surface binds them into the digest.
 """
 
 from __future__ import annotations
 
 import hashlib
+import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from .adapter import Channel, LoadedMedia, PostCheck
+from .adapter import Channel, LoadedMedia, PostCheck, Published
 from .errors import (
+    API_ERROR,
     INVALID_MEDIA,
     NOT_DUE,
     SECRET_DETECTED,
@@ -55,6 +59,8 @@ from .media import load_ref
 from .plan import MediaRef, Plan, PostSpec
 from .policy import Policy, day_window, month_window
 from .settings import Settings
+
+log = logging.getLogger(__name__)
 
 # Reconcile waits this long after a post was sent before treating "not on the
 # timeline" as "not posted": X's timeline can lag a fresh post.
@@ -87,6 +93,7 @@ class PreparedPost:
     spec: PostSpec
     check: PostCheck
     media: tuple[LoadedMedia, ...]
+    uploaded: tuple[str, ...] = ()  # provider media ids uploaded before this call
 
 
 @dataclass(frozen=True)
@@ -122,6 +129,7 @@ class Prepared:
                         {"mime": m.mime, "bytes": len(m.data), "sha256": m.sha256, "alt": m.alt}
                         for m in p.media
                     ],
+                    **({"media_ids": list(p.uploaded)} if p.uploaded else {}),
                 }
                 for p in self.posts
             ],
@@ -136,7 +144,9 @@ class Outcome:
     record: PlanRecord
     replayed: bool = False
     error: PulsarError | None = None
-    posted_now: list[int] = field(default_factory=list)
+    # Posts this call made, by item index: the truth even when the ledger
+    # could not record them (the record then still says ``submitting``).
+    live: dict[int, Published] = field(default_factory=dict)
 
     def receipt(self) -> dict[str, Any]:
         items = [
@@ -295,13 +305,13 @@ class Publisher:
         plan, channel = prepared.plan, prepared.bound.channel
         post_ids = {i.idx: i.post_id for i in record.items if i.state == PUBLISHED}
         error: PulsarError | None = None
-        posted: list[int] = []
+        live: dict[int, Published] = {}
         for idx, post in enumerate(prepared.posts):
             if idx in post_ids:
                 continue
             reply_to = post_ids.get(idx - 1) if idx else plan.reply_to
             self.ledger.begin_item(key, idx)
-            media_ids: list[str] = []
+            media_ids: list[str] = list(post.uploaded)
             try:
                 for m in post.media:
                     media_ids.append(await channel.upload(m))
@@ -310,7 +320,11 @@ class Publisher:
                 self.ledger.item_failed(key, idx, exc)
                 error = exc
                 break
-            except BaseException as exc:
+            except Exception as exc:
+                error = _unexpected(exc)
+                self.ledger.item_failed(key, idx, error)
+                break
+            except BaseException as exc:  # cancelled: settle, then let it propagate
                 self.ledger.item_failed(key, idx, _unexpected(exc))
                 self.ledger.finish(key)
                 raise
@@ -330,18 +344,49 @@ class Publisher:
                 error = exc
                 break
             except BaseException as exc:
-                # A bug or a cancellation with the request possibly in flight.
-                self.ledger.item_unknown(
-                    key, idx, OutcomeUnknown(f"{exc.__class__.__name__} while posting")
-                )
-                self.ledger.finish(key)
-                raise
-            self.ledger.item_published(
-                key, idx, post_id=published.post_id, url=published.url, media_ids=tuple(media_ids)
-            )
+                # A bug or a cancellation with the request possibly in flight:
+                # the post may be live, so the item is unknown, never failed.
+                unknown = OutcomeUnknown(f"{exc.__class__.__name__} while posting")
+                self.ledger.item_unknown(key, idx, unknown)
+                if not isinstance(exc, Exception):
+                    self.ledger.finish(key)
+                    raise
+                log.error("publish %s item %d: %r", key, idx, exc)
+                error = unknown
+                break
+            live[idx] = published
             post_ids[idx] = published.post_id
-            posted.append(idx)
-        final = self.ledger.finish(key)
+            try:
+                self.ledger.item_published(
+                    key,
+                    idx,
+                    post_id=published.post_id,
+                    url=published.url,
+                    media_ids=tuple(media_ids),
+                )
+            except Exception:
+                # The post is live whatever happens here. Log it so it can be
+                # recovered, and stop: a thread must not go on unrecorded.
+                log.exception(
+                    "ledger: could not record %s item %d as published (post_id=%s url=%s);"
+                    " the item stays submitting",
+                    key,
+                    idx,
+                    published.post_id,
+                    published.url,
+                )
+                if idx + 1 < len(prepared.posts):
+                    error = PulsarError(
+                        API_ERROR,
+                        "a post went live but the ledger could not record it; stopped the thread",
+                        retryable=False,
+                    )
+                break
+        try:
+            final = self.ledger.finish(key)
+        except Exception:
+            log.exception("ledger: could not finish %s", key)
+            final = record
         if error is not None:
             error.detail = {
                 **(error.detail or {}),
@@ -349,7 +394,7 @@ class Publisher:
                 "state": final.state,
                 "published": sorted(post_ids),
             }
-        return Outcome(record=final, error=error, posted_now=posted)
+        return Outcome(record=final, error=error, live=live)
 
     # -- reconcile ------------------------------------------------------------
 
@@ -405,6 +450,4 @@ class Publisher:
 
 
 def _unexpected(exc: BaseException) -> PulsarError:
-    from .errors import API_ERROR
-
     return PulsarError(API_ERROR, f"unexpected {exc.__class__.__name__}", retryable=True)

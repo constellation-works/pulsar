@@ -46,6 +46,7 @@ import hashlib
 import json
 import logging
 import sqlite3
+import time
 import unicodedata
 from collections.abc import Callable, Generator, Sequence
 from dataclasses import dataclass, field
@@ -549,8 +550,22 @@ class Ledger:
         finally:
             conn.close()
 
+    def _wal(self, conn: sqlite3.Connection) -> str:
+        """Switch to WAL. On a new file this needs an exclusive lock and SQLite
+        does not apply the busy timeout to it, so a second process opening the
+        same new ledger gets ``database is locked`` at once; retry until the
+        busy timeout instead."""
+        deadline = time.monotonic() + self._busy_timeout_ms / 1000
+        while True:
+            try:
+                return str(conn.execute("PRAGMA journal_mode = WAL").fetchone()[0])
+            except sqlite3.OperationalError as exc:
+                if "locked" not in str(exc) or time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.01)
+
     def _migrate(self, conn: sqlite3.Connection) -> None:
-        mode = conn.execute("PRAGMA journal_mode = WAL").fetchone()[0]
+        mode = self._wal(conn)
         if str(mode).lower() != "wal":
             log.warning("ledger journal_mode is %s, not wal", mode)
         with _immediate(conn):

@@ -1,4 +1,4 @@
-"""The MCP surface: five tools, no secret parameters, structured errors.
+"""The MCP surface: six tools, no secret parameters, structured errors.
 
 Every tool returns a JSON object. Success carries ``ok: true``; failure
 carries ``ok: false`` plus a machine-readable ``code`` from ``errors.py``
@@ -7,8 +7,8 @@ instead of parsing prose.
 
 pulsar does not decide whether a post *should* go out — that is the caller's
 policy. What it does is make the policy boundary legible to a harness that
-gates by tool name and annotations: ``whoami`` and ``validate_post`` are
-``readOnlyHint`` (safe to auto-allow), ``create_post`` and ``upload_media``
+gates by tool name and annotations: ``whoami``, ``validate_post`` and
+``validate_plan`` are ``readOnlyHint`` (safe to auto-allow), ``create_post`` and ``upload_media``
 publish (not read-only, not destructive), and ``delete_post`` is
 ``destructiveHint``. ``create_post(dry_run=True)`` still exists for callers
 that predate ``validate_post``, but a harness cannot tell it apart from a
@@ -53,19 +53,37 @@ from ..core.accounts import (
     require_expected,
 )
 from ..core.adapter import Identity
-from ..core.errors import API_ERROR, INVALID_TEXT, AuthExpired, OutcomeUnknown, PulsarError
-from ..core.ledger import PUBLISHED, Ledger, check_key, default_key, request_digest
+from ..core.errors import (
+    API_ERROR,
+    INVALID_ARGUMENT,
+    INVALID_TEXT,
+    UNSUPPORTED,
+    AuthExpired,
+    OutcomeUnknown,
+    PulsarError,
+)
+from ..core.ledger import PUBLISHED, Ledger, check_key, request_digest
 from ..core.media import load_media
 from ..core.paths import Paths, default_paths
+from ..core.plan import Plan, alias_provider
+from ..core.publisher import Bound, Outcome, Prepared, Publisher
 from ..core.settings import Prices, Settings, load_settings
 from ..core.store import FernetFileStore
-from ..core.writelog import WriteLog, resolve_caller, text_sha256
+from ..core.writelog import WriteLog, resolve_caller
+from ..providers.x.adapter import XChannel
 from ..providers.x.client import MediaProcessingError, XClient, check_x_id
 from ..providers.x.text import validate_text
 
 log = logging.getLogger(__name__)
 
-TOOL_NAMES = ("whoami", "validate_post", "create_post", "upload_media", "delete_post")
+TOOL_NAMES = (
+    "whoami",
+    "validate_post",
+    "validate_plan",
+    "create_post",
+    "upload_media",
+    "delete_post",
+)
 
 # Hints a policy layer can gate on without knowing anything pulsar-specific.
 READ_ONLY = ToolAnnotations(read_only_hint=True, destructive_hint=False, idempotent_hint=True)
@@ -138,6 +156,9 @@ class Runtime:
         self.registry = AccountRegistry(self.paths)
         self.log = WriteLog(self.paths)
         self.ledger = Ledger(self.paths, export=self.log.export)
+        self.publisher = Publisher(
+            ledger=self.ledger, settings=self.settings, deny=(self.paths.home,)
+        )
         self._transport = transport
         self._client_kwargs = client_kwargs
         self._clients: dict[str, XClient] = {}
@@ -235,6 +256,59 @@ class Runtime:
         require_expected(account, self.settings)
         return account, self.client_for(account.alias), _me(account)
 
+    # -- channels -------------------------------------------------------------
+
+    def channel(self, alias: str, *, user_id: str, handle: str) -> XChannel:
+        provider = alias_provider(alias)
+        if provider != "x":
+            raise PulsarError(UNSUPPORTED, f"no channel for provider {provider!r} yet")
+        return XChannel(self.client_for(alias), user_id=user_id, handle=handle)
+
+    def offline_bound(self, alias: str) -> Bound:
+        """``alias`` bound for offline validation: no credentials needed, no network."""
+        row = self.registry.accounts().get(alias)
+        handle = (row.handle if row else None) or alias.partition(":")[2]
+        user_id = (row.provider_user_id if row else None) or ""
+        return Bound(
+            alias=alias,
+            provider=alias_provider(alias),
+            user_id=user_id,
+            handle=handle,
+            channel=self.channel(alias, user_id=user_id, handle=handle),
+        )
+
+    async def bound(self, alias: str | None) -> Bound:
+        """The account to publish as, identity checked (``writer``), with its channel."""
+        account, _client, me = await self.writer(alias)
+        return Bound(
+            alias=account.alias,
+            provider=account.provider,
+            user_id=me["user_id"],
+            handle=me["username"],
+            channel=self.channel(account.alias, user_id=me["user_id"], handle=me["username"]),
+        )
+
+    def plan_targets(self, plan: Plan, account: str | None) -> tuple[Plan, list[str]]:
+        """The plan bound to explicit accounts, and the ones this call acts for.
+
+        A plan without accounts is bound to ``account`` (else the default), so
+        its digest names who it is for. ``account`` on a plan that names
+        accounts selects one of them.
+        """
+        if not plan.accounts:
+            chosen = self.account(account).alias
+            return plan.with_accounts((chosen,)), [chosen]
+        if account is None:
+            return plan, list(plan.accounts)
+        chosen = self.account(account).alias
+        if chosen not in plan.accounts:
+            raise PulsarError(
+                INVALID_ARGUMENT,
+                f"{chosen} is not one of the plan's accounts",
+                detail={"accounts": list(plan.accounts)},
+            )
+        return plan, [chosen]
+
 
 def _me(account: Account) -> dict[str, str]:
     return {"user_id": account.provider_user_id or "", "username": account.handle or ""}
@@ -319,6 +393,24 @@ def build_server(runtime: Runtime | None = None) -> MCPServer:
 
     @server.tool(
         description=(
+            "Validate a plan without publishing: {account|accounts, text | posts[{text, "
+            "media[{path, alt}]}], reply_to|quote, variants{provider: {posts}}, not_before}. "
+            "Checks each post against the account's provider (length, media type, size and "
+            "count, alt text, credential scan), loads media under the operator's media roots, "
+            "and returns per account the digest and estimated_cost_usd. Never touches the "
+            "network. `account` picks one of the plan's accounts, or binds a plan that "
+            "names none (default: the operator's default account)."
+        ),
+        annotations=READ_ONLY,
+    )
+    @_guarded
+    async def validate_plan(plan: dict[str, Any], account: AccountArg = None) -> dict[str, Any]:
+        parsed, targets = rt.plan_targets(Plan.from_mapping(plan), account)
+        reports = [rt.publisher.prepare(parsed, rt.offline_bound(a)).report() for a in targets]
+        return {"ok": True, "accounts": reports}
+
+    @server.tool(
+        description=(
             "Create a post on X as `account` (default: the operator's default account); "
             "refused with account_mismatch if its credentials belong to another handle. "
             "Requires explicit user intent in the "
@@ -327,7 +419,9 @@ def build_server(runtime: Runtime | None = None) -> MCPServer:
             "idempotency_key: a repeat returns the stored receipt with replayed=true and does "
             "not post. On outcome_unknown the post may be live: do not retry. dry_run=true is "
             "the legacy validate-only path; prefer validate_post, which a policy layer can gate "
-            "separately. `caller` is an advisory audit label, not identity."
+            "separately. The operator's policy applies: budget_exceeded, daily_cap or "
+            "quiet_hours come back before anything is sent, with detail.retry_after. "
+            "`caller` is an advisory audit label, not identity."
         ),
         annotations=PUBLISHES,
     )
@@ -348,46 +442,15 @@ def build_server(runtime: Runtime | None = None) -> MCPServer:
         if dry_run:
             # Not a write: nothing reaches the ledger or writes.jsonl.
             return {**validated, "dry_run": True}
-        acct, client, me = await rt.writer(account)
-        digest = request_digest(
-            "create_post",
-            text=text,
-            reply_to_post_id=str(reply_to_post_id).strip() if reply_to_post_id else None,
-            quote_post_id=str(quote_post_id).strip() if quote_post_id else None,
-            media_ids=media_ids or [],
-        )
-        key = key or default_key(digest, me["user_id"])
-        record = rt.ledger.claim(
-            key=key,
-            tool="create_post",
-            digest=digest,
-            account=me,
-            caller=resolve_caller(caller),
-            text_sha256=text_sha256(text),
-        )
-        if record.state == PUBLISHED:
-            return {
-                "ok": True,
-                "post_id": record.post_id,
-                "url": record.url,
-                "text": text,
-                "replayed": True,
-            }
-        with rt.watch_expiry(acct.alias):
-            created = await _settle_on_error(
-                rt,
-                key,
-                lambda: client.create_post(
-                    text,
-                    reply_to_post_id=reply_to_post_id,
-                    quote_post_id=quote_post_id,
-                    media_ids=media_ids,
-                ),
-                ambiguous=True,
+        bound = await rt.bound(account)
+        prepared = _legacy_post(rt, bound, text, reply_to_post_id, quote_post_id, media_ids or [])
+        with rt.watch_expiry(bound.alias):
+            outcome = await rt.publisher.publish(
+                prepared, idempotency_key=key, caller=resolve_caller(caller), tool="create_post"
             )
-        url = f"https://x.com/{me['username']}/status/{created['post_id']}"
-        _record_success(rt, key, post_id=created["post_id"], url=url)
-        return {"ok": True, "post_id": created["post_id"], "url": url, "text": created["text"]}
+        if outcome.error is not None:
+            raise outcome.error
+        return _legacy_receipt(outcome, prepared)
 
     @server.tool(
         description=(
@@ -479,6 +542,55 @@ def build_server(runtime: Runtime | None = None) -> MCPServer:
         return {"ok": True, "post_id": post_id, "deleted": deleted}
 
     return server
+
+
+def _legacy_post(
+    rt: Runtime,
+    bound: Bound,
+    text: str,
+    reply_to: str | None,
+    quote: str | None,
+    media_ids: list[str],
+) -> Prepared:
+    """``create_post`` as a one-post plan, so policy, budget and the ledger apply.
+
+    The caller uploaded its media earlier (``upload_media``) and passes ids,
+    which a plan cannot express; they ride along as ``uploaded``.
+
+    The digest stays the phase 1 request digest (text as given, reply,
+    quote, media ids), not the plan digest: default keys and stored rows
+    carry over the upgrade unchanged, so re-sending a post made before it
+    replays instead of posting twice, and a row an older process left in
+    flight is still reported as in flight.
+    """
+    plan = Plan.from_mapping(
+        {"account": bound.alias, "text": text, "reply_to": reply_to, "quote": quote}
+    )
+    prepared = rt.publisher.prepare(plan, bound)
+    digest = request_digest(
+        "create_post",
+        text=text,
+        reply_to_post_id=str(reply_to).strip() if reply_to else None,
+        quote_post_id=str(quote).strip() if quote else None,
+        media_ids=media_ids,
+    )
+    first = replace(prepared.posts[0], uploaded=tuple(media_ids))
+    return replace(prepared, digest=digest, posts=(first,))
+
+
+def _legacy_receipt(outcome: Outcome, prepared: Prepared) -> dict[str, Any]:
+    """The phase 1 receipt shape, unchanged for existing callers."""
+    live = outcome.live.get(0)
+    item = outcome.record.items[0]
+    out: dict[str, Any] = {
+        "ok": True,
+        "post_id": live.post_id if live else item.post_id,
+        "url": live.url if live else item.url,
+        "text": live.text if live else prepared.posts[0].check.text,
+    }
+    if outcome.replayed:
+        out["replayed"] = True
+    return out
 
 
 async def _settle_on_error[T](

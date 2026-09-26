@@ -1,4 +1,5 @@
-"""``pulsar`` command line: human auth management and the MCP server."""
+"""``pulsar`` command line: human auth management, operator verbs (``ops.py``)
+and the MCP server."""
 
 from __future__ import annotations
 
@@ -7,6 +8,7 @@ import asyncio
 import json
 import sys
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -290,6 +292,59 @@ def _auth_migrate(args: argparse.Namespace) -> int:
     return 0 if result.state in ("migrated", "none") else 1
 
 
+def _emit(report: tuple[dict[str, Any], int]) -> int:
+    out, code = report
+    print(json.dumps(out, indent=2, ensure_ascii=False))
+    return code
+
+
+def _status(args: argparse.Namespace) -> int:
+    from .ops import budget_report
+
+    return _emit(budget_report(default_paths(), account=args.account))
+
+
+def _history(args: argparse.Namespace) -> int:
+    from .ops import history_report
+
+    return _emit(history_report(default_paths(), account=args.account, limit=args.limit))
+
+
+def _validate(args: argparse.Namespace) -> int:
+    from .ops import validate_report
+
+    return _emit(asyncio.run(validate_report(default_paths(), args.plan, account=args.account)))
+
+
+def _publish(args: argparse.Namespace) -> int:
+    from .ops import publish_report
+
+    return _emit(
+        asyncio.run(
+            publish_report(
+                default_paths(),
+                args.plan,
+                account=args.account,
+                idempotency_key=args.idempotency_key,
+                caller=args.caller,
+                yes=args.yes,
+            )
+        )
+    )
+
+
+def _reconcile(args: argparse.Namespace) -> int:
+    from .ops import reconcile_report
+
+    return _emit(asyncio.run(reconcile_report(default_paths(), account=args.account)))
+
+
+def _import_posted(args: argparse.Namespace) -> int:
+    from .ops import import_report
+
+    return _emit(asyncio.run(import_report(default_paths(), args.source, account=args.account)))
+
+
 def _serve(args: argparse.Namespace) -> int:
     from .mcp import Runtime, build_server
 
@@ -357,6 +412,49 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_migrate.add_argument("--account", required=True, help="the alias they belong to, x:<handle>")
     p_migrate.set_defaults(func=_auth_migrate)
+
+    p_st = sub.add_parser(
+        "status", help="budgets, today's posts, quiet hours and unresolved writes (offline)"
+    )
+    p_st.add_argument("--account", help="report only this account")
+    p_st.set_defaults(func=_status)
+
+    p_hist = sub.add_parser("history", help="the newest ledger rows (offline)")
+    p_hist.add_argument("--account", help="only this account's rows")
+    p_hist.add_argument("--limit", type=int, default=20)
+    p_hist.set_defaults(func=_history)
+
+    p_val = sub.add_parser(
+        "validate", help="check a plan offline: per account, what would post, digest and cost"
+    )
+    p_val.add_argument("plan", type=Path, help="plan file (YAML)")
+    p_val.add_argument("--account", help="one of the plan's accounts, or the one to bind it to")
+    p_val.set_defaults(func=_validate)
+
+    p_pub = sub.add_parser(
+        "publish",
+        help="publish a plan through the ledger and policy (validates only without --yes)",
+    )
+    p_pub.add_argument("plan", type=Path, help="plan file (YAML)")
+    p_pub.add_argument("--account", help="one of the plan's accounts, or the one to bind it to")
+    p_pub.add_argument("--idempotency-key", help="default: derived from the digest and account")
+    p_pub.add_argument("--caller", help="audit label recorded in the ledger")
+    p_pub.add_argument("--yes", action="store_true", help="actually publish (costs money)")
+    p_pub.set_defaults(func=_publish)
+
+    p_rec = sub.add_parser(
+        "reconcile",
+        help="settle unknown writes from the account's timeline (reads X only when needed)",
+    )
+    p_rec.add_argument("--account", help="default: the default account")
+    p_rec.set_defaults(func=_reconcile)
+
+    p_imp = sub.add_parser(
+        "import-posted", help="import a retired routine's posted.jsonl into the ledger (idempotent)"
+    )
+    p_imp.add_argument("source", type=Path, help="path to posted.jsonl")
+    p_imp.add_argument("--account", help="the account those posts were made as")
+    p_imp.set_defaults(func=_import_posted)
 
     serve = sub.add_parser("serve", help="run the MCP server")
     serve.add_argument("--transport", choices=("stdio", "http"), default="stdio")

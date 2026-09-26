@@ -201,7 +201,7 @@ async def test_thread_failing_at_item_two_resumes_from_item_two(publisher, bound
     assert out.error.detail["published"] == [0] and out.error.detail["state"] == "partial"
     resumed = await publisher.publish(prepared, caller="test", idempotency_key="t1")
     assert resumed.error is None and resumed.record.state == "published"
-    assert resumed.posted_now == [1, 2]
+    assert sorted(resumed.live) == [1, 2]
     # item 0 was not posted again; item 1 replies to item 0's post
     assert [c["text"] for c in channel.creates] == ["one", "two", "two", "three"]
     assert channel.creates[2]["reply_to"] == "501"

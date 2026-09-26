@@ -556,7 +556,7 @@ async def test_post_that_went_live_stays_ok_when_bookkeeping_fails(
     def broken_publish(*_a, **_k):
         raise PulsarError(INSECURE_STORAGE, "home went wide mid-flight")
 
-    monkeypatch.setattr(rt.ledger, "publish", broken_publish)
+    monkeypatch.setattr(rt.ledger, "item_published", broken_publish)
     async with InMemoryTransport(build_server(rt)) as (read, write):
         async with ClientSession(read, write) as s:
             await s.initialize()
