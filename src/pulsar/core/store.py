@@ -31,9 +31,16 @@ write the previous account's rotated tokens over a new login, or back after
 a logout.
 
 Each login mints a ``binding_id`` that refreshes carry forward. The cached
-identity (``whoami.json``) records the binding it describes and is ignored
-once that no longer matches the stored bundle, so a lookup that raced a
-re-login cannot keep naming the old account.
+identity (the account's row in ``accounts.json``; ``whoami.json`` in the
+phase 1 layout) records the binding it describes and is ignored once that no
+longer matches the stored bundle, so a lookup that raced a re-login cannot
+keep naming the old account.
+
+Several accounts share one home: ``FernetFileStore.for_account`` keeps each
+account's bundle and refresh lock in ``accounts/<slug>/`` under the one
+root ``key``, so accounts refresh independently. ``FernetFileStore(paths)``
+is the phase 1 root store (``tokens.enc``, ``refresh.lock``), kept for the
+migration.
 """
 
 from __future__ import annotations
@@ -46,16 +53,17 @@ import os
 import tempfile
 import time
 import uuid
-from collections.abc import AsyncGenerator, Generator
+from collections.abc import AsyncGenerator, Callable, Generator
 from contextlib import AbstractAsyncContextManager
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Protocol
 
 from cryptography.fernet import Fernet, InvalidToken
 
 from .errors import API_ERROR, INSECURE_STORAGE, AuthExpired, PulsarError
-from .fsutil import FILE_MODE, require_private, write_private_atomic
-from .jsonx import as_object, obj
+from .fsutil import FILE_MODE, ensure_private_dir, require_private, write_private_atomic
+from .jsonx import obj
 from .paths import Paths
 
 LOCK_POLL_SECONDS = 0.05
@@ -98,25 +106,6 @@ class TokenBundle:
         )
 
 
-def cached_identity(paths: Paths, bundle: TokenBundle) -> dict[str, str] | None:
-    """The cached ``{user_id, username}`` if it describes ``bundle``'s binding, else None."""
-    try:
-        cached = as_object(json.loads(paths.whoami_cache.read_text()))
-    except (FileNotFoundError, ValueError):
-        return None
-    if cached is None or not {"user_id", "username"} <= cached.keys():
-        return None
-    if cached.get("binding_id") != bundle.binding_id:
-        return None
-    return {"user_id": str(cached["user_id"]), "username": str(cached["username"])}
-
-
-def save_identity(paths: Paths, binding_id: str | None, me: dict[str, str]) -> None:
-    """Cache ``me`` as the identity of ``binding_id`` (the bundle it was looked up with)."""
-    record = {**me, "binding_id": binding_id}
-    write_private_atomic(paths.whoami_cache, (json.dumps(record) + "\n").encode())
-
-
 class CredentialConflict(PulsarError):
     """A compare-and-swap save found a different bundle than the caller expected."""
 
@@ -147,16 +136,22 @@ class CredentialStore(Protocol):
         """
         ...
 
-    def rebind(self, bundle: TokenBundle) -> TokenBundle:
+    def rebind(
+        self, bundle: TokenBundle, *, on_bound: Callable[[TokenBundle], object] | None = None
+    ) -> TokenBundle:
         """Store a freshly issued bundle as a new binding, under the refresh lock.
 
-        Mints the ``binding_id`` and drops the cached identity. Returns the
+        Mints the ``binding_id`` and drops the cached identity; ``on_bound``
+        (say, the registry update) runs with the lock still held. Returns the
         bundle as stored.
         """
         ...
 
-    def clear(self) -> None:
-        """Forget the binding (tokens and cached identity), under the refresh lock."""
+    def clear(self, *, on_cleared: Callable[[], object] | None = None) -> None:
+        """Forget the binding (tokens and cached identity), under the refresh lock.
+
+        ``on_cleared`` runs with the lock still held.
+        """
         ...
 
     def refresh_lock(self, timeout: float) -> AbstractAsyncContextManager[None]:
@@ -165,24 +160,48 @@ class CredentialStore(Protocol):
 
 
 class FernetFileStore:
-    """``CredentialStore`` on local files: Fernet ciphertext beside its key."""
+    """``CredentialStore`` on local files: Fernet ciphertext beside its key.
 
-    def __init__(self, paths: Paths) -> None:
+    ``FernetFileStore(paths)`` is the phase 1 single-account store at the
+    home root; ``for_account`` is one account's store under ``accounts/``.
+    """
+
+    def __init__(self, paths: Paths, *, account_dir: Path | None = None) -> None:
         self.paths = paths
+        self.account_dir = account_dir
+        if account_dir is None:
+            self.token_file = paths.token_file
+            self.lock_file = paths.refresh_lock
+            # The phase 1 identity cache; accounts keep theirs in the registry.
+            self._identity_file: Path | None = paths.whoami_cache
+            self._dirs: tuple[Path, ...] = (paths.home,)
+        else:
+            self.token_file = account_dir / "tokens.enc"
+            self.lock_file = account_dir / "refresh.lock"
+            self._identity_file = None
+            self._dirs = (paths.home, account_dir.parent, account_dir)
+
+    @classmethod
+    def for_account(cls, paths: Paths, alias: str) -> FernetFileStore:
+        """The store of the account ``alias`` (canonical; ``invalid_argument`` if unsafe)."""
+        return cls(paths, account_dir=paths.account_dir(alias))
 
     # -- permissions --------------------------------------------------------
 
     def _check(self) -> None:
-        require_private(self.paths.home, is_dir=True)
+        for directory in self._dirs:
+            require_private(directory, is_dir=True)
         require_private(self.paths.key_file)
-        require_private(self.paths.token_file)
+        require_private(self.token_file)
 
     def _prepare_home(self) -> None:
-        """Create the home 0700 if missing; refuse (never silently fix) an unsafe one."""
+        """Create the home (and account dirs) 0700 if missing; refuse, never fix, unsafe ones."""
         if self.paths.home.exists():
             self._check()
         else:
             self.paths.ensure()
+        for directory in self._dirs[1:]:
+            ensure_private_dir(directory)
 
     # -- key ----------------------------------------------------------------
 
@@ -234,7 +253,7 @@ class FernetFileStore:
     # -- CredentialStore ----------------------------------------------------
 
     def exists(self) -> bool:
-        return self.paths.token_file.exists() and self.paths.key_file.exists()
+        return self.token_file.exists() and self.paths.key_file.exists()
 
     def load(self) -> TokenBundle | None:
         if not self.paths.home.exists():
@@ -243,7 +262,7 @@ class FernetFileStore:
         if not self.exists():
             return None
         try:
-            raw = self._fernet(create=False).decrypt(self.paths.token_file.read_bytes())
+            raw = self._fernet(create=False).decrypt(self.token_file.read_bytes())
         except (InvalidToken, FileNotFoundError):
             return None
         try:
@@ -261,32 +280,39 @@ class FernetFileStore:
         if expected_previous is not None and self.load() != expected_previous:
             raise CredentialConflict()
         blob = self._fernet(create=True).encrypt(json.dumps(asdict(bundle)).encode())
-        write_private_atomic(self.paths.token_file, blob)
+        write_private_atomic(self.token_file, blob)
 
-    def rebind(self, bundle: TokenBundle) -> TokenBundle:
+    def rebind(
+        self, bundle: TokenBundle, *, on_bound: Callable[[TokenBundle], object] | None = None
+    ) -> TokenBundle:
         bundle.binding_id = uuid.uuid4().hex
         with self.refresh_lock_sync(REFRESH_LOCK_WAIT_SECONDS):
             self.save(bundle)
             self._drop_identity()
+            if on_bound is not None:
+                on_bound(bundle)
         return bundle
 
-    def clear(self) -> None:
+    def clear(self, *, on_cleared: Callable[[], object] | None = None) -> None:
         if not self.paths.home.exists():
             return
         with self.refresh_lock_sync(REFRESH_LOCK_WAIT_SECONDS):
-            if self.paths.token_file.exists():
-                self.paths.token_file.unlink()
+            if self.token_file.exists():
+                self.token_file.unlink()
             self._drop_identity()
+            if on_cleared is not None:
+                on_cleared()
 
     def _drop_identity(self) -> None:
-        with contextlib.suppress(FileNotFoundError):
-            self.paths.whoami_cache.unlink()
+        if self._identity_file is not None:
+            with contextlib.suppress(FileNotFoundError):
+                self._identity_file.unlink()
 
     # -- refresh lock -------------------------------------------------------
 
     def _lock_fd(self) -> int:
         self._prepare_home()
-        return os.open(self.paths.refresh_lock, os.O_RDWR | os.O_CREAT, FILE_MODE)
+        return os.open(self.lock_file, os.O_RDWR | os.O_CREAT, FILE_MODE)
 
     def _try_lock(self, fd: int, deadline: float, timeout: float) -> bool:
         try:
@@ -298,7 +324,7 @@ class FernetFileStore:
                     API_ERROR,
                     f"another pulsar process held the token refresh lock for over "
                     f"{timeout:g}s; retry later",
-                    detail={"lock": str(self.paths.refresh_lock), "retryable": True},
+                    detail={"lock": str(self.lock_file), "retryable": True},
                 ) from None
             return False
 

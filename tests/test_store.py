@@ -9,33 +9,46 @@ from cryptography.fernet import Fernet
 from pulsar.core.errors import PulsarError
 from pulsar.core.store import CredentialConflict, FernetFileStore, TokenBundle, TokenStore
 from pulsar.core.writelog import WriteLog
-from pulsar.providers.x.auth import bind
+from pulsar.providers.x.auth import load_client_id, save_client_id
 from pulsar.surfaces.mcp import Runtime
+
+from .conftest import register
 
 
 def test_round_trip_and_private_modes(store, bundle, paths):
     assert store.load() is None
     store.save(bundle)
     assert store.load() == bundle
-    for p in (paths.key_file, paths.token_file):
+    assert store.token_file == paths.home / "accounts" / "x--constworks" / "tokens.enc"
+    for p in (paths.key_file, store.token_file):
         assert stat.S_IMODE(os.stat(p).st_mode) == 0o600
-    assert stat.S_IMODE(os.stat(paths.home).st_mode) == 0o700
+    for d in (paths.home, paths.accounts_dir, store.account_dir):
+        assert stat.S_IMODE(os.stat(d).st_mode) == 0o700
 
 
 def test_token_file_is_not_plaintext(store, bundle, paths):
     store.save(bundle)
-    raw = paths.token_file.read_bytes()
+    raw = store.token_file.read_bytes()
     assert bundle.access_token.encode() not in raw
     assert bundle.refresh_token.encode() not in raw
 
 
-def test_clear_removes_tokens_and_cache(store, bundle, paths):
-    store.save(bundle)
+def test_clear_removes_tokens_and_cache(legacy_store, bundle, paths):
+    legacy_store.save(bundle)
     paths.whoami_cache.write_text(json.dumps({"user_id": "1", "username": "x"}))
-    store.clear()
-    assert store.load() is None
+    legacy_store.clear()
+    assert legacy_store.load() is None
     assert not paths.whoami_cache.exists()
     assert paths.key_file.exists()  # key survives; a new bundle reuses it
+
+
+def test_account_clear_keeps_the_key_and_other_accounts(store, bundle, paths):
+    store.save(bundle)
+    other = TokenStore.for_account(paths, "x:other")
+    other.save(bundle)
+    store.clear()
+    assert store.load() is None and other.load() == bundle
+    assert paths.key_file.exists()
 
 
 def test_wrong_key_yields_none(store, bundle, paths):
@@ -55,15 +68,22 @@ def test_from_token_response_defaults():
     assert b.token_type == "bearer"
 
 
-def test_rebinding_drops_the_cached_identity(store, bundle, paths):
-    from pulsar.providers.x.auth import bind, load_client_id
-
-    store.save(bundle)
+def test_rebinding_drops_the_cached_identity(legacy_store, bundle, paths):
+    legacy_store.save(bundle)
     paths.whoami_cache.write_text('{"user_id": "1", "username": "old-account"}\n')
-    bind(paths, "client-new", bundle)
+    legacy_store.rebind(bundle)
     assert not paths.whoami_cache.exists(), "stale whoami must not survive a re-login"
+    assert legacy_store.load() == bundle
+
+
+def test_client_id_is_one_per_provider_and_reads_the_legacy_format(paths):
+    paths.ensure()
+    paths.client_file.write_text('{"client_id": "legacy-id", "redirect_uri": "x"}\n')
+    assert load_client_id(paths) == "legacy-id"
+    save_client_id(paths, "client-new")
     assert load_client_id(paths) == "client-new"
-    assert store.load() == bundle
+    assert json.loads(paths.client_file.read_text())["x"]["client_id"] == "client-new"
+    assert stat.S_IMODE(os.stat(paths.client_file).st_mode) == 0o600
 
 
 def test_token_store_is_the_fernet_file_store():
@@ -85,7 +105,8 @@ def test_crash_mid_save_keeps_the_previous_bundle(store, bundle, paths, monkeypa
         store.save(rotated)
     monkeypatch.undo()
     assert store.load() == bundle, "the only refresh token must survive a failed save"
-    assert sorted(p.name for p in paths.home.iterdir()) == ["key", "tokens.enc"]
+    assert sorted(p.name for p in paths.home.iterdir()) == ["accounts", "key"]
+    assert sorted(p.name for p in store.account_dir.iterdir()) == ["tokens.enc"]
 
 
 def test_losing_the_key_creation_race_adopts_the_winners_key(store, bundle, paths, monkeypatch):
@@ -102,7 +123,7 @@ def test_losing_the_key_creation_race_adopts_the_winners_key(store, bundle, path
     monkeypatch.setattr("pulsar.core.store.os.link", another_process_wins)
     store.save(bundle)
     assert paths.key_file.read_bytes() == winner
-    assert Fernet(winner).decrypt(paths.token_file.read_bytes())
+    assert Fernet(winner).decrypt(store.token_file.read_bytes())
     assert [p.name for p in paths.home.iterdir() if p.name.startswith(".key.")] == []
 
 
@@ -112,7 +133,7 @@ def test_concurrent_first_saves_share_one_key(paths, bundle):
 
     def first_save():
         barrier.wait()
-        TokenStore(paths).save(bundle)
+        TokenStore.for_account(paths, "x:constworks").save(bundle)
         keys.append(paths.key_file.read_bytes())
 
     threads = [threading.Thread(target=first_save) for _ in range(8)]
@@ -121,7 +142,7 @@ def test_concurrent_first_saves_share_one_key(paths, bundle):
     for t in threads:
         t.join()
     assert len(set(keys)) == 1
-    assert TokenStore(paths).load() == bundle
+    assert TokenStore.for_account(paths, "x:constworks").load() == bundle
 
 
 def test_cas_save_refuses_a_bundle_it_did_not_expect(store, bundle, paths):
@@ -142,13 +163,15 @@ def test_cas_save_refuses_a_bundle_it_did_not_expect(store, bundle, paths):
     [
         ("home", 0o755, "chmod 700"),
         ("home", 0o710, "chmod 700"),
+        ("accounts_dir", 0o755, "chmod 700"),
+        ("account_dir", 0o750, "chmod 700"),
         ("key_file", 0o644, "chmod 600"),
         ("token_file", 0o640, "chmod 600"),
         ("token_file", 0o602, "chmod 600"),
     ],
 )
 def test_wide_modes_are_refused_not_treated_as_logged_out(store, authed, paths, target, mode, fix):
-    path = getattr(paths, target)
+    path = getattr(store, target, None) or getattr(paths, target)
     os.chmod(path, mode)
     for attempt in (store.load, lambda: store.save(authed)):
         with pytest.raises(PulsarError) as exc:
@@ -176,21 +199,26 @@ def test_missing_home_is_just_not_authorized(store):
 async def test_every_file_pulsar_creates_is_0600_under_a_loose_umask(
     private_umask, paths, bundle, fake_x
 ):
-    bind(paths, "client-xyz", bundle)  # key, tokens.enc, client.json
+    register(paths, bundle)  # key, accounts/x--constworks/tokens.enc, accounts.json/.lock
+    save_client_id(paths, "client-xyz")  # client.json
     rt = Runtime(paths, transport=fake_x.transport())
     try:
-        await rt.whoami()  # whoami.json
+        await rt.whoami()  # the identity lands in accounts.json
     finally:
-        await rt.client.aclose()
+        await rt.aclose()
     rt.log.append(tool="create_post", caller="t", text="hi")  # writes.jsonl
     WriteLog(paths).append(tool="delete_post", caller="t", post_id="1")
-    async with rt.store.refresh_lock(1.0):  # refresh.lock
+    async with rt.store.refresh_lock(1.0):  # accounts/x--constworks/refresh.lock
         pass
-    names = {"key", "tokens.enc", "client.json", "whoami.json", "writes.jsonl", "refresh.lock"}
+    names = {"key", "client.json", "accounts.json", "accounts.lock", "writes.jsonl", "accounts"}
     assert {p.name for p in paths.home.iterdir()} == names
-    for p in paths.home.iterdir():
-        assert stat.S_IMODE(os.stat(p).st_mode) == 0o600, p.name
-    assert stat.S_IMODE(os.stat(paths.home).st_mode) == 0o700
+    account_dir = rt.store.account_dir
+    assert {p.name for p in account_dir.iterdir()} == {"tokens.enc", "refresh.lock"}
+    for p in [*paths.home.iterdir(), *account_dir.iterdir()]:
+        want = 0o700 if p.is_dir() else 0o600
+        assert stat.S_IMODE(os.stat(p).st_mode) == want, p.name
+    for d in (paths.home, account_dir):
+        assert stat.S_IMODE(os.stat(d).st_mode) == 0o700
 
 
 def test_corrupt_key_is_a_structured_error_not_a_traceback(store, authed, paths):
@@ -221,7 +249,7 @@ async def test_login_waits_for_a_refresh_in_flight_and_wins(store, bundle, paths
     rotated = dataclasses.replace(bundle, access_token="access-rotated", refresh_token="r3")
     async with store.refresh_lock(5):
         assert store.load() == bundle  # the refresher's compare passes
-        login = threading.Thread(target=bind, args=(paths, "client-xyz", relogin))
+        login = threading.Thread(target=store.rebind, args=(relogin,))
         login.start()
         await asyncio.sleep(0.2)
         assert login.is_alive(), "login must wait for the refresh lock"
@@ -250,11 +278,11 @@ def test_login_gives_up_boundedly_when_the_lock_is_stuck(store, bundle, paths, m
 
     monkeypatch.setattr("pulsar.core.store.REFRESH_LOCK_WAIT_SECONDS", 0.2)
     store.save(bundle)
-    fd = os.open(paths.refresh_lock, os.O_RDWR | os.O_CREAT, 0o600)
+    fd = os.open(store.lock_file, os.O_RDWR | os.O_CREAT, 0o600)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
         with pytest.raises(PulsarError) as exc:
-            bind(paths, "client-xyz", bundle)
+            store.rebind(bundle)
         assert exc.value.code == "api_error"
     finally:
         os.close(fd)
@@ -271,7 +299,7 @@ def test_undecodable_bundle_is_auth_expired(store, authed, paths):
     key = paths.key_file.read_bytes().strip()
     from pulsar.core.fsutil import write_private_atomic
 
-    write_private_atomic(paths.token_file, F(key).encrypt(b'{"unexpected": 1}'))
+    write_private_atomic(store.token_file, F(key).encrypt(b'{"unexpected": 1}'))
     with pytest.raises(PulsarError) as exc:
         store.load()
     assert exc.value.code == "auth_expired"

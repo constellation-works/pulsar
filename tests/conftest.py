@@ -16,14 +16,34 @@ from urllib.parse import parse_qs
 import httpx
 import pytest
 
+from pulsar.core.accounts import Account, AccountRegistry
 from pulsar.core.paths import Paths
-from pulsar.core.store import TokenBundle, TokenStore
+from pulsar.core.store import FernetFileStore, TokenBundle, TokenStore
 
 ACCESS = "access-token-AAAA1111"
 REFRESH = "refresh-token-BBBB2222"
 ROTATED_ACCESS = "access-token-CCCC3333"
 ROTATED_REFRESH = "refresh-token-DDDD4444"
 SECRETS = (ACCESS, REFRESH, ROTATED_ACCESS, ROTATED_REFRESH)
+ALIAS = "x:constworks"
+
+
+def register(
+    paths: Paths,
+    bundle: TokenBundle | None = None,
+    alias: str = ALIAS,
+    **row: Any,
+) -> FernetFileStore:
+    """Bind ``alias`` the way a login leaves it, minus the browser: its bundle
+    under ``accounts/<slug>/`` and a registry row (unverified unless ``row``
+    names a handle and user id). Returns the account's store."""
+    store = FernetFileStore.for_account(paths, alias)
+    if bundle is not None:
+        store.save(bundle)
+        row.setdefault("binding_id", bundle.binding_id)
+        row.setdefault("scopes", tuple(bundle.scope.split()))
+    AccountRegistry(paths).put(Account(alias=alias, provider=alias.partition(":")[0], **row))
+    return store
 
 
 @pytest.fixture
@@ -40,7 +60,14 @@ def paths(tmp_path, monkeypatch) -> Paths:
 
 
 @pytest.fixture
-def store(paths) -> TokenStore:
+def store(paths) -> FernetFileStore:
+    """The default account's credential store (``accounts/x--constworks/``)."""
+    return FernetFileStore.for_account(paths, ALIAS)
+
+
+@pytest.fixture
+def legacy_store(paths) -> TokenStore:
+    """The phase 1 single-account store at the home root, for migration tests."""
     return TokenStore(paths)
 
 
@@ -56,8 +83,9 @@ def bundle() -> TokenBundle:
 
 
 @pytest.fixture
-def authed(store, bundle) -> TokenBundle:
-    store.save(bundle)
+def authed(paths, bundle) -> TokenBundle:
+    """``x:constworks`` bound, identity not yet looked up."""
+    register(paths, bundle)
     return bundle
 
 

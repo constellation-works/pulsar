@@ -19,15 +19,23 @@ leaves and settled after, so a repeat with the same idempotency key replays
 the receipt instead of posting (and paying) twice, and a write whose outcome
 is unknowable is reported as ``outcome_unknown`` rather than a retryable
 error.
+
+The account tools act as is resolved per call from the registry
+(``core/accounts.py``): the ``account`` argument, else the configured
+default. Before every write the bound handle is checked against the alias
+and ``expected_handle`` (``account_mismatch``), so a wrong token stored under
+the right name cannot post.
 """
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import logging
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Generator
+from dataclasses import replace
 from typing import Annotated, Any
 
 import httpx
@@ -36,12 +44,21 @@ from mcp.types import ToolAnnotations
 from pydantic import Field
 
 from .. import __version__
+from ..core.accounts import (
+    ACTIVE,
+    REAUTH_REQUIRED,
+    REVOKED,
+    Account,
+    AccountRegistry,
+    require_expected,
+)
+from ..core.adapter import Identity
 from ..core.errors import API_ERROR, INVALID_TEXT, AuthExpired, OutcomeUnknown, PulsarError
 from ..core.ledger import PUBLISHED, Ledger, check_key, default_key, request_digest
 from ..core.media import load_media
 from ..core.paths import Paths, default_paths
 from ..core.settings import Prices, Settings, load_settings
-from ..core.store import TokenStore, cached_identity, save_identity
+from ..core.store import FernetFileStore
 from ..core.writelog import WriteLog, resolve_caller, text_sha256
 from ..providers.x.client import MediaProcessingError, XClient, check_x_id
 from ..providers.x.text import validate_text
@@ -56,7 +73,8 @@ PUBLISHES = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempo
 DESTRUCTIVE = ToolAnnotations(read_only_hint=False, destructive_hint=True, idempotent_hint=True)
 
 INSTRUCTIONS = (
-    "pulsar posts to X as the account a human authorized on this host. "
+    "pulsar posts to X as the accounts a human bound on this host; pass `account` "
+    "(provider:handle) to pick one, or omit it for the operator's default. "
     "Call create_post only on explicit user intent in the current conversation "
     "or from a standing routine the owner enabled. Never pass credentials; there "
     "is no parameter for them. Use validate_post to check text before posting. "
@@ -87,8 +105,25 @@ IdempotencyKey = Annotated[
 ]
 
 
+AccountArg = Annotated[
+    str | None,
+    Field(
+        description=(
+            "Alias of a bound account, provider:handle (e.g. x:constworks). Default: "
+            "default_account from the operator's config, else the only bound account."
+        )
+    ),
+]
+
+
 class Runtime:
-    """Everything the tools need, built once per process (or per test)."""
+    """Everything the tools need, built once per process (or per test).
+
+    Accounts are resolved per call, not at start-up: a login, logout or
+    migration while the server runs takes effect on the next call. Each
+    account gets its own ``XClient`` over its own credential store, so
+    accounts refresh independently.
+    """
 
     def __init__(
         self,
@@ -100,25 +135,109 @@ class Runtime:
     ) -> None:
         self.paths = paths or default_paths()
         self.settings = settings or load_settings(self.paths)
-        self.store = TokenStore(self.paths)
-        self.client = XClient(self.store, transport=transport, **client_kwargs)
+        self.registry = AccountRegistry(self.paths)
         self.log = WriteLog(self.paths)
         self.ledger = Ledger(self.paths, export=self.log.export)
+        self._transport = transport
+        self._client_kwargs = client_kwargs
+        self._clients: dict[str, XClient] = {}
+        self._migrated = False
 
-    async def whoami(self, *, live: bool = False) -> dict[str, str]:
-        """The bound account: cached after the first call, from X when ``live``.
+    # -- accounts -----------------------------------------------------------
 
-        The cache is tagged with the binding it was looked up under, so a
-        lookup that raced a re-login is ignored rather than trusted.
+    def account(self, alias: str | None = None) -> Account:
+        """The account a call acts as (``AccountRegistry.resolve``).
+
+        The first call migrates a phase 1 single-account home, if there is one.
         """
-        bundle = self.store.load()
-        if bundle is None:
-            raise AuthExpired("no X authorization on this host; run `pulsar auth login`")
-        if not live and (cached := cached_identity(self.paths, bundle)) is not None:
-            return cached
-        me = await self.client.me()
-        save_identity(self.paths, bundle.binding_id, me)
-        return me
+        if not self._migrated:
+            self.registry.migrate_legacy(self.settings)
+            self._migrated = True
+        return self.registry.resolve(alias, self.settings)
+
+    def client_for(self, alias: str) -> XClient:
+        client = self._clients.get(alias)
+        if client is None:
+            client = XClient(
+                self.registry.store(alias), transport=self._transport, **self._client_kwargs
+            )
+            self._clients[alias] = client
+        return client
+
+    @property
+    def client(self) -> XClient:
+        """The default account's client."""
+        return self.client_for(self.account().alias)
+
+    @property
+    def store(self) -> FernetFileStore:
+        """The default account's credential store."""
+        return self.registry.store(self.account().alias)
+
+    async def aclose(self) -> None:
+        clients, self._clients = list(self._clients.values()), {}
+        for client in clients:
+            await client.aclose()
+
+    @contextlib.contextmanager
+    def watch_expiry(self, alias: str) -> Generator[None]:
+        """Mark ``alias`` ``reauth_required`` when what runs inside ends in ``auth_expired``."""
+        try:
+            yield
+        except AuthExpired:
+            row = self.registry.accounts().get(alias)
+            if row is not None and row.status == ACTIVE:
+                self.registry.mark_status(alias, REAUTH_REQUIRED)
+            raise
+
+    async def identity(self, alias: str | None = None, *, live: bool = False) -> Account:
+        """The account, with its identity trusted for the stored binding.
+
+        Read from the registry row while that row describes the stored
+        bundle's binding; otherwise (or when ``live``) asked of X and
+        recorded. A lookup that raced a re-login records the old binding, so
+        it is never trusted afterwards.
+        """
+        account = self.account(alias)
+        name = account.alias
+        with self.watch_expiry(name):
+            if account.status == REVOKED:
+                raise AuthExpired(
+                    f"{name} was logged out; a human runs `pulsar auth login --account {name}`"
+                )
+            client = self.client_for(name)
+            bundle = client.store.load()
+            if bundle is None:
+                raise AuthExpired(
+                    f"no credentials stored for {name}; a human runs "
+                    f"`pulsar auth login --account {name}`"
+                )
+            if not live and (trusted := self.registry.trusted_identity(account, bundle)):
+                return replace(
+                    account, handle=trusted.handle, provider_user_id=trusted.provider_user_id
+                )
+            me = await client.me()
+        found = Identity(provider_user_id=me["user_id"], handle=me["username"].lower())
+        self.registry.mark_verified(name, found, bundle.binding_id)
+        return replace(account, handle=found.handle, provider_user_id=found.provider_user_id)
+
+    async def whoami(self, alias: str | None = None, *, live: bool = False) -> dict[str, str]:
+        """``{user_id, username}`` of the account: cached after the first call."""
+        return _me(await self.identity(alias, live=live))
+
+    async def writer(self, alias: str | None) -> tuple[Account, XClient, dict[str, str]]:
+        """The account to write as, its client and ledger identity.
+
+        ``account_mismatch`` when the bound handle is not the alias's or the
+        configured ``expected_handle``: checked before every write.
+        """
+        account = await self.identity(alias)
+        require_expected(account, self.settings)
+        return account, self.client_for(account.alias), _me(account)
+
+
+def _me(account: Account) -> dict[str, str]:
+    return {"user_id": account.provider_user_id or "", "username": account.handle or ""}
 
 
 def _guarded(
@@ -172,14 +291,14 @@ def build_server(runtime: Runtime | None = None) -> MCPServer:
 
     @server.tool(
         description=(
-            "Return the X account this connector is bound to: {user_id, username}. "
-            "Local after the first call."
+            "Return the X account behind `account` (default: the operator's default "
+            "account): {user_id, username}. Local after the first call."
         ),
         annotations=READ_ONLY,
     )
     @_guarded
-    async def whoami() -> dict[str, Any]:
-        me = await rt.whoami()
+    async def whoami(account: AccountArg = None) -> dict[str, Any]:
+        me = await rt.whoami(account)
         return {"ok": True, **me}
 
     @server.tool(
@@ -200,7 +319,9 @@ def build_server(runtime: Runtime | None = None) -> MCPServer:
 
     @server.tool(
         description=(
-            "Create a post on X as the bound account. Requires explicit user intent in the "
+            "Create a post on X as `account` (default: the operator's default account); "
+            "refused with account_mismatch if its credentials belong to another handle. "
+            "Requires explicit user intent in the "
             "calling chat or an owner-enabled routine. Text is validated (<=280 weighted chars, "
             "no credential-looking strings) before any network call. Idempotent per "
             "idempotency_key: a repeat returns the stored receipt with replayed=true and does "
@@ -219,6 +340,7 @@ def build_server(runtime: Runtime | None = None) -> MCPServer:
         dry_run: bool = False,
         caller: Caller = None,
         idempotency_key: IdempotencyKey = None,
+        account: AccountArg = None,
     ) -> dict[str, Any]:
         validated = _validate(text, reply_to_post_id, quote_post_id, rt.settings.prices)
         media_ids = [check_x_id(m, "media_ids") for m in media_ids or []] or None
@@ -226,7 +348,7 @@ def build_server(runtime: Runtime | None = None) -> MCPServer:
         if dry_run:
             # Not a write: nothing reaches the ledger or writes.jsonl.
             return {**validated, "dry_run": True}
-        me = await rt.whoami()
+        acct, client, me = await rt.writer(account)
         digest = request_digest(
             "create_post",
             text=text,
@@ -251,17 +373,18 @@ def build_server(runtime: Runtime | None = None) -> MCPServer:
                 "text": text,
                 "replayed": True,
             }
-        created = await _settle_on_error(
-            rt,
-            key,
-            lambda: rt.client.create_post(
-                text,
-                reply_to_post_id=reply_to_post_id,
-                quote_post_id=quote_post_id,
-                media_ids=media_ids,
-            ),
-            ambiguous=True,
-        )
+        with rt.watch_expiry(acct.alias):
+            created = await _settle_on_error(
+                rt,
+                key,
+                lambda: client.create_post(
+                    text,
+                    reply_to_post_id=reply_to_post_id,
+                    quote_post_id=quote_post_id,
+                    media_ids=media_ids,
+                ),
+                ambiguous=True,
+            )
         url = f"https://x.com/{me['username']}/status/{created['post_id']}"
         _record_success(rt, key, post_id=created["post_id"], url=url)
         return {"ok": True, "post_id": created["post_id"], "url": url, "text": created["text"]}
@@ -274,6 +397,7 @@ def build_server(runtime: Runtime | None = None) -> MCPServer:
             "server's cwd; refused as invalid_config when no roots are set) or `base64`. "
             "The type is sniffed from the content; a `mime` or extension that "
             "disagrees is refused. Video waits for X processing to succeed. Returns {media_id}. "
+            "Upload as the same `account` that will post the media. "
             "`caller` is an advisory audit label, not identity."
         ),
         annotations=PUBLISHES,
@@ -284,11 +408,12 @@ def build_server(runtime: Runtime | None = None) -> MCPServer:
         base64: str | None = None,
         mime: str | None = None,
         caller: Caller = None,
+        account: AccountArg = None,
     ) -> dict[str, Any]:
         data, resolved_mime = load_media(
             path, base64, mime, roots=rt.settings.media_roots, deny=(rt.paths.home,)
         )
-        me = await rt.whoami()
+        acct, client, me = await rt.writer(account)
         facts = {"mime": resolved_mime, "bytes": len(data)}
         # Uploads are not deduplicated: an orphaned media id is harmless and
         # expires, so every call is its own ledger row.
@@ -301,24 +426,25 @@ def build_server(runtime: Runtime | None = None) -> MCPServer:
             caller=resolve_caller(caller),
             meta=facts,
         )
-        media_id, processing_state = await _settle_on_error(
-            rt,
-            key,
-            lambda: rt.client.upload_media(data, resolved_mime),
-            ambiguous=False,
-            error_meta=lambda exc: {
-                "processing_state": (
-                    exc.processing_state if isinstance(exc, MediaProcessingError) else "error"
-                )
-            },
-        )
+        with rt.watch_expiry(acct.alias):
+            media_id, processing_state = await _settle_on_error(
+                rt,
+                key,
+                lambda: client.upload_media(data, resolved_mime),
+                ambiguous=False,
+                error_meta=lambda exc: {
+                    "processing_state": (
+                        exc.processing_state if isinstance(exc, MediaProcessingError) else "error"
+                    )
+                },
+            )
         _record_success(rt, key, media_id=media_id, meta={"processing_state": processing_state})
         return {"ok": True, "media_id": media_id, "mime": resolved_mime, "bytes": len(data)}
 
     @server.tool(
         description=(
-            "Delete a post by its numeric X id. Only posts made by the bound account can be "
-            "deleted. "
+            "Delete a post by its numeric X id, as `account` (default: the operator's default "
+            "account); only that account's own posts can be deleted. "
             "Repeating a delete that already succeeded returns the stored receipt "
             "(replayed: true). `caller` is an advisory audit label, not identity."
         ),
@@ -326,11 +452,14 @@ def build_server(runtime: Runtime | None = None) -> MCPServer:
     )
     @_guarded
     async def delete_post(
-        post_id: str, caller: Caller = None, idempotency_key: IdempotencyKey = None
+        post_id: str,
+        caller: Caller = None,
+        idempotency_key: IdempotencyKey = None,
+        account: AccountArg = None,
     ) -> dict[str, Any]:
         post_id = check_x_id(post_id, "post_id")
         key = check_key(idempotency_key) or f"delete:{post_id}"
-        me = await rt.whoami()
+        acct, client, me = await rt.writer(account)
         record = rt.ledger.claim(
             key=key,
             tool="delete_post",
@@ -342,9 +471,10 @@ def build_server(runtime: Runtime | None = None) -> MCPServer:
             deleted = record.meta.get("deleted", True)
             return {"ok": True, "post_id": post_id, "deleted": deleted, "replayed": True}
         # DELETE is idempotent at X, so transport failures stay retryable.
-        deleted = await _settle_on_error(
-            rt, key, lambda: rt.client.delete_post(post_id), ambiguous=False
-        )
+        with rt.watch_expiry(acct.alias):
+            deleted = await _settle_on_error(
+                rt, key, lambda: client.delete_post(post_id), ambiguous=False
+            )
         _record_success(rt, key, post_id=post_id, meta={"deleted": deleted})
         return {"ok": True, "post_id": post_id, "deleted": deleted}
 

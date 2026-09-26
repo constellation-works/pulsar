@@ -1,10 +1,11 @@
 # pulsar
 
 **pulsar** is an X (Twitter) write connector: a small MCP server that lets an
-agent (an Orbit routine, a Claude or Codex session, a bot) post as **whichever
-X account a human authorized on the host** — without a browser login or a
-Bearer token pasted into chat. One connector instance is bound to one account;
-run a second instance with its own `PULSAR_HOME` to post as another.
+agent (an Orbit routine, a Claude or Codex session, a bot) post as **the X
+accounts a human bound on the host** — without a browser login or a Bearer
+token pasted into chat. One pulsar home holds several accounts, each named by
+an alias (`x:constworks`); a call picks one with `account`, or gets the
+operator's default.
 
 Auth belongs to the connector process, never to the agent. pulsar holds an
 OAuth 2.0 user token (PKCE, `tweet.read tweet.write users.read offline.access`),
@@ -25,46 +26,87 @@ uv sync
 
 1. In the X developer portal, create an app with **OAuth 2.0** enabled, type
    *Native app* (public client, PKCE), callback `http://127.0.0.1:8976/callback`.
-2. Run the login flow on the host that will run the connector:
+2. Bind each account on the host that will run the connector, naming it
+   first:
 
    ```sh
-   uv run pulsar auth login --client-id <CLIENT_ID>
+   uv run pulsar auth login --account x:constworks --client-id <CLIENT_ID>
+   uv run pulsar auth login --account x:otherhandle     # client id is remembered
    ```
 
-   A browser opens, you approve as the account that should post, and pulsar
-   stores the token bundle encrypted under `~/.config/pulsar/` (override with
-   `PULSAR_HOME`).
-3. Check the binding:
+   A browser opens and you approve as that account. Before anything is
+   stored, pulsar asks X (`GET /2/users/me`) whom the new token belongs to. If
+   the handle is not the alias's (`constworks` for `x:constworks`), or not the
+   configured `expected_handle`, the login is refused with `account_mismatch`
+   naming both handles, nothing is written, and it exits 1 — log out of X in
+   the browser and approve as the right account. This replaces the manual
+   "make sure it is @constworks" step: on 2026-09-16 posts went to the wrong
+   account because the wrong token had been stored. `--account` defaults to
+   `default_account` from the config.
+
+   Tokens are stored encrypted under `~/.config/pulsar/` (override with
+   `PULSAR_HOME`): one bundle per account in `accounts/<provider>--<handle>/`,
+   one `key` for all of them, the X app's client id in `client.json` (one per
+   provider), and the account registry in `accounts.json` (alias, provider
+   user id, handle, scopes, `status` = `active` | `reauth_required` |
+   `revoked`, `bound_at`, `binding_id`, `verified_at`; no secrets).
+3. Check the bindings:
 
    ```sh
-   uv run pulsar auth status            # cached account, no X call once cached
-   uv run pulsar auth status --live     # prove it: forced refresh + GET /2/users/me
-   uv run pulsar auth status --offline  # stored state only, never calls X
+   uv run pulsar auth status                        # every account, cached, no X call once cached
+   uv run pulsar auth status --account x:constworks # just one
+   uv run pulsar auth status --live                 # prove each: forced refresh + GET /2/users/me
+   uv run pulsar auth status --offline              # stored state only, never calls X
    ```
 
-   The default reads `whoami.json`, so it names the account even when the
-   refresh token is already dead; it says so (`verified: false` and a `note`,
-   `token_state: expired` when the access token has lapsed). `--live` is the
-   proof: it rotates the token pair through the refresh lock, fetches the
-   account from X, and rewrites the cache. It costs one `/users/me` read.
-   The cache is tagged with the login it describes (a `binding_id` minted by
+   It prints one entry per account under `accounts`, each with `alias`,
+   `status`, `expected_handle`, `mismatch` (the bound handle is not the
+   expected one; `null` while unknown), `token_state`, `account`,
+   `account_source`, `verified`, `reauth_required`, `healthy` and a `note`
+   when unproven, and exits 0 only when every reported account is healthy.
+   The default reads each account's identity from the registry, so it names
+   the account even when the refresh token is already dead; it says so
+   (`verified: false` and a `note`, `token_state: expired` when the access
+   token has lapsed). `--live` is the proof: it rotates each account's token
+   pair through that account's refresh lock, fetches the account from X, and
+   rewrites the registry row. It costs one `/users/me` read per account. The
+   row is tagged with the login it describes (a `binding_id` minted by
    `auth login` and carried across refreshes), so after a re-login it is
    ignored until `/users/me` has been asked again, even if a lookup started
    before the re-login finishes after it.
+4. `uv run pulsar auth logout --account x:constworks` deletes that account's
+   tokens (under its refresh lock); its registry row stays, `status: revoked`,
+   for history.
 
 Refresh happens automatically. When a refresh fails (token revoked, app reset),
-tools return `auth_expired` and a human re-runs `auth login`.
+tools return `auth_expired`, the account is marked `reauth_required` in the
+registry, and a human re-runs `auth login --account …` (or `auth status --live`
+once the refresh works again).
+
+**Upgrading from the single-account layout.** A home from before accounts
+existed has `tokens.enc` and `whoami.json` at its root. The first pulsar
+command or tool call moves the bundle to `accounts/x--<handle>/` as
+`default_account` if one is configured, else as `x:<username>` from a
+`whoami.json` that describes the stored login. If neither names it, the bundle
+stays put and every call says `legacy credentials need an alias: run
+\`pulsar auth migrate --account x:<handle>\``. A cached identity that
+contradicts the alias is `account_mismatch` and moves nothing, and migration
+never overwrites an account that already has credentials. The move holds the
+old root refresh lock, renames the bundle, then writes the registry row, then
+removes `whoami.json`; re-running after a crash at any step finishes the job.
 
 Several pulsar processes may share one home (a stdio server per client, plus
-`auth status`). X rotates the refresh token on every use, so refreshes are
-serialised across processes with an exclusive `flock` on `refresh.lock`: the
-first process refreshes, the others wait (up to 45 s, then `api_error`) and
-reuse the bundle it saved. If X still rejects a refresh token because a
-process that ignores the lock (an older pulsar mid-upgrade) rotated it first,
-pulsar re-reads the store and uses the newer bundle instead of reporting
-`auth_expired`. `auth login` and `auth logout` take the same lock, so a
-refresh already in flight can never write the previous account's rotated
-tokens over a new login, or back after a logout.
+`auth status`). X rotates the refresh token on every use, so each account's
+refreshes are serialised across processes with an exclusive `flock` on its
+`accounts/<slug>/refresh.lock`: the first process refreshes, the others wait
+(up to 45 s, then `api_error`) and reuse the bundle it saved. Accounts do not
+wait for each other. If X still rejects a refresh token because a process that
+ignores the lock (an older pulsar mid-upgrade) rotated it first, pulsar
+re-reads the store and uses the newer bundle instead of reporting
+`auth_expired`. `auth login` and `auth logout` take the same per-account lock
+(and update the registry before releasing it), so a refresh already in flight
+can never write the previous account's rotated tokens over a new login, or
+back after a logout.
 
 ## Configuration
 
@@ -73,7 +115,7 @@ unknown key or bad value fails with `invalid_config` rather than silently
 falling back:
 
 ```toml
-default_account = "x:constworks"     # used when a call names no account
+default_account = "x:constworks"     # the account a call without `account` acts as
 
 [accounts."x:constworks"]
 expected_handle = "constworks"       # bound handle must match, else account_mismatch
@@ -94,10 +136,20 @@ roots = ["~/workspace/constellation/marketing"]   # default: none (path uploads 
 ```
 
 Account aliases are `provider:handle` and case-insensitive (`X:@ConstWorks`
-is `x:constworks`). A provider with no `[prices.<provider>]` table is priced
-at zero. The `[accounts]`, `[policy]` and `default_account` keys are parsed
-and validated now; the plan publisher that enforces them is landing in
-phase 2 (ORB-13028), and this section will say so when it does.
+is `x:constworks`); the handle may use `a-z 0-9 . _ -` (no leading dot, at
+most 100 characters), anything else is `invalid_argument`. A provider with no
+`[prices.<provider>]` table is priced at zero.
+
+`default_account` and `expected_handle` are enforced. A call that names no
+`account` acts as `default_account`, else as the only bound (not revoked)
+account; with several bound and no default it is `invalid_argument` ("several
+accounts are bound; name one"), and an alias that is not registered is
+`unknown_account` (the message lists the known ones). Before every write, and
+at login, the handle the credentials belong to must equal the alias's handle
+and, if set, `expected_handle`; otherwise `account_mismatch` with `detail:
+{alias, expected_handle, bound_handle}` and nothing is sent. The `[policy]`
+keys are parsed and validated now; the plan publisher that enforces them is
+landing in phase 2 (ORB-13028), and this section will say so when it does.
 
 Policy (`pulsar.core.policy`) is checked before any network call, against
 what the ledger has committed (in-flight, published or unknown-outcome posts;
@@ -150,7 +202,7 @@ claude mcp add pulsar -- uv --directory /path/to/pulsar run pulsar serve
 
 | Tool | Annotation | X endpoint | Notes |
 |---|---|---|---|
-| `whoami` | read-only | `GET /2/users/me` | cached; `{user_id, username}` of the bound account |
+| `whoami` | read-only | `GET /2/users/me` | optional `account`; cached; `{user_id, username}` of that account |
 | `validate_post` | read-only | — | `text`, optional `reply_to_post_id`, `quote_post_id`; no network, no log |
 | `create_post` | publishes | `POST /2/tweets` | `text`, optional `reply_to_post_id`, `quote_post_id`, `media_ids`, `idempotency_key`, `dry_run` (legacy) |
 | `upload_media` | publishes | `POST /2/media/upload/initialize` → `/{id}/append` → `/{id}/finalize`; `GET /2/media/upload` for video status | png/jpeg/gif/webp images ≤5 MiB or MP4 video (`video/mp4`) ≤100 MiB; `path` (a regular file inside `media.roots`) or `base64`, optional `mime` (must match the sniffed content) → `{media_id}` after video processing succeeds |
@@ -161,6 +213,12 @@ estimated_cost_usd}` without touching the network. `create_post` returns
 `{ok: true, post_id, url, text}`; `dry_run: true` returns what `validate_post`
 does plus `dry_run: true`, and is kept for callers that predate `validate_post`;
 a dry run is not a write and records nothing.
+`whoami`, `create_post`, `upload_media` and `delete_post` take an optional
+`account` (an alias such as `x:constworks`; default: `default_account`, else
+the only bound account — see [Configuration](#configuration)); upload media
+as the account that will post it. Before a write the account's bound handle
+is checked (`account_mismatch`), and the ledger row records that account's
+user id and handle.
 Every writing tool takes an optional `caller` (agent id) for the ledger;
 `PULSAR_CALLER` in the server's environment is the fallback. `caller` is
 **advisory**: a self-asserted audit label, not an identity pulsar verifies.
@@ -171,7 +229,7 @@ Every post costs money and X has no idempotency key of its own, so pulsar
 keeps one. `create_post` takes an optional `idempotency_key` (1–200
 characters, no whitespace or control characters); without one, the key is
 derived from the request (text, `reply_to_post_id`, `quote_post_id`,
-`media_ids`) and the bound account's user id. The key is recorded in the
+`media_ids`) and the posting account's user id. The key is recorded in the
 [ledger](#the-ledger) *before* the request is sent. Calling again with the same
 key:
 
@@ -237,11 +295,13 @@ succeed (`rate_limited`, `api_error`):
 
 | code | meaning | what to do |
 |---|---|---|
-| `auth_expired` | no token, or refresh failed (revoked / app reset) | stop; a human runs `pulsar auth login` |
-| `insecure_storage` | the pulsar home is wider than 0700, or `key` / `tokens.enc` wider than 0600 or not owned by the server's user | stop; a human runs the `chmod` in `message` (also `detail.fix`) — not a re-login |
-| `invalid_config` | `config.toml` has an unknown key or a bad value (including a media root that is `/`, `~` or above it), the ledger is from a newer pulsar, or a `path` upload with no `media.roots` configured | fix the file named in `message`; for uploads, pass `base64` or have the operator set roots |
+| `auth_expired` | no account bound, the account was logged out, no token, or refresh failed (revoked / app reset; the account is then `reauth_required`), or legacy credentials that need `pulsar auth migrate` | stop; a human runs what `message` says (`pulsar auth login --account …`) |
+| `account_mismatch` | the account's credentials belong to another handle than its alias's or the configured `expected_handle` (`detail: {alias, expected_handle, bound_handle}`); nothing was sent | stop; a human re-runs `pulsar auth login --account …` as the right account |
+| `unknown_account` | `account` (or `default_account`) names an alias that is not registered; `detail.known` lists the ones that are | use a known alias, or have a human bind it |
+| `insecure_storage` | the pulsar home or an account directory is wider than 0700, or `key` / `tokens.enc` / `accounts.json` wider than 0600 or not owned by the server's user | stop; a human runs the `chmod` in `message` (also `detail.fix`) — not a re-login |
+| `invalid_config` | `config.toml` has an unknown key or a bad value (including a media root that is `/`, `~` or above it), `accounts.json` is unreadable, the ledger is from a newer pulsar, or a `path` upload with no `media.roots` configured | fix the file named in `message`; for uploads, pass `base64` or have the operator set roots |
 | `invalid_text` | empty, over 280 weighted chars, control chars, reply+quote together | rewrite |
-| `invalid_argument` | malformed `idempotency_key`, or a `post_id` / `reply_to_post_id` / `quote_post_id` / `media_ids` entry that is not a 1–19 digit X id | fix the argument |
+| `invalid_argument` | malformed `idempotency_key` or `account` alias, no `account` while several are bound and none is the default, or a `post_id` / `reply_to_post_id` / `quote_post_id` / `media_ids` entry that is not a 1–19 digit X id | fix the argument |
 | `secret_detected` | text (or media, or `idempotency_key`) matches a credential pattern | rewrite; never retry verbatim |
 | `invalid_media` | bad path/base64, path outside `media.roots` or not a regular file, content that is not png/jpeg/gif/webp/mp4 or does not match the declared/extension MIME (`detail: {declared, sniffed}`), oversized media, or failed/timed-out video processing | fix the input or inspect X's processing detail |
 | `duplicate` / `forbidden` / `rate_limited` / `not_found` | X's reason, passed through in `detail` | duplicate: change text; rate_limited: wait |
@@ -319,7 +379,13 @@ authenticates it.
 ### Safety
 
 - No tool accepts a token, key, or secret argument. Credentials never cross the
-  MCP boundary in either direction.
+  MCP boundary in either direction. The `account` argument is an alias; it
+  selects stored credentials, it never carries them.
+- An account posts only as the handle it is named for. `auth login` checks
+  the new token's owner with X before storing it, and every write re-checks
+  the bound handle against the alias and `expected_handle`
+  (`account_mismatch`, nothing sent). Aliases map to directory names by a
+  strict, injective rule, so an alias cannot name a path outside `accounts/`.
 - Every live write goes through the ledger (below) and ends as a line in
   `writes.jsonl`. Validation and dry runs are not writes and record nothing.
 - Text that looks like a secret (`sk-…`, `ghp_…`, `github_pat_…`, `xoxb-…`,
@@ -331,16 +397,19 @@ authenticates it.
   calling chat, or from a standing routine the owner enabled. The connector
   cannot verify intent; that rule lives with the caller (and is repeated in the
   tool description and server instructions).
-- Encrypted-at-rest means Fernet with a key file beside the bundle (both 0600,
-  directory 0700). Saves are atomic (temp file, `fsync`, rename), so a crash
+- Encrypted-at-rest means Fernet with one key file for all accounts at the
+  home root and each account's bundle in its own directory (files 0600,
+  directories 0700). Saves are atomic (temp file, `fsync`, rename), so a crash
   mid-refresh never destroys the only refresh token, and concurrent first
   saves agree on one key. Every file pulsar creates in its home — `key`,
-  `tokens.enc`, `client.json`, `whoami.json`, `writes.jsonl`, `refresh.lock` —
-  is 0600 regardless of umask.
+  `client.json`, `accounts.json`, `accounts.lock`, `writes.jsonl`, the
+  ledger, and each `accounts/<slug>/tokens.enc` and `refresh.lock` — is 0600
+  regardless of umask, and `accounts/` and every account directory are 0700.
 - What that protects against: the bundle leaking in plaintext through
   backups, `cat`/`grep` over the home, a stray commit, or another local user.
-  pulsar refuses to load or save credentials when the home is wider than
-  0700, or `key`/`tokens.enc` wider than 0600 or owned by another uid
+  pulsar refuses to load or save credentials when the home or an account
+  directory is wider than 0700, or `key`/`tokens.enc` wider than 0600 or
+  owned by another uid
   (`insecure_storage`, with the exact `chmod` fix), rather than use a token
   others could have copied. Nothing writes into a home that already exists
   wider than 0700 either, and pulsar never narrows one silently: how long it
@@ -442,7 +511,7 @@ make check     # ruff lint + format check + basedpyright strict + pytest (no net
 Layout:
 
 ```text
-src/pulsar/core/          provider-neutral: plan, ledger, policy, credential store,
+src/pulsar/core/          provider-neutral: plan, ledger, policy, account registry, credential store,
                           media confinement, secret scanner, settings, errors (no HTTP)
 src/pulsar/providers/x/   X: OAuth 2.0 PKCE flow, v2 API client, text rules, limits
 src/pulsar/surfaces/      front ends: mcp.py (standalone MCP server), cli.py

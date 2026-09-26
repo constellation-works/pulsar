@@ -14,7 +14,14 @@ from pulsar.core.paths import Paths
 from pulsar.core.store import TokenBundle, TokenStore
 from pulsar.providers.x.client import MediaProcessingError, XClient
 
-from .conftest import ACCESS, REFRESH, ROTATED_ACCESS, ROTATED_REFRESH, RotatingTokenEndpoint
+from .conftest import (
+    ACCESS,
+    ALIAS,
+    REFRESH,
+    ROTATED_ACCESS,
+    ROTATED_REFRESH,
+    RotatingTokenEndpoint,
+)
 
 pytestmark = pytest.mark.anyio
 
@@ -248,9 +255,12 @@ def _expired(bundle):
 
 
 async def test_two_clients_on_one_home_refresh_once(paths, bundle, token_endpoint):
-    TokenStore(paths).save(_expired(bundle))
+    TokenStore.for_account(paths, ALIAS).save(_expired(bundle))
     token_endpoint.delay = 0.2  # the first refresher holds the lock across this
-    clients = [XClient(TokenStore(paths), transport=token_endpoint.transport()) for _ in range(2)]
+    clients = [
+        XClient(TokenStore.for_account(paths, ALIAS), transport=token_endpoint.transport())
+        for _ in range(2)
+    ]
     try:
         tokens = await asyncio.gather(*(c.access_token() for c in clients))
     finally:
@@ -258,13 +268,15 @@ async def test_two_clients_on_one_home_refresh_once(paths, bundle, token_endpoin
             await c.aclose()
     assert token_endpoint.calls() == 1
     assert tokens == ["access-gen1-YYYY", "access-gen1-YYYY"]
-    assert TokenStore(paths).load().refresh_token == "refresh-gen1-ZZZZ"
+    assert TokenStore.for_account(paths, ALIAS).load().refresh_token == "refresh-gen1-ZZZZ"
 
 
 def _refresh_in_child(home, state_file, barrier, results):
     async def run():
         endpoint = RotatingTokenEndpoint(state_file, delay=0.3)
-        client = XClient(TokenStore(Paths(Path(home))), transport=endpoint.transport())
+        client = XClient(
+            TokenStore.for_account(Paths(Path(home)), ALIAS), transport=endpoint.transport()
+        )
         try:
             return await client.access_token()
         finally:
@@ -278,7 +290,7 @@ def _refresh_in_child(home, state_file, barrier, results):
 
 
 async def test_two_processes_on_one_home_refresh_once(paths, bundle, token_endpoint):
-    TokenStore(paths).save(_expired(bundle))
+    TokenStore.for_account(paths, ALIAS).save(_expired(bundle))
     ctx = multiprocessing.get_context("spawn")
     barrier, results = ctx.Barrier(2), ctx.Queue()
     procs = [
@@ -300,8 +312,8 @@ async def test_two_processes_on_one_home_refresh_once(paths, bundle, token_endpo
 
 async def test_refresh_waits_boundedly_for_the_lock(paths, authed, token_endpoint, monkeypatch):
     monkeypatch.setattr("pulsar.providers.x.client.REFRESH_LOCK_WAIT_SECONDS", 0.2)
-    client = XClient(TokenStore(paths), transport=token_endpoint.transport())
-    fd = os.open(paths.refresh_lock, os.O_RDWR | os.O_CREAT, 0o600)
+    client = XClient(TokenStore.for_account(paths, ALIAS), transport=token_endpoint.transport())
+    fd = os.open(TokenStore.for_account(paths, ALIAS).lock_file, os.O_RDWR | os.O_CREAT, 0o600)
     fcntl.flock(fd, fcntl.LOCK_EX)  # another process mid-refresh, and stuck
     try:
         with pytest.raises(PulsarError) as exc:
@@ -317,7 +329,7 @@ async def test_refresh_waits_boundedly_for_the_lock(paths, authed, token_endpoin
 async def test_rejected_refresh_uses_newer_bundle_from_a_lockless_process(
     paths, bundle, token_endpoint
 ):
-    store = TokenStore(paths)
+    store = TokenStore.for_account(paths, ALIAS)
     store.save(_expired(bundle))
 
     async def rogue_rotates_first(request):
@@ -339,7 +351,7 @@ async def test_rejected_refresh_uses_newer_bundle_from_a_lockless_process(
 async def test_rejected_refresh_retries_with_newer_but_expiring_bundle(
     paths, bundle, token_endpoint
 ):
-    store = TokenStore(paths)
+    store = TokenStore.for_account(paths, ALIAS)
     store.save(_expired(bundle))
 
     async def rogue_rotates_first(request):
@@ -357,7 +369,7 @@ async def test_rejected_refresh_retries_with_newer_but_expiring_bundle(
 
 
 async def test_genuinely_revoked_refresh_token_is_auth_expired(paths, bundle, token_endpoint):
-    store = TokenStore(paths)
+    store = TokenStore.for_account(paths, ALIAS)
     store.save(_expired(bundle))
     token_endpoint.rotate(REFRESH, count=False)  # spent elsewhere; nothing newer saved here
     client = XClient(store, transport=token_endpoint.transport())
@@ -371,7 +383,7 @@ async def test_genuinely_revoked_refresh_token_is_auth_expired(paths, bundle, to
 
 
 async def test_refresh_does_not_clobber_a_concurrent_login(paths, bundle, token_endpoint):
-    store = TokenStore(paths)
+    store = TokenStore.for_account(paths, ALIAS)
     store.save(_expired(bundle))
     relogin = TokenBundle(
         access_token="access-relogin-QQQQ",
@@ -395,8 +407,8 @@ async def test_refresh_does_not_clobber_a_concurrent_login(paths, bundle, token_
 
 
 async def test_insecure_storage_is_not_auth_expired(paths, authed, fake_x):
-    os.chmod(paths.token_file, 0o644)
-    client = XClient(TokenStore(paths), transport=fake_x.transport())
+    os.chmod(TokenStore.for_account(paths, ALIAS).token_file, 0o644)
+    client = XClient(TokenStore.for_account(paths, ALIAS), transport=fake_x.transport())
     try:
         with pytest.raises(PulsarError) as exc:
             await client.me()
@@ -503,7 +515,7 @@ async def test_401_after_another_process_rotated_retries_without_refreshing(stor
 
 
 async def test_refresh_carries_the_binding_forward(paths, bundle, fake_x):
-    store = TokenStore(paths)
+    store = TokenStore.for_account(paths, ALIAS)
     bound = store.rebind(_expired(bundle))
     client = XClient(store, transport=fake_x.transport())
     try:

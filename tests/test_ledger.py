@@ -67,7 +67,7 @@ async def open_session(rt: Runtime):
 async def rt(paths, flaky_x):
     runtime = Runtime(paths, transport=flaky_x.transport())
     yield runtime
-    await runtime.client.aclose()
+    await runtime.aclose()
 
 
 @pytest.fixture
@@ -252,7 +252,7 @@ async def test_crash_mid_post_leaves_a_submitting_row(paths, authed, flaky_x):
         async with open_session(rt) as s:
             out = await call(s, "create_post", {"text": "lost", "idempotency_key": "k-crash"})
     finally:
-        await rt.client.aclose()
+        await rt.aclose()
     assert out["code"] == OUTCOME_UNKNOWN and out["detail"]["state"] == SUBMITTING
     assert flaky_x.posts() == []
 
@@ -288,7 +288,7 @@ async def test_ledger_survives_a_new_runtime(paths, authed, flaky_x):
             async with open_session(rt) as s:
                 out = await call(s, "create_post", args)
         finally:
-            await rt.client.aclose()
+            await rt.aclose()
         assert out["ok"] is True and out.get("replayed", False) is expected_replay
     assert len(flaky_x.posts()) == 1
 
@@ -315,8 +315,8 @@ async def test_two_runtimes_on_one_home_cannot_both_post(paths, authed, flaky_x)
                 flaky_x.tweet_gate.set()
             results["third"] = await call(s2, "create_post", args)
     finally:
-        await rt1.client.aclose()
-        await rt2.client.aclose()
+        await rt1.aclose()
+        await rt2.aclose()
     assert results["second"]["code"] == OUTCOME_UNKNOWN
     assert results["second"]["detail"]["state"] == SUBMITTING
     assert results["first"]["ok"] is True
