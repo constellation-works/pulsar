@@ -1,0 +1,116 @@
+"""The write ledger: one SQLite row per logical write, committed before it leaves.
+
+Every post costs money and X has no idempotency key of its own, so pulsar
+keeps one. A write is *claimed* — its row committed — before any request goes
+out, and *settled* afterwards. The single-request API (``claim`` / ``publish``
+/ ``fail``, used by the legacy tools) has three outcomes:
+
+    submitting ──> published   X confirmed; later calls with the key replay it
+               ├─> failed      X or the network proved nothing happened; retry allowed
+               └─> unknown     the request may have reached X; never re-sent
+
+The plan API (``claim_plan`` ... ``finish``) records a thread: one ``writes``
+row per plan and account, and one ``items`` row per post of the thread::
+
+    row:  pending ──> submitting ──> published | partial | failed | unknown
+          skipped     (a recorded decision never to publish the key)
+    item: pending ──> submitting ──> published | failed | unknown
+
+``begin_item`` moves one item ``pending -> submitting`` as a compare-and-set
+before its request leaves, so two callers holding the same pending row can
+never both send it. ``finish`` derives the row state from its items. A
+``partial`` thread (some posts published, the rest definitively not) resumes
+after its last published post when it is claimed again; an ``unknown`` one
+blocks until reconcile settles each ambiguous item with ``settle``.
+
+A crash, a cancelled call or a timeout therefore leaves a row behind instead
+of nothing, and a second call with the same key cannot post twice: it gets
+the stored receipt, an ``idempotency_conflict``, or ``outcome_unknown``.
+
+The file is SQLite in WAL mode, created 0600 before SQLite opens it, and
+opened per operation with a busy timeout so several pulsar processes can
+share one home. ``PRAGMA user_version`` carries the schema version and
+``schema.MIGRATIONS`` brings an older file up to date in place.
+
+The ledger stores hashes and ids only: never post text, media bytes or
+credentials.
+
+``writes.jsonl`` is an export: every terminal transition appends one line
+there through ``WriteLog.export``. The ledger is the source of truth.
+
+Layout: ``records`` (states and row values), ``keys`` (idempotency keys and
+digests), ``schema`` (DDL, migrations, transactions), ``queries`` (reads),
+``single`` (the legacy single-request API), ``plans`` (the plan API),
+``imports`` (historic rows) and ``facade`` (``Ledger``, which owns the
+connection). Import from this package, not from the modules.
+"""
+
+from __future__ import annotations
+
+from .facade import Export, Ledger
+from .keys import MAX_KEY_LENGTH, check_key, check_note, default_key, request_digest
+from .records import (
+    COMMITTED_ITEM_STATES,
+    FAILED,
+    FINISHED_STATES,
+    IMPORT_TOOL,
+    ITEM_STATES,
+    LEGACY_ITEM_TOOLS,
+    LEGACY_PROVIDER,
+    OPEN_ROW_STATES,
+    PARTIAL,
+    PENDING,
+    PUBLISHED,
+    RESOLVED_ABSENT,
+    ROW_STATES,
+    SKIP_TOOL,
+    SKIPPED,
+    SUBMITTING,
+    TERMINAL_STATES,
+    UNKNOWN,
+    AccountRef,
+    ItemIntent,
+    ItemRecord,
+    PlanRecord,
+    WriteRecord,
+    derive_state,
+    parse_ts,
+)
+from .schema import BUSY_TIMEOUT_MS, SCHEMA_VERSION
+
+__all__ = [
+    "BUSY_TIMEOUT_MS",
+    "COMMITTED_ITEM_STATES",
+    "FAILED",
+    "FINISHED_STATES",
+    "IMPORT_TOOL",
+    "ITEM_STATES",
+    "LEGACY_ITEM_TOOLS",
+    "LEGACY_PROVIDER",
+    "MAX_KEY_LENGTH",
+    "OPEN_ROW_STATES",
+    "PARTIAL",
+    "PENDING",
+    "PUBLISHED",
+    "RESOLVED_ABSENT",
+    "ROW_STATES",
+    "SCHEMA_VERSION",
+    "SKIP_TOOL",
+    "SKIPPED",
+    "SUBMITTING",
+    "TERMINAL_STATES",
+    "UNKNOWN",
+    "AccountRef",
+    "Export",
+    "ItemIntent",
+    "ItemRecord",
+    "Ledger",
+    "PlanRecord",
+    "WriteRecord",
+    "check_key",
+    "check_note",
+    "default_key",
+    "derive_state",
+    "parse_ts",
+    "request_digest",
+]

@@ -23,10 +23,9 @@ import pytest
 from mcp.client._memory import InMemoryTransport
 from mcp.client.session import ClientSession
 
-import pulsar.core.ledger as ledger_mod
+import pulsar.core.ledger.facade as facade_mod
 from pulsar.core.errors import OUTCOME_UNKNOWN, OutcomeUnknown, PulsarError
 from pulsar.core.ledger import (
-    _SCHEMA_V1,
     FAILED,
     PARTIAL,
     PENDING,
@@ -41,6 +40,8 @@ from pulsar.core.ledger import (
     Ledger,
     request_digest,
 )
+from pulsar.core.ledger.records import iso
+from pulsar.core.ledger.schema import SCHEMA_V1
 from pulsar.core.paths import Paths
 from pulsar.core.usage import Usage
 from pulsar.core.writelog import WriteLog
@@ -498,7 +499,7 @@ def states(record):
 def clock(monkeypatch):
     """The ledger's clock, settable: ``clock[0] = datetime(...)``."""
     now = [datetime(2026, 9, 26, 12, 0, tzinfo=UTC)]
-    monkeypatch.setattr(ledger_mod, "_now", lambda: ledger_mod._iso(now[0]))
+    monkeypatch.setattr(facade_mod, "_now", lambda: iso(now[0]))
     return now
 
 
@@ -517,7 +518,7 @@ def build_v1_ledger(paths) -> None:
     """A database exactly as the v1 code path left it, with one row per shape."""
     paths.ensure()
     conn = sqlite3.connect(paths.ledger_db)
-    conn.executescript(_SCHEMA_V1)
+    conn.executescript(SCHEMA_V1)
     conn.execute("PRAGMA user_version = 1")
     rows = [
         ("k-pub", "create_post", "1234567890", "ConstWorks", "a", "d-pub", sha("hello"),
