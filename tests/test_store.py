@@ -191,3 +191,20 @@ async def test_every_file_pulsar_creates_is_0600_under_a_loose_umask(
     for p in paths.home.iterdir():
         assert stat.S_IMODE(os.stat(p).st_mode) == 0o600, p.name
     assert stat.S_IMODE(os.stat(paths.home).st_mode) == 0o700
+
+
+def test_corrupt_key_is_a_structured_error_not_a_traceback(store, authed, paths):
+    paths.key_file.write_bytes(b"not-a-key")
+    with pytest.raises(PulsarError) as exc:
+        store.load()
+    assert exc.value.code == "insecure_storage"
+    assert "not-a-key" not in exc.value.message
+
+
+def test_ensure_refuses_rather_than_silently_narrowing_a_wide_home(paths):
+    paths.home.mkdir(mode=0o755)
+    os.chmod(paths.home, 0o755)
+    with pytest.raises(PulsarError) as exc:
+        paths.ensure()
+    assert exc.value.code == "insecure_storage"
+    assert stat.S_IMODE(os.stat(paths.home).st_mode) == 0o755, "never fixed behind the operator"

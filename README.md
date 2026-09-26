@@ -209,7 +209,10 @@ who claimed to make a write, after the fact.
   pulsar refuses to load or save credentials when the home is wider than
   0700, or `key`/`tokens.enc` wider than 0600 or owned by another uid
   (`insecure_storage`, with the exact `chmod` fix), rather than use a token
-  others could have copied.
+  others could have copied. Nothing writes into a home that already exists
+  wider than 0700 either, and pulsar never narrows one silently: how long it
+  was open is the operator's call to judge. A corrupt `key` file is also
+  `insecure_storage`.
 - What it does not protect against: any process running as the same uid can
   read the key and the ciphertext and decrypt them. On the Mac that includes
   an Orbit-sandboxed worker that can read `~/.config`. The long-term fix is

@@ -11,15 +11,58 @@ from __future__ import annotations
 
 import contextlib
 import os
+import shlex
+import stat
 import tempfile
 from pathlib import Path
+
+from .errors import INSECURE_STORAGE, PulsarError
 
 DIR_MODE = 0o700
 FILE_MODE = 0o600
 
 
+def _insecure(path: Path, problem: str, fix: str) -> PulsarError:
+    return PulsarError(
+        INSECURE_STORAGE,
+        f"{path} {problem}; pulsar will not use X credentials stored there. Fix: {fix}",
+        detail={"path": str(path), "fix": fix},
+    )
+
+
+def require_private(path: os.PathLike[str] | str, *, is_dir: bool = False) -> None:
+    """Raise ``insecure_storage`` if ``path`` exists and others could read or replace it."""
+    try:
+        st = os.stat(path)
+    except FileNotFoundError:
+        return
+    if st.st_uid != os.geteuid():
+        raise _insecure(
+            path,
+            f"is owned by uid {st.st_uid}, not the current user (uid {os.geteuid()})",
+            f"run pulsar as uid {st.st_uid}, or remove {shlex.quote(str(path))} "
+            "and re-run `pulsar auth login`",
+        )
+    mode = stat.S_IMODE(st.st_mode)
+    if mode & 0o077:
+        want = DIR_MODE if is_dir else FILE_MODE
+        raise _insecure(
+            path,
+            f"is mode {mode:04o}, open to group/other users",
+            f"chmod {want:o} {shlex.quote(str(path))}",
+        )
+
+
 def ensure_private_dir(path: os.PathLike[str] | str) -> Path:
+    """Create ``path`` 0700 if missing; refuse (never silently fix) an existing unsafe one.
+
+    Quietly chmod-ing a wide directory would hide the fact that its contents
+    were exposed for however long it was wide; the operator should know.
+    """
     p = Path(path)
+    if p.exists():
+        require_private(p, is_dir=True)
+        return p
     p.mkdir(mode=DIR_MODE, parents=True, exist_ok=True)
     os.chmod(p, DIR_MODE)
     return p

@@ -35,21 +35,18 @@ import contextlib
 import fcntl
 import json
 import os
-import shlex
-import stat
 import tempfile
 import time
 from collections.abc import AsyncIterator
 from contextlib import AbstractAsyncContextManager
 from dataclasses import asdict, dataclass
-from pathlib import Path
 from typing import Protocol
 
 from cryptography.fernet import Fernet, InvalidToken
 
 from .config import Paths
 from .errors import API_ERROR, INSECURE_STORAGE, PulsarError
-from .fsutil import DIR_MODE, FILE_MODE, write_private_atomic
+from .fsutil import FILE_MODE, require_private, write_private_atomic
 
 LOCK_POLL_SECONDS = 0.05
 
@@ -118,37 +115,6 @@ class CredentialStore(Protocol):
         ...
 
 
-def _insecure(path: Path, problem: str, fix: str) -> PulsarError:
-    return PulsarError(
-        INSECURE_STORAGE,
-        f"{path} {problem}; pulsar will not use X credentials stored there. Fix: {fix}",
-        detail={"path": str(path), "fix": fix},
-    )
-
-
-def require_private(path: Path, *, is_dir: bool = False) -> None:
-    """Raise ``insecure_storage`` if ``path`` exists and others could read or replace it."""
-    try:
-        st = os.stat(path)
-    except FileNotFoundError:
-        return
-    if st.st_uid != os.geteuid():
-        raise _insecure(
-            path,
-            f"is owned by uid {st.st_uid}, not the current user (uid {os.geteuid()})",
-            f"run pulsar as uid {st.st_uid}, or remove {shlex.quote(str(path))} "
-            "and re-run `pulsar auth login`",
-        )
-    mode = stat.S_IMODE(st.st_mode)
-    if mode & 0o077:
-        want = DIR_MODE if is_dir else FILE_MODE
-        raise _insecure(
-            path,
-            f"is mode {mode:04o}, open to group/other users",
-            f"chmod {want:o} {shlex.quote(str(path))}",
-        )
-
-
 class FernetFileStore:
     """``CredentialStore`` on local files: Fernet ciphertext beside its key."""
 
@@ -172,7 +138,17 @@ class FernetFileStore:
     # -- key ----------------------------------------------------------------
 
     def _read_key(self) -> Fernet:
-        return Fernet(self.paths.key_file.read_bytes().strip())
+        try:
+            return Fernet(self.paths.key_file.read_bytes().strip())
+        except ValueError as exc:
+            # Never echo the key bytes; the path and the recovery are enough.
+            raise PulsarError(
+                INSECURE_STORAGE,
+                f"{self.paths.key_file} is not a valid Fernet key (corrupt or truncated); "
+                "restore it from backup, or remove it and tokens.enc and re-run "
+                "`pulsar auth login`",
+                detail={"path": str(self.paths.key_file)},
+            ) from exc
 
     def _create_key(self) -> Fernet:
         """Create the key exactly once, even with several processes racing.
