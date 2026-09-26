@@ -106,6 +106,7 @@ async def test_validate_post_rejects_reply_plus_quote(session, authed):
         "ok": False,
         "code": "invalid_text",
         "message": "a post cannot be both a reply and a quote in v1",
+        "retryable": False,
     }
 
 
@@ -141,8 +142,8 @@ async def test_dry_run_validates_without_network(session, authed, fake_x, paths)
     assert out["text"] == text
     assert out["estimated_cost_usd"] == 0.015
     assert fake_x.requests == []
-    line = json.loads(paths.write_log.read_text().splitlines()[-1])
-    assert line["dry_run"] is True and line["post_id"] is None and line["caller"] == "test"
+    assert not paths.write_log.exists(), "a dry run is not a write; it must not hit the log"
+    assert not paths.ledger_db.exists(), "a dry run is not a write; it must not hit the ledger"
 
 
 async def test_dry_run_with_url_costs_more(session, authed):
@@ -209,6 +210,7 @@ async def test_refresh_failure_surfaces_as_auth_expired(session, authed, fake_x)
         "ok": False,
         "code": "auth_expired",
         "message": "X authorization expired; a human must re-run `pulsar auth login`",
+        "retryable": False,
     }
 
 

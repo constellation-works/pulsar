@@ -1,4 +1,10 @@
-"""Append-only local log of every write the connector performs."""
+"""Append-only ``writes.jsonl``: a line-per-outcome export of the ledger.
+
+The ledger (``ledger.py``) is the source of truth and is written *before* a
+request leaves; this file gets one line each time a write reaches a terminal
+state (published, failed, unknown), for tools that tail or grep JSONL.
+Validation and dry runs are not writes and never appear here.
+"""
 
 from __future__ import annotations
 
@@ -6,10 +12,13 @@ import hashlib
 import json
 import os
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .config import Paths
 from .fsutil import append_private
+
+if TYPE_CHECKING:
+    from .ledger import WriteRecord
 
 DEFAULT_CALLER_ENV = "PULSAR_CALLER"
 
@@ -49,3 +58,26 @@ class WriteLog:
         self.paths.ensure()
         append_private(self.paths.write_log, json.dumps(entry, sort_keys=True) + "\n")
         return entry
+
+    def export(self, record: WriteRecord) -> dict[str, Any]:
+        """Append one line for a ledger row that reached a terminal state.
+
+        Keeps every field older readers expect (``ts``, ``tool``, ``caller``,
+        ``dry_run``, ``post_id``, ``text_sha256``) and adds ``state`` and
+        ``idempotency_key``. Only hashes and ids — never text, media bytes,
+        or credentials.
+        """
+        extra: dict[str, Any] = {
+            **record.meta,
+            "state": record.state,
+            "idempotency_key": record.idempotency_key,
+            "text_sha256": record.text_sha256,
+            "account_user_id": record.account_user_id,
+        }
+        if record.media_id is not None:
+            extra["media_id"] = record.media_id
+        if record.error_code is not None:
+            extra["error_code"] = record.error_code
+        return self.append(
+            tool=record.tool, caller=record.caller, post_id=record.post_id, extra=extra
+        )

@@ -97,33 +97,83 @@ claude mcp add pulsar -- uv --directory /path/to/pulsar run pulsar serve
 |---|---|---|---|
 | `whoami` | read-only | `GET /2/users/me` | cached; `{user_id, username}` of the bound account |
 | `validate_post` | read-only | — | `text`, optional `reply_to_post_id`, `quote_post_id`; no network, no log |
-| `create_post` | publishes | `POST /2/tweets` | `text`, optional `reply_to_post_id`, `quote_post_id`, `media_ids`, `dry_run` (legacy) |
+| `create_post` | publishes | `POST /2/tweets` | `text`, optional `reply_to_post_id`, `quote_post_id`, `media_ids`, `idempotency_key`, `dry_run` (legacy) |
 | `upload_media` | publishes | `POST /2/media/upload/initialize` → `/{id}/append` → `/{id}/finalize`; `GET /2/media/upload` for video status | png/jpeg/gif/webp images ≤5 MiB or MP4 video (`video/mp4`) ≤100 MiB; `path` (a regular file inside `media.roots`) or `base64`, optional `mime` (must match the sniffed content) → `{media_id}` after video processing succeeds |
-| `delete_post` | destructive | `DELETE /2/tweets/:id` | `post_id` → `{ok: true}` |
+| `delete_post` | destructive | `DELETE /2/tweets/:id` | `post_id`, optional `idempotency_key` (default `delete:<post_id>`) → `{ok: true, post_id, deleted}` |
 
 `validate_post` returns `{ok: true, text, weighted_length, has_url,
 estimated_cost_usd}` without touching the network. `create_post` returns
 `{ok: true, post_id, url, text}`; `dry_run: true` returns what `validate_post`
-does plus `dry_run: true`, and is kept for callers that predate `validate_post`.
-Every writing tool takes an optional `caller` (agent id) for the write log;
-`PULSAR_CALLER` in the server's environment is the fallback.
+does plus `dry_run: true`, and is kept for callers that predate `validate_post`;
+a dry run is not a write and records nothing.
+Every writing tool takes an optional `caller` (agent id) for the ledger;
+`PULSAR_CALLER` in the server's environment is the fallback. `caller` is
+**advisory**: a self-asserted audit label, not an identity pulsar verifies.
+
+#### Idempotency
+
+Every post costs money and X has no idempotency key of its own, so pulsar
+keeps one. `create_post` takes an optional `idempotency_key` (1–200
+characters, no whitespace or control characters); without one, the key is
+derived from the request (text, `reply_to_post_id`, `quote_post_id`,
+`media_ids`) and the bound account's user id. The key is recorded in the
+[ledger](#the-ledger) *before* the request is sent. Calling again with the same
+key:
+
+- **already published** → the stored receipt `{ok: true, post_id, url, text,
+  replayed: true}`; nothing is sent to X.
+- **different request** (other text, reply target, media, tool or account) →
+  `idempotency_conflict`; nothing is sent. Use a new key for a new write.
+- **earlier attempt failed definitively** (the request provably never reached
+  X, or X rejected it) → retried.
+- **earlier attempt's outcome is unknown, or still in flight** →
+  `outcome_unknown` again; nothing is sent.
+
+Because of the derived key, posting the exact same text again from the same
+account replays the first receipt. To post identical text deliberately (say,
+after deleting the original), pass a fresh `idempotency_key`.
+
+`delete_post` uses the same mechanism with the default key `delete:<post_id>`:
+repeating a delete that succeeded returns `{ok: true, post_id, deleted,
+replayed: true}` without calling X. `upload_media` records every upload in the
+ledger but does not deduplicate: an orphaned media id is harmless and expires.
+
+#### `outcome_unknown`
+
+Returned when the post request may have reached X but pulsar cannot tell
+whether X created the post: the connection dropped or timed out after the
+request was sent (`ReadTimeout`, `WriteTimeout`, `ReadError`,
+`RemoteProtocolError`, …), X answered 5xx, or X answered 2xx without a
+readable post id. The ledger row is left `unknown` and `detail` carries the
+`cause` and the `idempotency_key`. **Do not retry blindly** — a retry that
+succeeds is a second, paid post. Check the account's timeline; if the post is
+not there and you still want it, call again with a *new* `idempotency_key`. A
+later phase adds reconcile, which settles unknown rows against X. Failures
+that prove nothing was sent (`ConnectError`, `ConnectTimeout`, `PoolTimeout`)
+stay `api_error` with `retryable: true`.
 
 The *Annotation* column is what the server advertises through MCP tool
 annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`). See
 [The caller boundary](#the-caller-boundary) for why.
 
 Failures never raise into the client; they come back as
-`{ok: false, code, message, detail?}` so the agent can branch on `code`:
+`{ok: false, code, message, retryable, detail?}` so the agent can branch on
+`code`. `retryable` is true only when repeating the identical call later can
+succeed (`rate_limited`, `api_error`):
 
 | code | meaning | what to do |
 |---|---|---|
 | `auth_expired` | no token, or refresh failed (revoked / app reset) | stop; a human runs `pulsar auth login` |
 | `insecure_storage` | the pulsar home is wider than 0700, or `key` / `tokens.enc` wider than 0600 or not owned by the server's user | stop; a human runs the `chmod` in `message` (also `detail.fix`) — not a re-login |
+| `invalid_config` | `config.toml` has an unknown key, a bad value, or the ledger is from a newer pulsar | fix the file named in `message` |
 | `invalid_text` | empty, over 280 weighted chars, control chars, reply+quote together | rewrite |
-| `secret_detected` | text matches a credential pattern | rewrite; never retry verbatim |
+| `invalid_argument` | malformed `idempotency_key` | fix the key |
+| `secret_detected` | text (or media, or `idempotency_key`) matches a credential pattern | rewrite; never retry verbatim |
 | `invalid_media` | bad path/base64, path outside `media.roots` or not a regular file, content that is not png/jpeg/gif/webp/mp4 or does not match the declared/extension MIME (`detail: {declared, sniffed}`), oversized media, or failed/timed-out video processing | fix the input or inspect X's processing detail |
 | `duplicate` / `forbidden` / `rate_limited` / `not_found` | X's reason, passed through in `detail` | duplicate: change text; rate_limited: wait |
-| `api_error` | anything else from X or the network | retry later, report |
+| `idempotency_conflict` | the key was already used for a different request or account | use a new key |
+| `outcome_unknown` | the write may have reached X; see [above](#outcome_unknown) | do **not** retry; check the timeline |
+| `api_error` | anything else from X, or a network failure before the request was sent | retry later, report |
 
 The 100 MiB video cap is a local connector limit; X also checks the account's
 video size and duration entitlement when media is uploaded and attached to a
@@ -132,8 +182,9 @@ the content either way (see below). Video uses 4 MiB chunks and waits up to five
 minutes for X's processing state to become `succeeded` before returning a
 `media_id`. If X reports `failed` or processing times out, `upload_media`
 returns `invalid_media` with the last processing detail and no `media_id`.
-Each upload log entry records MIME, byte count, and processing state, never
-the media bytes or credentials.
+Each upload's ledger row (and `writes.jsonl` line) records MIME, byte count,
+processing state, and — on success — the `media_id`; never the media bytes or
+credentials.
 
 #### Media confinement
 
@@ -187,16 +238,16 @@ the same tool name as a live post — a policy engine that gates by name cannot
 tell them apart without parsing arguments. New callers should validate with
 `validate_post` and reserve `create_post` for the moment intent is established.
 
-The `caller` argument and the write log are audit, not enforcement: they record
-who claimed to make a write, after the fact.
+The `caller` argument and the ledger are audit, not enforcement: they record
+who *claimed* to make a write. `caller` is advisory and self-asserted; nothing
+authenticates it.
 
 ### Safety
 
 - No tool accepts a token, key, or secret argument. Credentials never cross the
   MCP boundary in either direction.
-- Every write is appended to `~/.config/pulsar/writes.jsonl`: timestamp, tool,
-  post_id, SHA-256 of the text, and the caller agent id (`PULSAR_CALLER` env or
-  the `caller` argument).
+- Every live write goes through the ledger (below) and ends as a line in
+  `writes.jsonl`. Validation and dry runs are not writes and record nothing.
 - Text that looks like a secret (`sk-…`, `ghp_…`, `github_pat_…`, `xoxb-…`,
   AWS keys, PEM blocks, …) is rejected with `secret_detected` before any
   network call — including on `dry_run`. Media bytes are scanned for the same
@@ -228,6 +279,38 @@ who claimed to make a write, after the fact.
   store sits behind a `CredentialStore` interface so that can drop in. Until
   then the boundary is: the *agent* never holds secrets; the connector
   process does.
+
+### The ledger
+
+`~/.config/pulsar/ledger.sqlite3` (under `PULSAR_HOME`) is the source of truth
+for writes: SQLite in WAL mode, created 0600 in the 0700 home, schema version
+in `PRAGMA user_version`. Several pulsar processes may share one home; claims
+take the write lock (`BEGIN IMMEDIATE`, busy timeout) so two of them cannot
+send the same key.
+
+One row per logical write (`writes` table): `idempotency_key` (unique), `tool`,
+the account's `account_user_id`/`account_handle`, the advisory `caller`,
+`request_digest` (SHA-256 of the canonical request), `text_sha256`, `state`,
+`post_id`/`media_id`/`url`, `error_code`/`error_message`/`retryable`,
+`meta_json` (mime, bytes, processing_state, deleted), `attempts`,
+`created_at`/`updated_at`. States:
+
+```
+submitting ──> published   X confirmed; the key replays this receipt
+           ├─> failed      nothing reached X, or X rejected it; a retry re-sends
+           └─> unknown     may have reached X; never re-sent automatically
+```
+
+The row is committed as `submitting` *before* the request leaves, so a crash
+or kill mid-request leaves evidence, and that key answers `outcome_unknown`
+until it is reconciled. Inspect it with `sqlite3 ledger.sqlite3 'select * from
+writes'`.
+
+`writes.jsonl` beside it is an **export**, append-only: one line per terminal
+transition (`published`, `failed`, `unknown`) with `ts`, `tool`, `caller`,
+`dry_run` (always false now), `post_id`, `text_sha256`, `state`,
+`idempotency_key`, `account_user_id`, `error_code` on failure, and the upload
+facts — never post text, media bytes, or credentials.
 
 ## Development
 

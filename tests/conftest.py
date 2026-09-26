@@ -236,3 +236,50 @@ def private_umask():
     old = os.umask(0o002)
     yield
     os.umask(old)
+
+
+@dataclass
+class FlakyX(FakeX):
+    """FakeX whose ``POST /tweets`` can fail the way real networks do.
+
+    ``tweet_raise`` is an httpx transport error class raised on the next
+    ``tweet_raise_times`` posts. With ``raise_after_accept`` the fake first
+    *creates* the post (it is recorded in ``requests`` and consumes a post id)
+    and only then raises — a response lost after X acted. Without it the
+    request is dropped before X sees it. ``tweet_gate``, when set, holds
+    every tweet POST until the event is set (for concurrency tests).
+    ``tweet_raw`` replaces a successful tweet response body with raw bytes.
+    """
+
+    tweet_raise: type[httpx.TransportError] | None = None
+    tweet_raise_times: int = 1
+    raise_after_accept: bool = True
+    tweet_gate: asyncio.Event | None = None
+    tweet_raw: bytes | None = None
+
+    def transport(self) -> httpx.MockTransport:
+        return httpx.MockTransport(self.handle_async)
+
+    async def handle_async(self, request: httpx.Request) -> httpx.Response:
+        if not (request.url.path.endswith("/tweets") and request.method == "POST"):
+            return self.handle(request)
+        if self.tweet_gate is not None:
+            await self.tweet_gate.wait()
+        if self.tweet_raise is not None and self.tweet_raise_times > 0:
+            self.tweet_raise_times -= 1
+            if self.raise_after_accept:
+                self.handle(request)
+            raise self.tweet_raise("simulated transport failure", request=request)
+        resp = self.handle(request)
+        if self.tweet_raw is not None and resp.status_code < 300:
+            return httpx.Response(resp.status_code, content=self.tweet_raw)
+        return resp
+
+    def posts(self) -> list[httpx.Request]:
+        """Tweet POSTs that reached X."""
+        return self.calls("POST", "/tweets")
+
+
+@pytest.fixture
+def flaky_x() -> FlakyX:
+    return FlakyX()

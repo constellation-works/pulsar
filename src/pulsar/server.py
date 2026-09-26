@@ -13,28 +13,42 @@ publish (not read-only, not destructive), and ``delete_post`` is
 ``destructiveHint``. ``create_post(dry_run=True)`` still exists for callers
 that predate ``validate_post``, but a harness cannot tell it apart from a
 live post by name — prefer ``validate_post``.
+
+Every live write is claimed in the ledger (``ledger.py``) before its request
+leaves and settled after, so a repeat with the same idempotency key replays
+the receipt instead of posting (and paying) twice, and a write whose outcome
+is unknowable is reported as ``outcome_unknown`` rather than a retryable
+error.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
+import logging
+import sqlite3
+import uuid
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Annotated, Any
 
 import httpx
 from mcp.server.mcpserver import MCPServer
 from mcp.types import ToolAnnotations
+from pydantic import Field
 
 from . import __version__
 from .config import Paths, default_paths
-from .errors import PulsarError
+from .errors import API_ERROR, OutcomeUnknown, PulsarError
 from .fsutil import write_private_atomic
 from .guard import validate_text
+from .ledger import PUBLISHED, Ledger, check_key, default_key, request_digest
 from .media import load_media
 from .settings import Prices, Settings, load_settings
 from .store import TokenStore
-from .writelog import WriteLog
+from .writelog import WriteLog, resolve_caller, text_sha256
 from .xapi import MediaProcessingError, XClient
+
+log = logging.getLogger(__name__)
 
 TOOL_NAMES = ("whoami", "validate_post", "create_post", "upload_media", "delete_post")
 
@@ -47,8 +61,32 @@ INSTRUCTIONS = (
     "pulsar posts to X as the account a human authorized on this host. "
     "Call create_post only on explicit user intent in the current conversation "
     "or from a standing routine the owner enabled. Never pass credentials; there "
-    "is no parameter for them. Use validate_post to check text before posting."
+    "is no parameter for them. Use validate_post to check text before posting. "
+    "If a write returns outcome_unknown, do not retry it: the post may be live."
 )
+
+# Parameter schemas shared by the writing tools. Module-level so the string
+# annotations (``from __future__ import annotations``) resolve.
+Caller = Annotated[
+    str | None,
+    Field(
+        description=(
+            "Advisory label for the calling agent, recorded in the ledger. Self-asserted "
+            "audit, not identity: pulsar does not verify it. Falls back to PULSAR_CALLER."
+        )
+    ),
+]
+IdempotencyKey = Annotated[
+    str | None,
+    Field(
+        description=(
+            "Optional 1-200 char key with no whitespace. A repeat call with the same key and "
+            "the same request returns the stored receipt (replayed: true) without calling X; "
+            "the same key with a different request is idempotency_conflict. Default: derived "
+            "from the request and the bound account."
+        )
+    ),
+]
 
 
 class Runtime:
@@ -67,6 +105,7 @@ class Runtime:
         self.store = TokenStore(self.paths)
         self.client = XClient(self.store, transport=transport, **client_kwargs)
         self.log = WriteLog(self.paths)
+        self.ledger = Ledger(self.paths, export=self.log.export)
 
     async def whoami(self, *, live: bool = False) -> dict[str, str]:
         """The bound account: cached after the first call, from X when ``live``."""
@@ -152,8 +191,11 @@ def build_server(runtime: Runtime | None = None) -> MCPServer:
         description=(
             "Create a post on X as the bound account. Requires explicit user intent in the "
             "calling chat or an owner-enabled routine. Text is validated (<=280 weighted chars, "
-            "no credential-looking strings) before any network call. dry_run=true is the legacy "
-            "validate-only path; prefer validate_post, which a policy layer can gate separately."
+            "no credential-looking strings) before any network call. Idempotent per "
+            "idempotency_key: a repeat returns the stored receipt with replayed=true and does "
+            "not post. On outcome_unknown the post may be live: do not retry. dry_run=true is "
+            "the legacy validate-only path; prefer validate_post, which a policy layer can gate "
+            "separately. `caller` is an advisory audit label, not identity."
         ),
         annotations=PUBLISHES,
     )
@@ -164,26 +206,53 @@ def build_server(runtime: Runtime | None = None) -> MCPServer:
         quote_post_id: str | None = None,
         media_ids: list[str] | None = None,
         dry_run: bool = False,
-        caller: str | None = None,
+        caller: Caller = None,
+        idempotency_key: IdempotencyKey = None,
     ) -> dict[str, Any]:
         validated = _validate(text, reply_to_post_id, quote_post_id, rt.settings.prices)
+        key = check_key(idempotency_key)
         if dry_run:
-            rt.log.append(tool="create_post", caller=caller, text=text, dry_run=True)
+            # Not a write: nothing reaches the ledger or writes.jsonl.
             return {**validated, "dry_run": True}
         me = await rt.whoami()
-        created = await rt.client.create_post(
-            text,
-            reply_to_post_id=reply_to_post_id,
-            quote_post_id=quote_post_id,
-            media_ids=media_ids,
+        digest = request_digest(
+            "create_post",
+            text=text,
+            reply_to_post_id=str(reply_to_post_id) if reply_to_post_id else None,
+            quote_post_id=str(quote_post_id) if quote_post_id else None,
+            media_ids=[str(m) for m in media_ids or []],
         )
-        rt.log.append(tool="create_post", caller=caller, text=text, post_id=created["post_id"])
-        return {
-            "ok": True,
-            "post_id": created["post_id"],
-            "url": f"https://x.com/{me['username']}/status/{created['post_id']}",
-            "text": created["text"],
-        }
+        key = key or default_key(digest, me["user_id"])
+        record = rt.ledger.claim(
+            key=key,
+            tool="create_post",
+            digest=digest,
+            account=me,
+            caller=resolve_caller(caller),
+            text_sha256=text_sha256(text),
+        )
+        if record.state == PUBLISHED:
+            return {
+                "ok": True,
+                "post_id": record.post_id,
+                "url": record.url,
+                "text": text,
+                "replayed": True,
+            }
+        created = await _settle_on_error(
+            rt,
+            key,
+            lambda: rt.client.create_post(
+                text,
+                reply_to_post_id=reply_to_post_id,
+                quote_post_id=quote_post_id,
+                media_ids=media_ids,
+            ),
+            ambiguous=True,
+        )
+        url = f"https://x.com/{me['username']}/status/{created['post_id']}"
+        _record_success(rt, key, post_id=created["post_id"], url=url)
+        return {"ok": True, "post_id": created["post_id"], "url": url, "text": created["text"]}
 
     @server.tool(
         description=(
@@ -191,7 +260,8 @@ def build_server(runtime: Runtime | None = None) -> MCPServer:
             "(video/mp4, <=100 MiB) for a later create_post. Pass `path` (a regular file "
             "inside the operator's media roots; relative paths are from the server's cwd) "
             "or `base64`. The type is sniffed from the content; a `mime` or extension that "
-            "disagrees is refused. Video waits for X processing to succeed. Returns {media_id}."
+            "disagrees is refused. Video waits for X processing to succeed. Returns {media_id}. "
+            "`caller` is an advisory audit label, not identity."
         ),
         annotations=PUBLISHES,
     )
@@ -200,48 +270,118 @@ def build_server(runtime: Runtime | None = None) -> MCPServer:
         path: str | None = None,
         base64: str | None = None,
         mime: str | None = None,
-        caller: str | None = None,
+        caller: Caller = None,
     ) -> dict[str, Any]:
         data, resolved_mime = load_media(
             path, base64, mime, roots=rt.settings.effective_media_roots(), deny=(rt.paths.home,)
         )
-        try:
-            media_id, processing_state = await rt.client.upload_media(data, resolved_mime)
-        except PulsarError as exc:
-            rt.log.append(
-                tool="upload_media",
-                caller=caller,
-                extra={
-                    "mime": resolved_mime,
-                    "bytes": len(data),
-                    "processing_state": (
-                        exc.processing_state if isinstance(exc, MediaProcessingError) else "error"
-                    ),
-                },
-            )
-            raise
-        rt.log.append(
+        me = await rt.whoami()
+        facts = {"mime": resolved_mime, "bytes": len(data)}
+        # Uploads are not deduplicated: an orphaned media id is harmless and
+        # expires, so every call is its own ledger row.
+        key = f"upload:{uuid.uuid4().hex}"
+        rt.ledger.claim(
+            key=key,
             tool="upload_media",
-            caller=caller,
-            extra={
-                "media_id": media_id,
-                "mime": resolved_mime,
-                "bytes": len(data),
-                "processing_state": processing_state,
+            digest=request_digest("upload_media", **facts, sha256=hashlib.sha256(data).hexdigest()),
+            account=me,
+            caller=resolve_caller(caller),
+            meta=facts,
+        )
+        media_id, processing_state = await _settle_on_error(
+            rt,
+            key,
+            lambda: rt.client.upload_media(data, resolved_mime),
+            ambiguous=False,
+            error_meta=lambda exc: {
+                "processing_state": (
+                    exc.processing_state if isinstance(exc, MediaProcessingError) else "error"
+                )
             },
         )
+        _record_success(rt, key, media_id=media_id, meta={"processing_state": processing_state})
         return {"ok": True, "media_id": media_id, "mime": resolved_mime, "bytes": len(data)}
 
     @server.tool(
-        description="Delete a post by id. Only posts made by the bound account can be deleted.",
+        description=(
+            "Delete a post by id. Only posts made by the bound account can be deleted. "
+            "Repeating a delete that already succeeded returns the stored receipt "
+            "(replayed: true). `caller` is an advisory audit label, not identity."
+        ),
         annotations=DESTRUCTIVE,
     )
     @_guarded
-    async def delete_post(post_id: str, caller: str | None = None) -> dict[str, Any]:
+    async def delete_post(
+        post_id: str, caller: Caller = None, idempotency_key: IdempotencyKey = None
+    ) -> dict[str, Any]:
         if not post_id or not str(post_id).strip():
             raise PulsarError("invalid_text", "post_id is required")
-        deleted = await rt.client.delete_post(str(post_id).strip())
-        rt.log.append(tool="delete_post", caller=caller, post_id=str(post_id))
-        return {"ok": True, "post_id": str(post_id), "deleted": deleted}
+        post_id = str(post_id).strip()
+        key = check_key(idempotency_key) or f"delete:{post_id}"
+        me = await rt.whoami()
+        record = rt.ledger.claim(
+            key=key,
+            tool="delete_post",
+            digest=request_digest("delete_post", post_id=post_id),
+            account=me,
+            caller=resolve_caller(caller),
+        )
+        if record.state == PUBLISHED:
+            deleted = record.meta.get("deleted", True)
+            return {"ok": True, "post_id": post_id, "deleted": deleted, "replayed": True}
+        # DELETE is idempotent at X, so transport failures stay retryable.
+        deleted = await _settle_on_error(
+            rt, key, lambda: rt.client.delete_post(post_id), ambiguous=False
+        )
+        _record_success(rt, key, post_id=post_id, meta={"deleted": deleted})
+        return {"ok": True, "post_id": post_id, "deleted": deleted}
 
     return server
+
+
+async def _settle_on_error[T](
+    rt: Runtime,
+    key: str,
+    call: Callable[[], Awaitable[T]],
+    *,
+    ambiguous: bool,
+    error_meta: Callable[[PulsarError], dict[str, Any]] | None = None,
+) -> T:
+    """Run the network half of a claimed write; on any failure, settle its row.
+
+    A ``PulsarError`` settles as ``failed`` or, for ``outcome_unknown``,
+    ``unknown``. Anything else (a bug, a cancelled call) happened with the
+    request possibly in flight, so for a non-idempotent write it is
+    ``outcome_unknown`` too — never a silent ``submitting`` the caller
+    cannot see.
+    """
+    try:
+        return await call()
+    except PulsarError as exc:
+        rt.ledger.fail(key, exc, meta=error_meta(exc) if error_meta else None)
+        if isinstance(exc, OutcomeUnknown):
+            exc.detail = {**(exc.detail or {}), "idempotency_key": key}
+        raise
+    except BaseException as exc:
+        name = exc.__class__.__name__
+        err = (
+            OutcomeUnknown(
+                f"{name} while the request was in flight", detail={"idempotency_key": key}
+            )
+            if ambiguous
+            else PulsarError(API_ERROR, f"unexpected {name}", retryable=True)
+        )
+        rt.ledger.fail(key, err, meta=error_meta(err) if error_meta else None)
+        if isinstance(exc, Exception):
+            raise err from exc
+        raise
+
+
+def _record_success(rt: Runtime, key: str, **fields: Any) -> None:
+    """Settle a claimed row as published. The write is live whatever happens
+    here, so a ledger failure is logged, never turned into a tool error the
+    caller might answer by posting again."""
+    try:
+        rt.ledger.publish(key, **fields)
+    except sqlite3.Error:
+        log.exception("ledger: could not record success for %s; row stays submitting", key)

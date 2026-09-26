@@ -10,7 +10,7 @@ import httpx
 import pytest
 
 from pulsar.config import Paths
-from pulsar.errors import AuthExpired, PulsarError
+from pulsar.errors import AuthExpired, OutcomeUnknown, PulsarError
 from pulsar.store import TokenBundle, TokenStore
 from pulsar.xapi import MediaProcessingError, XClient
 
@@ -97,7 +97,9 @@ async def test_quote_post_body_shape(client, authed, fake_x):
         ),
         (403, {"detail": "Your account is suspended."}, "forbidden"),
         (429, {"title": "Too Many Requests"}, "rate_limited"),
-        (500, {"title": "Internal"}, "api_error"),
+        # X may have posted before failing: never a retryable api_error.
+        (500, {"title": "Internal"}, "outcome_unknown"),
+        (503, {"title": "Service Unavailable"}, "outcome_unknown"),
     ],
 )
 async def test_http_errors_map_to_codes(client, authed, fake_x, status, body, code):
@@ -402,3 +404,76 @@ async def test_insecure_storage_is_not_auth_expired(paths, authed, fake_x):
         await client.aclose()
     assert exc.value.code == "insecure_storage"
     assert fake_x.requests == []
+
+
+def _raising_transport(exc_type):
+    def handler(request):
+        raise exc_type("simulated", request=request)
+
+    return httpx.MockTransport(handler)
+
+
+@pytest.mark.parametrize(
+    "exc_type",
+    [httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout, httpx.UnsupportedProtocol],
+)
+async def test_not_sent_errors_on_a_post_are_retryable_api_errors(store, authed, exc_type):
+    client = XClient(store, transport=_raising_transport(exc_type))
+    try:
+        with pytest.raises(PulsarError) as exc:
+            await client.create_post("hi")
+    finally:
+        await client.aclose()
+    assert exc.value.code == "api_error" and exc.value.retryable is True
+    assert "not sent" in exc.value.message
+
+
+@pytest.mark.parametrize(
+    "exc_type",
+    [httpx.ReadTimeout, httpx.WriteTimeout, httpx.ReadError, httpx.RemoteProtocolError],
+)
+async def test_maybe_sent_errors_on_a_post_are_outcome_unknown(store, authed, exc_type):
+    client = XClient(store, transport=_raising_transport(exc_type))
+    try:
+        with pytest.raises(OutcomeUnknown) as exc:
+            await client.create_post("hi")
+    finally:
+        await client.aclose()
+    assert exc.value.code == "outcome_unknown" and exc.value.retryable is False
+    assert exc.value.detail["cause"].startswith(exc_type.__name__)
+
+
+async def test_maybe_sent_errors_on_a_read_stay_retryable(store, authed):
+    """Only non-idempotent writes are ambiguous; a lost GET is just a failure."""
+    client = XClient(store, transport=_raising_transport(httpx.ReadTimeout))
+    try:
+        with pytest.raises(PulsarError) as exc:
+            await client.me()
+    finally:
+        await client.aclose()
+    assert exc.value.code == "api_error" and exc.value.retryable is True
+
+
+async def test_2xx_without_post_id_is_outcome_unknown(store, authed):
+    client = XClient(
+        store, transport=httpx.MockTransport(lambda r: httpx.Response(201, json={"x": 1}))
+    )
+    try:
+        with pytest.raises(OutcomeUnknown):
+            await client.create_post("hi")
+    finally:
+        await client.aclose()
+
+
+async def test_401_on_post_refreshes_and_posts_once(client, authed, fake_x):
+    fake_x.fail_auth_once = True
+    assert (await client.create_post("hi"))["post_id"] == "101"
+    assert len(fake_x.calls("POST", "/oauth2/token")) == 1
+    assert fake_x.next_post_id == 101
+
+
+def test_error_results_carry_retryable():
+    assert PulsarError("rate_limited", "wait").to_result()["retryable"] is True
+    assert PulsarError("duplicate", "no").to_result()["retryable"] is False
+    assert AuthExpired().to_result()["retryable"] is False
+    assert OutcomeUnknown("ReadTimeout").to_result()["retryable"] is False

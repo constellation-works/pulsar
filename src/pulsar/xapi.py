@@ -22,9 +22,22 @@ from .errors import (
     NOT_FOUND,
     RATE_LIMITED,
     AuthExpired,
+    OutcomeUnknown,
     PulsarError,
 )
 from .store import CredentialConflict, CredentialStore, TokenBundle
+
+# Raised before any request byte reaches X: no connection, no pool slot, or a
+# request httpx refused to build. Retrying one of these cannot double-write.
+# Everything else (read/write timeouts, dropped connections, protocol errors
+# mid-response) may have happened after X received the request.
+NOT_SENT_ERRORS: tuple[type[httpx.HTTPError], ...] = (
+    httpx.ConnectError,
+    httpx.ConnectTimeout,
+    httpx.PoolTimeout,
+    httpx.ProxyError,
+    httpx.UnsupportedProtocol,
+)
 
 REFRESH_AHEAD_SECONDS = 120
 # Longer than one token POST (the HTTP timeout) so a waiter outlasts a live refresher.
@@ -184,22 +197,59 @@ class XClient:
     # -- transport ----------------------------------------------------------
 
     async def request(
-        self, method: str, path: str, *, _retry: bool = True, **kwargs: Any
+        self,
+        method: str,
+        path: str,
+        *,
+        non_idempotent: bool = False,
+        _retry: bool = True,
+        **kwargs: Any,
     ) -> httpx.Response:
+        """Send one authenticated request, mapping failures to ``PulsarError``.
+
+        ``non_idempotent`` marks a write that must not happen twice (``POST
+        /tweets``). For those, any failure that leaves open whether X acted on
+        the request — the connection broke after bytes left, or X answered
+        5xx — raises ``OutcomeUnknown`` instead of a retryable ``api_error``,
+        because a naive retry double-posts. Failures that prove nothing was
+        sent stay ``api_error`` (retryable) either way; a 401 is not a post,
+        so refresh-and-retry is still safe.
+        """
         token = await self.access_token()
         headers = dict(kwargs.pop("headers", {}) or {})
         headers["Authorization"] = f"Bearer {token}"
         url = path if path.startswith("http") else f"{self.base_url}{path}"
         try:
             resp = await self._http.request(method, url, headers=headers, **kwargs)
+        except NOT_SENT_ERRORS as exc:
+            raise PulsarError(
+                API_ERROR,
+                f"X request was not sent: {exc.__class__.__name__}",
+                retryable=True,
+            ) from exc
         except httpx.HTTPError as exc:
-            raise PulsarError(API_ERROR, f"X request failed: {exc.__class__.__name__}") from exc
+            name = exc.__class__.__name__
+            if non_idempotent:
+                raise OutcomeUnknown(f"{name} after the request may have reached X") from exc
+            raise PulsarError(API_ERROR, f"X request failed: {name}", retryable=True) from exc
         if resp.status_code == 401 and _retry:
             bundle = await self._bundle()
             await self.refresh(bundle)
-            return await self.request(method, path, _retry=False, headers=headers, **kwargs)
+            return await self.request(
+                method,
+                path,
+                non_idempotent=non_idempotent,
+                _retry=False,
+                headers=headers,
+                **kwargs,
+            )
         if resp.status_code == 401:
             raise AuthExpired()
+        if resp.status_code >= 500 and non_idempotent:
+            raise OutcomeUnknown(
+                f"X answered HTTP {resp.status_code}",
+                detail={"status": resp.status_code, "x": _error_detail(resp)},
+            )
         if resp.status_code >= 400:
             raise map_http_error(resp)
         return resp
@@ -225,8 +275,16 @@ class XClient:
             body["quote_tweet_id"] = str(quote_post_id)
         if media_ids:
             body["media"] = {"media_ids": [str(m) for m in media_ids]}
-        data = (await self.request("POST", "/tweets", json=body)).json()["data"]
-        return {"post_id": str(data["id"]), "text": data.get("text", text)}
+        resp = await self.request("POST", "/tweets", json=body, non_idempotent=True)
+        try:
+            data = resp.json()["data"]
+            return {"post_id": str(data["id"]), "text": data.get("text", text)}
+        except (ValueError, KeyError, TypeError) as exc:
+            # X said yes but we cannot tell which post it made.
+            raise OutcomeUnknown(
+                f"X answered HTTP {resp.status_code} without a readable post id",
+                detail={"status": resp.status_code},
+            ) from exc
 
     async def delete_post(self, post_id: str) -> bool:
         data = (await self.request("DELETE", f"/tweets/{post_id}")).json()
