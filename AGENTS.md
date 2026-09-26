@@ -14,13 +14,20 @@
 - `agent-main` is the landing branch; commit directly, no PR gate. Daniel owns
   releases and any change to the X app registration.
 - Layout, bottom up: `src/pulsar/core` (provider-neutral, no HTTP),
-  `providers/<name>` (one channel adapter each), `app` (the runtime and the
-  verbs every front end calls), then the front ends `mcp.py`, `orbit_tool.py`
-  (Orbit exec backend) and `cli/`, and the entry point `main.py`, which builds
-  the `App` and supplies it to the CLI. A layer imports only layers below it, and
-  only through their package root and its `__all__` (`from pulsar.core import
-  X`); keep `core` free of provider and transport imports. `tests/test_layering.py`
-  enforces it.
+  `providers/<name>` (one channel adapter each), `app` (the `App` and the
+  runtime every front end calls), the front ends `mcp.py`, `orbit_tool.py`
+  (Orbit exec backend) and `cli/`, and the entry point `main.py`. Keep `core`
+  free of provider and transport imports.
+- **Dependencies point down, and the directory tree shows it.** A module
+  imports only what sits beneath it: its own package's modules and
+  subpackages (`from .x import ...`), or a lower layer through that layer's
+  package root and only the names its `__all__` lists (`from pulsar.core
+  import Ledger`). Never upward or across: no `from ..`, no reaching into
+  another package's modules. When two modules need the same thing, move it
+  beneath both; when something needs a value from above, the top passes it
+  down (`main.py` builds the `App` and supplies it). `tests/test_layering.py`
+  enforces it; `core/ledger` is the one known exception (it still reaches
+  core's shared modules with `from ..`).
 - The Orbit plugin is `plugin.yaml` + `bin/pulsar` + `schemas/` +
   `skills/publish/` + `tests/conformance/`. A tool change updates its schema
   and goldens; `orbit plugin test <clean export> --grant fs,network` runs them

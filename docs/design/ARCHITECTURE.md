@@ -26,9 +26,10 @@ providers    x (client, auth, adapter)       one channel each
 core         plan, publisher, ledger, policy, accounts, store, media, guard, settings, paths
 ```
 
-An arrow is "may import". A layer imports only the layers below it, never above or
-beside it; the one exception is that `cli` starts the other two front ends (`serve`,
-`orbit-tool`), so it ranks above them.
+An arrow is "may import". Dependencies point down, and the directory tree shows it: a
+module imports only what sits beneath it, never above or beside it, and no import climbs
+the tree with `from ..` (`core/ledger` is the one known exception). Among the front ends,
+`cli` starts the other two (`serve`, `orbit-tool`), so it ranks above them.
 
 Dependencies are supplied from the top. `main.py` is the one place that constructs: it
 builds `App` (the verbs, bound to one home and one transport) and hands it to the front
@@ -54,15 +55,16 @@ to `__all__` is the deliberate act of widening the layer. `core`, `providers/x`,
 `app` and `cli` are held to it. The front ends and `main` go through `app` only: what they
 need from `core` or a provider, `app` re-exports.
 
-Inside `cli/`, the same rule:
+Inside `cli/`, `main.py` (`run`) parses and dispatches; everything it dispatches to sits
+beneath it in `commands/`, and `main.py` uses only what `commands/__init__.py` exports.
+Inside `commands/`:
 
 | Rank | Module | Role |
 |---|---|---|
 | 0 | `render.py`, `errors.py` | output modes and rendering; failure printing and exit codes |
 | 1 | `views.py`, `parser.py` | each payload's human view; the argparse pieces commands declare with |
-| 2 | `context.py` | what a handler gets (`Context`) and how it prints (`emit`, `notice`) |
-| 3 | `commands/` | one module per command (or per help group): its parser and handler |
-| 4 | `main.py` | builds the tree from `commands/`, resolves the mode once, dispatches to a command with the supplied `App` (`run`) |
+| 2 | `context.py` | what a handler gets (`Context`, carrying the supplied `App`) and how it prints (`emit`, `notice`) |
+| 3 | `auth.py`, `status.py`, `history.py`, `publish.py`, `reconcile.py`, `maintenance.py`, `services.py` | one module per command (or per help group): its parser and handler |
 
 ## Ambient state
 

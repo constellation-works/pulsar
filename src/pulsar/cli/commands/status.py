@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import argparse
 
-from .. import views
-from ..context import Context, emit, notice
-from ..parser import ACCOUNT_HELP, Commands
+from . import views
+from .context import Context, emit, notice
+from .parser import ACCOUNT_HELP, Commands
 
 
 def register(commands: Commands) -> None:

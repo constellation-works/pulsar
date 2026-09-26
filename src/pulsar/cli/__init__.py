@@ -1,10 +1,10 @@
 """The ``pulsar`` command line: human auth management, the operator verbs and
 the MCP server.
 
-``run`` parses and dispatches against the app ``pulsar.main`` supplies; each
-command lives in ``commands/``; a command's payload is printed through
-``context.emit``, rendered by ``render`` through its view in ``views``, and
-failures by ``errors``.
+``run`` (``main.py``) parses and dispatches against the app ``pulsar.main``
+supplies. Beneath it, ``commands/`` holds each command and what commands are
+written against: a payload is printed through ``context.emit``, rendered by
+``render`` through its view in ``views``, and failures by ``errors``.
 """
 
 from .main import build_parser, run

@@ -4,7 +4,7 @@ output mode once, dispatch to a command with the app the entry point
 
 ``pulsar`` or ``pulsar auth`` alone prints that level's help on stderr and
 exits 2. A closed stdout ends the process quietly with 0. The output and
-error contract is in ``context`` and ``errors``.
+error contract is in ``commands.context`` and ``commands.errors``.
 """
 
 from __future__ import annotations
@@ -18,19 +18,25 @@ from collections.abc import Sequence
 from pulsar import __version__
 from pulsar.app import INTERNAL, App, PulsarError
 
-from .commands import REGISTER
-from .context import Context, Handler
-from .errors import (
+from .commands import (
     EXIT_FAILED,
     EXIT_OK,
     EXIT_USAGE,
+    REGISTER,
+    CommandParser,
+    Commands,
+    Context,
+    Handler,
+    ModeConflict,
     ParseError,
     UsageError,
+    global_options,
+    json_requested,
     print_error,
     print_usage_error,
+    resolve_mode,
+    resolve_terminal,
 )
-from .parser import CommandParser, Commands, global_options
-from .render import ModeConflict, json_requested, resolve_mode, resolve_terminal
 
 log = logging.getLogger(__name__)
 

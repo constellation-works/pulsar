@@ -6,9 +6,9 @@ import argparse
 
 from pulsar.app import HISTORY_LIMIT_DEFAULT, HISTORY_LIMIT_MAX
 
-from .. import views
-from ..context import Context, emit, notice
-from ..parser import ACCOUNT_HELP, Commands
+from . import views
+from .context import Context, emit, notice
+from .parser import ACCOUNT_HELP, Commands
 
 
 def register(commands: Commands) -> None:

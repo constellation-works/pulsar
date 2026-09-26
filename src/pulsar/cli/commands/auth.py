@@ -5,10 +5,10 @@ from __future__ import annotations
 import argparse
 import asyncio
 
-from .. import views
-from ..context import Context, emit, notice
-from ..errors import UsageError
-from ..parser import ACCOUNT_DEFAULT, ACCOUNT_HELP, Commands
+from . import views
+from .context import Context, emit, notice
+from .errors import UsageError
+from .parser import ACCOUNT_DEFAULT, ACCOUNT_HELP, Commands
 
 
 def register(commands: Commands) -> None:

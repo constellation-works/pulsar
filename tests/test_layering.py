@@ -82,19 +82,35 @@ APP_RANK = {
     "facade": 2,
 }
 
-# Inside the CLI: rendering and errors first, then what commands share, then
-# the commands, then the entry point that registers them.
+# Inside the CLI: main parses and dispatches; commands sit beneath it.
 CLI_RANK = {
+    "commands": 0,
+    "main": 1,
+}
+
+# Inside commands: rendering and errors first, then what commands declare and
+# print with, then the commands themselves.
+COMMANDS_RANK = {
     "render": 0,
     "errors": 0,
     "views": 1,
     "parser": 1,
     "context": 2,
-    "commands": 3,
-    "main": 4,
+    "auth": 3,
+    "history": 3,
+    "maintenance": 3,
+    "publish": 3,
+    "reconcile": 3,
+    "services": 3,
+    "status": 3,
 }
 
-RANKED = {"pulsar": PULSAR_RANK, "pulsar.app": APP_RANK, "pulsar.cli": CLI_RANK}
+RANKED = {
+    "pulsar": PULSAR_RANK,
+    "pulsar.app": APP_RANK,
+    "pulsar.cli": CLI_RANK,
+    "pulsar.cli.commands": COMMANDS_RANK,
+}
 
 
 def _package_dir(package: str) -> Path:
@@ -137,7 +153,7 @@ def test_imports_point_down(package, member):
 
 # A lower layer's public API is its package's __init__: code outside the
 # package imports from the package root, and only the names __all__ lists.
-FACADES = ("pulsar.core", "pulsar.providers.x", "pulsar.app", "pulsar.cli")
+FACADES = ("pulsar.core", "pulsar.providers.x", "pulsar.app", "pulsar.cli", "pulsar.cli.commands")
 
 
 def _public(package: str) -> set[str]:
@@ -198,6 +214,27 @@ def test_front_ends_go_through_app(front_end):
                 ):
                     offenders.append(f"{path.relative_to(SRC)}:{line} imports {below}")
     assert not offenders, "front ends skip app:\n" + "\n".join(offenders)
+
+
+# Imports never climb the tree: no `from ..`. What a module needs sits beneath
+# it (its package's modules and subpackages) or in a lower layer's root. The
+# ledger still reaches core's shared modules (errors, jsonx, paths, ...) this
+# way; it is the one known exception until those move beneath it.
+CLIMBS_ALLOWED = ("core/ledger",)
+
+
+def test_imports_never_climb():
+    offenders = []
+    for path in sorted(SRC.rglob("*.py")):
+        rel = path.relative_to(SRC)
+        if any(rel.as_posix().startswith(prefix + "/") for prefix in CLIMBS_ALLOWED):
+            continue
+        for node in ast.walk(ast.parse(path.read_text())):
+            if isinstance(node, ast.ImportFrom) and node.level >= 2:
+                offenders.append(f"{rel}:{node.lineno} from {'.' * node.level}{node.module or ''}")
+    assert not offenders, "imports climb the tree; move the module beneath or pass it down:\n" + (
+        "\n".join(offenders)
+    )
 
 
 # core takes the environment, the cwd and the home as arguments (STD-02 §R3).

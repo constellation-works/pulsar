@@ -157,7 +157,7 @@ tell apart; `auth` is the only resource with verbs of its own. New commands go u
 **Recorded:** 2026-09-26 · [ORB-13138]
 **Superseded by:** [The CLI renders for its reader, as orbit's does](#the-cli-renders-for-its-reader-as-orbits-does)
 **Deviates from:** STD-01@2 §R8, §R14, §R17
-**Code anchors:** `src/pulsar/cli/context.py::emit`
+**Code anchors:** `src/pulsar/cli/commands/context.py::emit`
 
 ### Context
 
@@ -185,7 +185,7 @@ prints the version as plain text.
 
 **Recorded:** 2026-09-26 · [ORB-13248]
 **Deviates from:** STD-01@2 §R17
-**Code anchors:** `src/pulsar/cli/render.py::resolve_mode`, `src/pulsar/cli/render.py::resolve_terminal`, `src/pulsar/cli/views.py`, `src/pulsar/cli/parser.py::CommandParser`
+**Code anchors:** `src/pulsar/cli/commands/render.py::resolve_mode`, `src/pulsar/cli/commands/render.py::resolve_terminal`, `src/pulsar/cli/commands/views.py`, `src/pulsar/cli/commands/parser.py::CommandParser`
 
 ### Context
 

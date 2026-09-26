@@ -6,9 +6,9 @@ import argparse
 import asyncio
 from pathlib import Path
 
-from .. import views
-from ..context import Context, emit
-from ..parser import ACCOUNT_DEFAULT, Commands
+from . import views
+from .context import Context, emit
+from .parser import ACCOUNT_DEFAULT, Commands
 
 
 def register(commands: Commands) -> None:
