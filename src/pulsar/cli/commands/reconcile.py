@@ -5,9 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 
-from . import views
-from .context import Context, emit
-from .parser import ACCOUNT_DEFAULT, Commands
+from pulsar.cli.toolkit import ACCOUNT_DEFAULT, Commands, Context, emit, views
 
 
 def register(commands: Commands) -> None:

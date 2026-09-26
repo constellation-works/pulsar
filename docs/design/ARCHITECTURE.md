@@ -28,7 +28,9 @@ core         plan, publisher, ledger, policy, accounts, store, media, guard, set
 
 An arrow is "may import". Dependencies point down, and the directory tree shows it: a
 module imports only what sits beneath it, never above or beside it, and no import climbs
-the tree with `from ..` (`core/ledger` is the one known exception). Among the front ends,
+the tree with `from ..` (`core/ledger` is the one known exception). A package holds only
+what it is named for; what its members stand on goes in its own package beneath them.
+Among the front ends,
 `cli` starts the other two (`serve`, `orbit-tool`), so it ranks above them.
 
 Dependencies are supplied from the top. `main.py` is the one place that constructs: it
@@ -52,19 +54,21 @@ A layer is used only through its public API: its package's `__init__.py`. Code o
 the package imports from the package root (`from pulsar.core import Ledger`), and only the
 names its `__all__` lists; modules inside the package import each other directly. Adding
 to `__all__` is the deliberate act of widening the layer. `core`, `providers/x`,
-`app` and `cli` are held to it. The front ends and `main` go through `app` only: what they
+`app`, `cli`, `cli/toolkit` and `cli/commands` are held to it. The front ends and `main` go through `app` only: what they
 need from `core` or a provider, `app` re-exports.
 
-Inside `cli/`, `main.py` (`run`) parses and dispatches; everything it dispatches to sits
-beneath it in `commands/`, and `main.py` uses only what `commands/__init__.py` exports.
-Inside `commands/`:
+A package holds only what it is named for. What its members are written against is not
+one of them: it goes in its own package, named for what it is, beneath them. So `cli/`
+has three members, bottom up:
 
-| Rank | Module | Role |
+| Rank | Member | Holds |
 |---|---|---|
-| 0 | `render.py`, `errors.py` | output modes and rendering; failure printing and exit codes |
-| 1 | `views.py`, `parser.py` | each payload's human view; the argparse pieces commands declare with |
-| 2 | `context.py` | what a handler gets (`Context`, carrying the supplied `App`) and how it prints (`emit`, `notice`) |
-| 3 | `auth.py`, `status.py`, `history.py`, `publish.py`, `reconcile.py`, `maintenance.py`, `services.py` | one module per command (or per help group): its parser and handler |
+| 0 | `toolkit/` | what commands are written against: `render.py` and `errors.py` (rank 0: output modes and rendering; failure printing and exit codes), `views.py` and `parser.py` (rank 1: each payload's human view; the argparse pieces a command declares with), `context.py` (rank 2: what a handler gets, `Context` carrying the supplied `App`, and how it prints, `emit` and `notice`) |
+| 1 | `commands/` | the commands only, one module each (or one per help group), each declaring itself in `register`: `auth`, `status`, `history`, `publish`, `reconcile`, `maintenance`, `services`; none imports another |
+| 2 | `main.py` | `run`: parses and dispatches to `commands.REGISTER`, reporting through the toolkit |
+
+`commands` and `main.py` reach the toolkit through its root (`from pulsar.cli.toolkit
+import Context`), as `app` reaches `core`.
 
 ## Ambient state
 

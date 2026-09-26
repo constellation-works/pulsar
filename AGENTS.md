@@ -16,8 +16,9 @@
 - Layout, bottom up: `src/pulsar/core` (provider-neutral, no HTTP),
   `providers/<name>` (one channel adapter each), `app` (the `App` and the
   runtime every front end calls), the front ends `mcp.py`, `orbit_tool.py`
-  (Orbit exec backend) and `cli/`, and the entry point `main.py`. Keep `core`
-  free of provider and transport imports.
+  (Orbit exec backend) and `cli/` (`toolkit/` < `commands/` < `main.py`), and
+  the entry point `main.py`. Keep `core` free of provider and transport
+  imports.
 - **Dependencies point down, and the directory tree shows it.** A module
   imports only what sits beneath it: its own package's modules and
   subpackages (`from .x import ...`), or a lower layer through that layer's
@@ -28,6 +29,12 @@
   down (`main.py` builds the `App` and supplies it). `tests/test_layering.py`
   enforces it; `core/ledger` is the one known exception (it still reaches
   core's shared modules with `from ..`).
+- **A package holds only what it is named for.** What its members are written
+  against is not one of them: it goes in its own package, named for what it
+  is, beneath them. `cli/commands/` holds commands only; the parser pieces,
+  context, rendering, views and errors they use are `cli/toolkit/`, a lower
+  member of `cli`, reached through its root. `tests/test_layering.py` checks
+  that every module in `cli/commands/` declares a command.
 - The Orbit plugin is `plugin.yaml` + `bin/pulsar` + `schemas/` +
   `skills/publish/` + `tests/conformance/`. A tool change updates its schema
   and goldens; `orbit plugin test <clean export> --grant fs,network` runs them

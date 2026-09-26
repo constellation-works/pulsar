@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import argparse
 
-from . import views
-from .context import Context, emit, notice
-from .parser import ACCOUNT_HELP, Commands
+from pulsar.cli.toolkit import ACCOUNT_HELP, Commands, Context, emit, notice, views
 
 
 def register(commands: Commands) -> None:

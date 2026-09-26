@@ -82,33 +82,40 @@ APP_RANK = {
     "facade": 2,
 }
 
-# Inside the CLI: main parses and dispatches; commands sit beneath it.
+# Inside the CLI: main parses and dispatches to the commands; beneath both,
+# the toolkit they are written against.
 CLI_RANK = {
-    "commands": 0,
-    "main": 1,
+    "toolkit": 0,
+    "commands": 1,
+    "main": 2,
 }
 
-# Inside commands: rendering and errors first, then what commands declare and
-# print with, then the commands themselves.
-COMMANDS_RANK = {
+# Inside the toolkit: rendering and errors first, then what commands declare
+# and print with.
+TOOLKIT_RANK = {
     "render": 0,
     "errors": 0,
     "views": 1,
     "parser": 1,
     "context": 2,
-    "auth": 3,
-    "history": 3,
-    "maintenance": 3,
-    "publish": 3,
-    "reconcile": 3,
-    "services": 3,
-    "status": 3,
+}
+
+# The commands stand side by side: none imports another.
+COMMANDS_RANK = {
+    "auth": 0,
+    "history": 0,
+    "maintenance": 0,
+    "publish": 0,
+    "reconcile": 0,
+    "services": 0,
+    "status": 0,
 }
 
 RANKED = {
     "pulsar": PULSAR_RANK,
     "pulsar.app": APP_RANK,
     "pulsar.cli": CLI_RANK,
+    "pulsar.cli.toolkit": TOOLKIT_RANK,
     "pulsar.cli.commands": COMMANDS_RANK,
 }
 
@@ -153,7 +160,14 @@ def test_imports_point_down(package, member):
 
 # A lower layer's public API is its package's __init__: code outside the
 # package imports from the package root, and only the names __all__ lists.
-FACADES = ("pulsar.core", "pulsar.providers.x", "pulsar.app", "pulsar.cli", "pulsar.cli.commands")
+FACADES = (
+    "pulsar.core",
+    "pulsar.providers.x",
+    "pulsar.app",
+    "pulsar.cli",
+    "pulsar.cli.toolkit",
+    "pulsar.cli.commands",
+)
 
 
 def _public(package: str) -> set[str]:
@@ -235,6 +249,16 @@ def test_imports_never_climb():
     assert not offenders, "imports climb the tree; move the module beneath or pass it down:\n" + (
         "\n".join(offenders)
     )
+
+
+# A package holds only what it is named for. cli/commands holds commands: each
+# module there declares its commands in `register`. What they are written
+# against is not a command; it lives in cli/toolkit, beneath them.
+@pytest.mark.parametrize("member", sorted(COMMANDS_RANK))
+def test_commands_holds_only_commands(member):
+    tree = ast.parse((_package_dir("pulsar.cli.commands") / f"{member}.py").read_text())
+    top = {node.name for node in tree.body if isinstance(node, ast.FunctionDef)}
+    assert "register" in top, f"cli/commands/{member}.py declares no command; move it beneath"
 
 
 # core takes the environment, the cwd and the home as arguments (STD-02 §R3).

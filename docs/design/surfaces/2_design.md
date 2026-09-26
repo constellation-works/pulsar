@@ -75,17 +75,17 @@ authenticates it.
 [cli/](../../../src/pulsar/cli/), verbs in [ops.py](../../../src/pulsar/app/ops.py),
 health in [health.py](../../../src/pulsar/app/health.py). The entry point `pulsar/main.py`
 builds the `App` and runs the CLI with it; `cli/main.py` builds the command tree and dispatches; each command declares its parser and holds its handler in `cli/commands/`;
-`cli/commands/context.py` prints a payload and `cli/commands/errors.py` a failure.
+beneath them, `cli/toolkit/` holds what they are written against: `context.py` prints a payload and `errors.py` a failure.
 
 - **Help.** `pulsar` or `pulsar auth` alone prints that level's help on stderr and exits 2.
   The root help lists the commands in groups (Accounts, Publish, Observe, Maintenance,
   Services), built from each command's own declaration. `-V` prints the version.
-- **Output.** Each command builds one payload. [render.py](../../../src/pulsar/cli/commands/render.py)
+- **Output.** Each command builds one payload. [render.py](../../../src/pulsar/cli/toolkit/render.py)
   resolves the mode once: `--format auto|table|json` or `--json`, accepted before or after
   the command; else `PULSAR_FORMAT`; else `auto`. An unknown `PULSAR_FORMAT` counts as
   `auto`, and `--json` with another `--format` is a usage error.
   - `auto` means `table` on a terminal and the piped form otherwise.
-  - `table` renders the command's view ([views.py](../../../src/pulsar/cli/commands/views.py)):
+  - `table` renders the command's view ([views.py](../../../src/pulsar/cli/toolkit/views.py)):
     borderless tables with one line per record, `-` for absent values and right-aligned
     numbers, plus key-value fields for single results.
     - Values are cut with `…` only to fit a known width (`COLUMNS`, else the terminal's).
