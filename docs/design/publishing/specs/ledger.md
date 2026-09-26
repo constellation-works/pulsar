@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: the write ledger — rows, items, states, usage, schema versions and read-only opens"
-paths: ["src/pulsar/core/ledger/**"]
+paths: ["src/pulsar/ledger/**"]
 last_validated: 2026-09-26
 ---
 
@@ -21,9 +21,9 @@ paid post and lets a human or reconcile settle the first.
 ## Storage
 
 - SQLite, WAL mode, created 0600 in the 0700 home; schema version in `PRAGMA user_version`.
-  The code is the package `src/pulsar/core/ledger/` (`records`, `keys`, `text`, `schema`,
+  The code is the package `src/pulsar/ledger/` (`records`, `keys`, `text`, `schema`,
   `connection`, `queries`, `single`, `plans`, `imports`, `facade`); import it as
-  `pulsar.core.ledger`.
+  `pulsar.ledger`.
 - Several processes share one file. Every claim and state change runs in `BEGIN IMMEDIATE`
   with a busy timeout, so two processes cannot claim or send the same key. A lock is recognised
   by SQLite's result code (`SQLITE_BUSY` / `SQLITE_LOCKED`), never by message text.

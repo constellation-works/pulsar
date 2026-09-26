@@ -11,7 +11,7 @@ detail}` (`detail` null when there is none). Orbit: `{code, message, retryable, 
 `error`. CLI: `{error, code, retryable, detail}` on stderr (`error` is the message), exit 1, or
 2 for a usage error. `retryable` is true only
 when repeating the identical call later can succeed. Codes are defined in
-[core/errors.py](../../../../src/pulsar/core/errors.py).
+[errors/codes.py](../../../../src/pulsar/errors/codes.py).
 
 | code | meaning | what to do |
 |---|---|---|

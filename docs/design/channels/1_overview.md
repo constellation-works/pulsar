@@ -9,7 +9,7 @@ doc_role: overview
 type: design
 summary: The channel adapter contract between pulsar's provider-neutral core and each social provider, and the X adapter that implements it.
 tags: [channels, providers, x, adapter]
-paths: ["src/pulsar/core/adapter.py", "src/pulsar/providers/**"]
+paths: ["src/pulsar/channels/contract.py", "src/pulsar/channels/**"]
 related_features: [publishing, accounts]
 related_artifacts: [ORB-12124, ORB-13006, ORB-13028, ORB-13031]
 ---
@@ -48,11 +48,11 @@ shaped so a second provider (Bluesky, phase 5) is an adapter, not a rewrite.
 
 | Concern | File | Task |
 |---------|------|------|
-| Contract: `Channel`, `Capabilities`, `AuthFlow` | [core/adapter.py](../../../src/pulsar/core/adapter.py) | [ORB-13028] |
-| X channel, fingerprint | [providers/x/adapter.py](../../../src/pulsar/providers/x/adapter.py) | [ORB-13028] |
-| X v2 API client, error mapping, chunked media | [providers/x/client.py](../../../src/pulsar/providers/x/client.py) | [ORB-12124], [ORB-13006] |
-| X text rules: weighted length, URLs | [providers/x/text.py](../../../src/pulsar/providers/x/text.py) | [ORB-12124] |
-| X endpoints, scopes, limits | [providers/x/config.py](../../../src/pulsar/providers/x/config.py) | [ORB-12124] |
+| Contract: `Channel`, `Capabilities`, `AuthFlow` | [channels/contract.py](../../../src/pulsar/channels/contract.py) | [ORB-13028] |
+| X channel, fingerprint | [channels/x/adapter.py](../../../src/pulsar/channels/x/adapter.py) | [ORB-13028] |
+| X v2 API client, error mapping, chunked media | [channels/x/client.py](../../../src/pulsar/channels/x/client.py) | [ORB-12124], [ORB-13006] |
+| X text rules: weighted length, URLs | [channels/x/text.py](../../../src/pulsar/channels/x/text.py) | [ORB-12124] |
+| X endpoints, scopes, limits | [channels/x/config.py](../../../src/pulsar/channels/x/config.py) | [ORB-12124] |
 
 ## Task References
 

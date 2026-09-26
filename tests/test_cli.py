@@ -8,12 +8,12 @@ from pathlib import Path
 
 import pytest
 
+from pulsar.accounts import AccountRegistry
 from pulsar.app import LocalApp, default_paths
-from pulsar.cli import build_parser, run
-from pulsar.core.accounts import AccountRegistry
-from pulsar.core.ledger import SCHEMA_VERSION, SqliteLedger
+from pulsar.channels.x import auth as x_auth
+from pulsar.ledger import SCHEMA_VERSION, SqliteLedger
 from pulsar.main import main as entry_point
-from pulsar.providers.x import auth as x_auth
+from pulsar.surfaces.cli import build_parser, run
 
 from .conftest import ALIAS, SECRETS, register
 

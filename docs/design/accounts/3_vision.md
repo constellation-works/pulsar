@@ -9,7 +9,7 @@ doc_role: vision
 type: design
 summary: Where credentials should live (host-held secrets), per-provider auth flows, and the open questions about re-authorization.
 tags: [accounts, auth, credentials, secrets]
-paths: ["src/pulsar/core/store.py", "src/pulsar/core/adapter.py"]
+paths: ["src/pulsar/accounts/store.py", "src/pulsar/channels/contract.py"]
 related_features: [channels, surfaces]
 related_artifacts: [ORB-13008, ORB-13009, ORB-13030, ORB-13031]
 ---

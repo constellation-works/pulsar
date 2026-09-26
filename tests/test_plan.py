@@ -2,8 +2,8 @@ import hashlib
 
 import pytest
 
-from pulsar.core.errors import PulsarError
-from pulsar.core.plan import MediaRef, Plan, normalize_alias
+from pulsar.errors import PulsarError
+from pulsar.plan import MediaRef, Plan, normalize_alias
 
 MEDIA = {
     "hero.png": b"png-bytes-1",

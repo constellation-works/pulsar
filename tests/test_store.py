@@ -8,13 +8,12 @@ import threading
 import pytest
 from cryptography.fernet import Fernet
 
-from pulsar.core import fsutil
-from pulsar.core.errors import PulsarError
-from pulsar.core.fsutil import hold_lock, write_private_atomic
-from pulsar.core.paths import Paths
-from pulsar.core.store import CredentialConflict, FernetFileStore, TokenBundle
-from pulsar.core.writelog import WriteLog
-from pulsar.providers.x.auth import load_client_id, save_client_id
+from pulsar.accounts import CredentialConflict, FernetFileStore, TokenBundle
+from pulsar.app import WriteLog
+from pulsar.channels.x import load_client_id, save_client_id
+from pulsar.errors import PulsarError
+from pulsar.home import Paths, hold_lock, write_private_atomic
+from pulsar.home import files as fsutil
 
 from .conftest import make_runtime, register
 from .lock_probe import blocked_on_lock
@@ -144,7 +143,7 @@ def test_crash_mid_save_keeps_the_previous_bundle(store, bundle, paths, monkeypa
     def crash(*_args):
         raise OSError("power cut")
 
-    monkeypatch.setattr("pulsar.core.fsutil.os.replace", crash)
+    monkeypatch.setattr("pulsar.home.files.os.replace", crash)
     with pytest.raises(OSError):
         store.save(rotated)
     monkeypatch.undo()
@@ -164,7 +163,7 @@ def test_losing_the_key_creation_race_adopts_the_winners_key(store, bundle, path
         os.close(fd)
         real_link(src, dst)  # now FileExistsError, as for the real loser
 
-    monkeypatch.setattr("pulsar.core.fsutil.os.link", another_process_wins)
+    monkeypatch.setattr("pulsar.home.files.os.link", another_process_wins)
     store.save(bundle)
     assert paths.key_file.read_bytes() == winner
     assert Fernet(winner).decrypt(store.token_file.read_bytes())
@@ -228,7 +227,7 @@ def test_wide_modes_are_refused_not_treated_as_logged_out(store, authed, paths, 
 
 
 def test_foreign_owner_is_refused(store, authed, paths, monkeypatch):
-    monkeypatch.setattr("pulsar.core.fsutil.os.geteuid", lambda: os.getuid() + 1)
+    monkeypatch.setattr("pulsar.home.files.os.geteuid", lambda: os.getuid() + 1)
     with pytest.raises(PulsarError) as exc:
         store.load()
     assert exc.value.code == "insecure_storage"
@@ -330,7 +329,7 @@ def _hold_in_thread(path, label):
 
 
 def test_login_gives_up_boundedly_and_names_the_holder(store, bundle, paths, monkeypatch):
-    monkeypatch.setattr("pulsar.core.store.REFRESH_LOCK_WAIT_SECONDS", 0.2)
+    monkeypatch.setattr("pulsar.accounts.store.REFRESH_LOCK_WAIT_SECONDS", 0.2)
     store.save(bundle)
     thread, release = _hold_in_thread(store.lock_file, "token refresh of x:constworks")
     try:
@@ -351,7 +350,7 @@ def test_login_gives_up_boundedly_and_names_the_holder(store, bundle, paths, mon
 def test_a_lock_timeout_without_a_holder_record_says_unknown(store, bundle, monkeypatch):
     import fcntl
 
-    monkeypatch.setattr("pulsar.core.store.REFRESH_LOCK_WAIT_SECONDS", 0.2)
+    monkeypatch.setattr("pulsar.accounts.store.REFRESH_LOCK_WAIT_SECONDS", 0.2)
     store.save(bundle)
     fd = os.open(store.lock_file, os.O_RDWR | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
@@ -419,7 +418,7 @@ def test_credential_conflict_is_a_retryable_internal_error():
 
 @pytest.mark.parametrize("target", ["key_file", "token_file", "accounts_file"])
 def test_a_symlinked_state_file_is_refused(store, authed, paths, tmp_path, target):
-    from pulsar.core.accounts import AccountRegistry
+    from pulsar.accounts import AccountRegistry
 
     path = getattr(store, target, None) or getattr(paths, target)
     elsewhere = tmp_path / f"elsewhere-{path.name}"

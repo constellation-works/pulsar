@@ -7,15 +7,15 @@ from datetime import timedelta
 
 import pytest
 
-from pulsar.core.errors import (
+from pulsar.errors import (
     IDEMPOTENCY_CONFLICT,
     INTERNAL,
     INVALID_ARGUMENT,
     OutcomeUnknown,
     PulsarError,
 )
-from pulsar.core.ledger import PUBLISHED, SUBMITTING, SqliteLedger
-from pulsar.core.paths import Paths
+from pulsar.home import Paths
+from pulsar.ledger import PUBLISHED, SUBMITTING, SqliteLedger
 
 from .test_ledger import ME, Clock, states
 

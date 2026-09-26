@@ -12,12 +12,10 @@ from pathlib import Path
 import httpx
 import pytest
 
-from pulsar.core.errors import AuthExpired, OutcomeUnknown, PulsarError
-from pulsar.core.paths import Paths
-from pulsar.core.store import FernetFileStore, TokenBundle
-from pulsar.providers.x import auth
-from pulsar.providers.x.auth import CallbackServer
-from pulsar.providers.x.client import MediaProcessingError, XClient, bounded_text
+from pulsar.accounts import FernetFileStore, TokenBundle
+from pulsar.channels.x import CallbackServer, MediaProcessingError, XClient, auth, bounded_text
+from pulsar.errors import AuthExpired, OutcomeUnknown, PulsarError
+from pulsar.home import Paths
 
 from .conftest import (
     ACCESS,
@@ -283,7 +281,7 @@ async def test_upload_video_without_processing_info_is_ready(client, authed, fak
 
 
 async def test_upload_video_processing_timeout(store, authed, fake_x, monkeypatch):
-    monkeypatch.setattr("pulsar.providers.x.client.PROCESSING_TIMEOUT_SECONDS", 3)
+    monkeypatch.setattr("pulsar.channels.x.client.PROCESSING_TIMEOUT_SECONDS", 3)
     fake_x.media_finalize_info = {"state": "pending", "check_after_secs": 2}
     fake_x.media_status_info = [{"state": "in_progress", "check_after_secs": 2}]
     clock = FakeClock()
@@ -370,7 +368,7 @@ async def test_two_processes_on_one_home_refresh_once(paths, bundle, token_endpo
 
 
 async def test_refresh_waits_boundedly_for_the_lock(paths, authed, token_endpoint, monkeypatch):
-    monkeypatch.setattr("pulsar.providers.x.client.REFRESH_LOCK_WAIT_SECONDS", 0.2)
+    monkeypatch.setattr("pulsar.channels.x.client.REFRESH_LOCK_WAIT_SECONDS", 0.2)
     client = XClient(
         FernetFileStore.for_account(paths, ALIAS), transport=token_endpoint.transport()
     )
@@ -601,7 +599,7 @@ async def test_a_failed_save_after_rotation_is_internal_not_outcome_unknown(
     def disk_full(*_a, **_k):
         raise OSError("No space left on device")
 
-    monkeypatch.setattr("pulsar.core.store.write_private_atomic", disk_full)
+    monkeypatch.setattr("pulsar.accounts.store.write_private_atomic", disk_full)
     client = XClient(store, transport=token_endpoint.transport())
     try:
         with pytest.raises(PulsarError) as exc:

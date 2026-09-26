@@ -7,10 +7,9 @@ from datetime import timedelta
 
 import pytest
 
-from pulsar.core.errors import INVALID_CONFIG, OUTCOME_UNKNOWN, OutcomeUnknown, PulsarError
-from pulsar.core.ledger import FAILED, PENDING, PUBLISHED, SCHEMA_VERSION, UNKNOWN, SqliteLedger
-from pulsar.core.ledger.schema import is_busy
-from pulsar.core.paths import Paths
+from pulsar.errors import INVALID_CONFIG, OUTCOME_UNKNOWN, OutcomeUnknown, PulsarError
+from pulsar.home import Paths
+from pulsar.ledger import FAILED, PENDING, PUBLISHED, SCHEMA_VERSION, UNKNOWN, SqliteLedger, is_busy
 
 from .test_ledger import DAY, ME, T0, build_v1_ledger, claim_plan, sha, sql
 

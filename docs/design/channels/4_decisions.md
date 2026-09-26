@@ -9,7 +9,7 @@ doc_role: decisions
 type: design
 summary: Why the fingerprint ignores links and leading mentions, why only X's copy is unescaped, and why prices live in config.
 tags: [channels, x, fingerprint, pricing]
-paths: ["src/pulsar/providers/x/adapter.py", "src/pulsar/core/settings.py"]
+paths: ["src/pulsar/channels/x/adapter.py", "src/pulsar/home/settings.py"]
 related_features: [publishing]
 related_artifacts: [ORB-13027, ORB-13028]
 ---
@@ -22,7 +22,7 @@ Non-obvious decisions about providers. See
 ## Fingerprint what survives the provider's rewriting
 
 **Recorded:** 2026-09-26 · [ORB-13028]
-**Code anchors:** `src/pulsar/providers/x/adapter.py::fingerprint`, `src/pulsar/providers/x/adapter.py::remote_fingerprint`
+**Code anchors:** `src/pulsar/channels/x/adapter.py::fingerprint`, `src/pulsar/channels/x/adapter.py::remote_fingerprint`
 
 ### Context
 
@@ -45,7 +45,7 @@ local `&amp;` is literal text the author wrote.
 ## Prices are configuration, not code
 
 **Recorded:** 2026-09-26 · [ORB-13027]
-**Code anchors:** `src/pulsar/core/settings.py::Settings.prices_for`
+**Code anchors:** `src/pulsar/home/settings.py::Settings.prices_for`
 
 ### Context
 

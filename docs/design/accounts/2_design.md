@@ -9,7 +9,7 @@ doc_role: design
 type: design
 summary: Login with identity check, the registry, encrypted per-account bundles, locked refresh, legacy migration and the storage boundary.
 tags: [accounts, auth, oauth, credentials, storage]
-paths: ["src/pulsar/core/accounts.py", "src/pulsar/core/store.py", "src/pulsar/core/paths.py", "src/pulsar/core/fsutil.py", "src/pulsar/providers/x/auth.py", "src/pulsar/providers/x/client.py", "src/pulsar/cli/commands/auth.py"]
+paths: ["src/pulsar/accounts/registry.py", "src/pulsar/accounts/store.py", "src/pulsar/home/paths.py", "src/pulsar/home/files.py", "src/pulsar/channels/x/auth.py", "src/pulsar/channels/x/client.py", "src/pulsar/surfaces/cli/commands/auth.py"]
 related_features: [publishing, surfaces]
 related_artifacts: [ORB-13008, ORB-13009, ORB-13027, ORB-13028, ORB-13039, ORB-13138]
 ---
@@ -32,7 +32,7 @@ config.toml                  operator settings (optional)
 ledger.sqlite3, writes.jsonl the write ledger and its export (publishing)
 ```
 
-`<slug>` is `provider--handle` ([paths.py](../../../src/pulsar/core/paths.py)
+`<slug>` is `provider--handle` ([paths.py](../../../src/pulsar/home/paths.py)
 `account_slug`): provider `[a-z0-9]`, handle `[a-z0-9._-]` without a leading dot, at most 100
 characters. The mapping is injective and reversible, and no alias can name a path outside
 `accounts/`. Aliases are case-insensitive and tolerate a leading `@` (`X:@ConstWorks` is
@@ -46,7 +46,7 @@ itself must not be a symlink ([decision](./4_decisions.md#refuse-a-symlinked-hom
 ## 2. Login
 
 `pulsar auth login --account x:<handle> [--client-id ID] [--no-browser]` is human-only and runs
-outside every tool surface ([providers/x/auth.py](../../../src/pulsar/providers/x/auth.py)).
+outside every tool surface ([channels/x/auth.py](../../../src/pulsar/channels/x/auth.py)).
 
 1. OAuth 2.0 authorization code with PKCE, public client, scopes `tweet.read tweet.write
    users.read offline.access`, loopback callback `http://127.0.0.1:8976/callback`. On a remote
@@ -75,7 +75,7 @@ account. With several bound and no default it is `invalid_argument`; an unregist
 `unknown_account` with `detail.known`.
 
 Before every write the bound handle must equal the alias's handle and, when set,
-`expected_handle` ([accounts.py](../../../src/pulsar/core/accounts.py) `check_handle`,
+`expected_handle` ([accounts.py](../../../src/pulsar/accounts/registry.py) `check_handle`,
 `require_expected`); otherwise `account_mismatch` with `detail: {alias, expected_handle,
 bound_handle}` and nothing is sent. The ledger row records the account's alias, user id and
 handle.
@@ -105,13 +105,13 @@ re-login finishes after it.
 
 ## 5. Refresh
 
-Refresh is automatic ([providers/x/client.py](../../../src/pulsar/providers/x/client.py)).
+Refresh is automatic ([channels/x/client.py](../../../src/pulsar/channels/x/client.py)).
 Each account's refresh runs under an exclusive `flock` on `accounts/<slug>/refresh.lock`: the
 first process refreshes, the others wait (up to 45 s, then `lock_timeout`) and reuse the bundle
 it saved. Accounts do not wait for each other. Store reads and writes run in a worker thread,
 so a refresh never blocks the event loop; one refresh per account is in flight per process.
 
-Every lock wait is bounded ([fsutil.py](../../../src/pulsar/core/fsutil.py) `hold_lock`): the
+Every lock wait is bounded ([fsutil.py](../../../src/pulsar/home/files.py) `hold_lock`): the
 refresh locks at 45 s, `accounts.lock` at 15 s. Right after acquiring, the holder writes
 `{pid, label, acquired_at}` into the lock file; a waiter that times out reports it in the
 message and `detail.holder` (null, "an unknown holder", when there is no record, e.g. an older
@@ -134,7 +134,7 @@ refreshes rather than trusting an invented lifetime. A failure inside pulsar aft
 
 ## 6. Storage at Rest
 
-[store.py](../../../src/pulsar/core/store.py) `FernetFileStore` implements the
+[store.py](../../../src/pulsar/accounts/store.py) `FernetFileStore` implements the
 `CredentialStore` interface; the rest of pulsar codes against the interface.
 
 - Fernet encryption with one `key` at the home root for all accounts.
@@ -143,7 +143,7 @@ refreshes rather than trusting an invented lifetime. A failure inside pulsar aft
   file, `fsync`, `link`, directory `fsync`), so concurrent first saves agree on one key, and a
   new directory's parent is fsynced too.
 - Every file pulsar creates is 0600 and every directory 0700, regardless of umask
-  ([fsutil.py](../../../src/pulsar/core/fsutil.py)).
+  ([fsutil.py](../../../src/pulsar/home/files.py)).
 - pulsar refuses to load or save credentials when the home or an account directory is wider
   than 0700, or `key` / `tokens.enc` / `accounts.json` wider than 0600 or owned by another uid:
   `insecure_storage` with the exact `chmod` in `detail.fix`. It never narrows a wide home

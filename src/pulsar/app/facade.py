@@ -16,8 +16,10 @@ from typing import Any
 
 import httpx
 
-from pulsar.core import AccountRegistry, Paths, PulsarError, Settings, load_settings
-from pulsar.providers.x import load_client_id, login
+from pulsar.accounts import AccountRegistry
+from pulsar.channels.x import load_client_id, login
+from pulsar.errors import PulsarError
+from pulsar.home import Paths, Settings, load_settings
 
 from . import health, ops
 from .interfaces import Report

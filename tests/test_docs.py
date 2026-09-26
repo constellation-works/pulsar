@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from pulsar.cli import build_parser
+from pulsar.surfaces.cli import build_parser
 
 ROOT = Path(__file__).resolve().parents[1]
 DOCS = sorted(

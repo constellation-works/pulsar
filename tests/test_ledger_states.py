@@ -6,8 +6,8 @@ import json
 
 import pytest
 
-from pulsar.core.errors import INTERNAL, PulsarError
-from pulsar.core.ledger import (
+from pulsar.errors import INTERNAL, PulsarError
+from pulsar.ledger import (
     COMMITTED_ITEM_STATES,
     FAILED,
     OPEN_ROW_STATES,

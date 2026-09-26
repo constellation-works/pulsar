@@ -5,10 +5,10 @@ from pathlib import Path
 
 import pytest
 
-from pulsar.app.ops import HISTORY_LIMIT_MAX
-from pulsar.core.accounts import AccountRegistry
-from pulsar.core.errors import OutcomeUnknown, PulsarError
-from pulsar.core.ledger import SqliteLedger
+from pulsar.accounts import AccountRegistry
+from pulsar.app import HISTORY_LIMIT_MAX
+from pulsar.errors import OutcomeUnknown, PulsarError
+from pulsar.ledger import SqliteLedger
 
 from .conftest import ALIAS, SECRETS, make_app, make_runtime, register
 from .test_ledger import call, claim_plan, open_session

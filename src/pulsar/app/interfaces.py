@@ -12,8 +12,12 @@ from contextlib import AbstractAsyncContextManager
 from pathlib import Path
 from typing import Any, Protocol, Self
 
-from pulsar.core import Account, AccountRegistry, Bound, Ledger, Paths, Plan, Publisher, Settings
-from pulsar.providers.x import XApi
+from pulsar.accounts import Account, AccountRegistry
+from pulsar.channels.x import XApi
+from pulsar.home import Paths, Settings
+from pulsar.ledger import Ledger
+from pulsar.plan import Plan
+from pulsar.publishing import Bound, Publisher
 
 # A verb's result: the report, and the exit code (0 settled and healthy, 1 not).
 Report = tuple[dict[str, Any], int]

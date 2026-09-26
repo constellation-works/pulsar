@@ -9,7 +9,7 @@ doc_role: decisions
 type: design
 summary: Record before send, a missed post beats a double post, digest excludes path and schedule, reservations, legacy digests.
 tags: [publishing, ledger, idempotency, policy]
-paths: ["src/pulsar/core/ledger/**", "src/pulsar/core/publisher.py", "src/pulsar/core/plan.py"]
+paths: ["src/pulsar/ledger/**", "src/pulsar/publishing/publisher.py", "src/pulsar/plan/model.py"]
 related_features: [channels, surfaces]
 related_artifacts: [ORB-13027, ORB-13028]
 ---
@@ -65,7 +65,7 @@ choose the same way.
 ## The digest covers content, not where or when
 
 **Recorded:** 2026-09-26 · [ORB-13028]
-**Code anchors:** `src/pulsar/core/plan.py::Plan`
+**Code anchors:** `src/pulsar/plan/model.py::Plan`
 
 ### Context
 
@@ -86,7 +86,7 @@ It excludes media paths and `not_before`.
 ## Reserve a plan's unsent posts until it settles
 
 **Recorded:** 2026-09-26 · [ORB-13028]
-**Code anchors:** `src/pulsar/core/ledger/queries.py::usage`
+**Code anchors:** `src/pulsar/ledger/queries.py::usage`
 
 ### Context
 
@@ -107,7 +107,7 @@ claimed) as well as sent, published and unknown ones.
 ## `create_post` keeps its original request digest
 
 **Recorded:** 2026-09-26 · [ORB-13028]
-**Code anchors:** `src/pulsar/core/ledger/keys.py::request_digest`, `src/pulsar/mcp.py::_legacy_post`
+**Code anchors:** `src/pulsar/ledger/keys.py::request_digest`, `src/pulsar/surfaces/mcp/server.py::_legacy_post`
 
 ### Context
 
@@ -128,7 +128,7 @@ account user id), not the plan digest.
 ## X's duplicate refusal is classified from its text
 
 **Recorded:** 2026-09-26 · [ORB-13138]
-**Code anchors:** `src/pulsar/providers/x/client.py`
+**Code anchors:** `src/pulsar/channels/x/client.py`
 
 ### Context
 
@@ -150,7 +150,7 @@ substring; everything else is classified from status codes and fields.
 ## Publisher ledger writes run on the event loop
 
 **Recorded:** 2026-09-26 · [ORB-13138]
-**Code anchors:** `src/pulsar/core/publisher.py::Publisher.publish`, `src/pulsar/core/publisher.py::Publisher.reconcile`, `src/pulsar/mcp.py::_settle_on_error`, `src/pulsar/mcp.py::_record_success`
+**Code anchors:** `src/pulsar/publishing/publisher.py::Publisher.publish`, `src/pulsar/publishing/publisher.py::Publisher.reconcile`, `src/pulsar/surfaces/mcp/server.py::_settle_on_error`, `src/pulsar/surfaces/mcp/server.py::_record_success`
 
 ### Context
 
@@ -177,7 +177,7 @@ every surface, the CLI included.
 ## `writes.jsonl` is a best-effort export
 
 **Recorded:** 2026-09-26 · [ORB-13138]
-**Code anchors:** `src/pulsar/core/writelog.py::WriteLog.export`
+**Code anchors:** `src/pulsar/app/writelog.py::WriteLog.export`
 
 ### Context
 
@@ -198,7 +198,7 @@ write already happened, and reporting it as failed would invite a duplicate.
 ## A stale delete is re-armed and a lost delete is retryable
 
 **Recorded:** 2026-09-26 · [ORB-13138]
-**Code anchors:** `src/pulsar/core/ledger/records.py::REARMABLE_TOOLS`, `src/pulsar/core/ledger/facade.py::Ledger.claim`, `src/pulsar/mcp.py::delete_post`, `src/pulsar/providers/x/client.py::XClient._post_refresh`
+**Code anchors:** `src/pulsar/ledger/records.py::REARMABLE_TOOLS`, `src/pulsar/ledger/facade.py::SqliteLedger.claim`, `src/pulsar/surfaces/mcp/server.py::delete_post`, `src/pulsar/channels/x/client.py::XClient._post_refresh`
 
 ### Context
 
@@ -216,7 +216,7 @@ also take a fresh key per call). The takeover bumps `attempts` and writes a `not
 recorded. `create_post` and plan rows are never re-armed; they go through `pulsar reconcile`.
 
 For the same two requests a reply lost after sending is reported as a retryable `api_error`,
-not `outcome_unknown` (`ambiguous=False` in `mcp.py`): repeating either is harmless, so the
+not `outcome_unknown` (`ambiguous=False` in `surfaces/mcp/server.py`): repeating either is harmless, so the
 caller is told to retry rather than to reconcile. A lost token-refresh reply is a retryable
 `api_error` whose message says X may have rotated the pair (`detail.outcome: "unknown"`).
 
@@ -229,7 +229,7 @@ caller is told to retry rather than to reconcile. A lost token-refresh reply is 
 ## Protocol strings are validated at the edge, not wrapped in types
 
 **Recorded:** 2026-09-26 · [ORB-13138]
-**Code anchors:** `src/pulsar/core/ledger/keys.py::check_key`, `src/pulsar/providers/x/client.py::check_x_id`, `src/pulsar/core/plan.py::alias_provider`
+**Code anchors:** `src/pulsar/ledger/keys.py::check_key`, `src/pulsar/channels/x/client.py::check_x_id`, `src/pulsar/plan/aliases.py::alias_provider`
 
 ### Context
 

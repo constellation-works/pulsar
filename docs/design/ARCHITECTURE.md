@@ -9,25 +9,37 @@ summary: The layers of pulsar, which way imports point, and where ambient state 
 
 # Architecture
 
-pulsar is one core with three front ends (the surfaces). This page describes its layers and
+pulsar is one set of packages with three front ends (the surfaces). This page describes its layers and
 where ambient state is read.
 
 ## Layers
 
 ```
-entry        main                            builds the App, supplies it to a front end
+entry        main                                   builds the App, supplies it to a front end
                  │
-front ends   cli ─▶ mcp, orbit_tool          the surfaces: argv, MCP, the Orbit envelope
+surfaces     cli ─▶ mcp, orbit                      argv, MCP, the Orbit envelope
                  │
-app          App ─▶ ops, health ─▶ runtime   the verbs every front end calls; composition
+app          App ─▶ ops, health ─▶ runtime          the verbs; the front ends' one gateway
                  │
-providers    x (client, auth, adapter)       one channel each
+channels.x   client, auth, adapter                  the X channel
                  │
-core         plan, publisher, ledger, policy, accounts, store, media, guard, settings, paths
+publishing   publisher, policy, media               plan → claimed, sent, settled posts
+accounts     registry, store                        aliases, bound identities, credentials
+ledger       SqliteLedger, usage                    one row per write, committed before it leaves
+channels     contract                               the Channel protocol and its values
+home         paths, files, settings                 the home directory and config.toml
+plan         model, aliases                         the channel-neutral publish plan
+guard, jsonx, errors                                the scanner, JSON views, error codes
 ```
 
-An arrow points at what a layer imports. The CLI starts the other two front ends (`serve`,
-`orbit-tool`).
+An arrow points at what a layer imports; each package imports only packages below it, and
+none imports its callers. The CLI starts the other two front ends (`serve`, `orbit-tool`).
+The front ends import nothing below `app`: what they need from the packages beneath (error
+codes, the plan, ledger states, media limits) is re-exported from `pulsar.app`.
+
+Each package is named for what its modules are, and exposes what other packages use in its
+`__init__.py`; callers import the package, not its modules. `channels` does not import its
+implementations (`channels.x` stands on `accounts`, which stands on the contract).
 
 `main.py` builds a `LocalApp` (the verbs, bound to one home and one transport) and hands it to
 the CLI, which types it as `App`, the protocol it codes against. Tests hand in a `LocalApp` on
@@ -36,28 +48,33 @@ the fake transport the same way. Every injected dependency is typed by such a pr
 it names the implementation (`LocalApp`, `LocalRuntime`, `SqliteLedger`, `FernetFileStore`,
 `XChannel`, `XClient`).
 
-| Layer | Owns |
+| Package | Owns |
 |---|---|
-| `core` | plans, the publisher, the ledger, policy, accounts and credential storage, media loading, the secret scanner, settings; no HTTP, no MCP |
-| `providers/<name>` | one channel: its HTTP client, OAuth, and the `Channel` adapter |
-| `app` | the `App` and `Runtime` protocols (`interfaces.py`); `LocalApp` (`facade.py`), over the `LocalRuntime` that joins settings, storage, the ledger and providers (`runtime.py`), the operator verbs (`ops.py`) and account health (`health.py`), each returning `(report, exit_code)` |
-| `mcp.py`, `orbit_tool.py` | the MCP server and the Orbit exec backend |
-| `cli/` | the dispatcher: `main.py` (`run`) parses argv and dispatches to `commands/` (one module per command, each declaring itself in `register`), which print and fail through `toolkit/` (`parser`, `context`, `render`, `views`, `errors`) |
+| `errors`, `jsonx`, `guard` | the error codes and `PulsarError`; typed views over parsed JSON; the secret scanner and redaction |
+| `plan` | the publish plan and its canonical digest (`model.py`); `provider:handle` aliases (`aliases.py`) |
+| `home` | the home layout (`paths.py`), owner-only files and locks (`files.py`), `config.toml` (`settings.py`) |
+| `channels` | the `Channel` contract (`contract.py`); `channels/x/` is the X channel: its HTTP client, OAuth and the `Channel` adapter |
+| `accounts` | the account registry (`registry.py`) and the encrypted credential store (`store.py`) |
+| `ledger` | the write ledger, its schema and queries (`SqliteLedger`), and the usage it sums (`usage.py`) |
+| `publishing` | the `Publisher` (`publisher.py`), budget, cap and quiet-hour policy (`policy.py`), media loading (`media.py`) |
+| `app` | the `App` and `Runtime` protocols (`interfaces.py`); `LocalApp` (`facade.py`), over the `LocalRuntime` that joins settings, storage, the ledger and channels (`runtime.py`), the operator verbs (`ops.py`), account health (`health.py`), the `writes.jsonl` export (`writelog.py`) and the `posted.jsonl` import (`importer.py`), each verb returning `(report, exit_code)` |
+| `surfaces/mcp/`, `surfaces/orbit/` | the MCP server (`server.py`) and the Orbit exec backend (`backend.py`) |
+| `surfaces/cli/` | the dispatcher: `main.py` (`run`) parses argv and dispatches to `commands/` (one module per command, each declaring itself in `register`), which print and fail through `toolkit/` (`parser`, `context`, `render`, `views`, `errors`) |
 | `main.py` | the entry point: reads the environment, cwd and `$HOME`, builds `LocalApp` and runs the CLI with it |
 
 ## Ambient state
 
-`core` takes the environment, the working directory and the home as arguments.
+Nothing below `main` reads the environment, the working directory or the home itself.
 The entry point (`pulsar.main`) reads them once and builds the `App` with them; everything
 below receives them from there:
 
 - **Home.** `PULSAR_HOME`, else `~/.config/pulsar`; under Orbit, `$ORBIT_PLUGIN_STATE/home`
   (`app.default_paths`). The Orbit backend refuses a `PULSAR_HOME` that names another home
-  (`orbit_tool.check_plugin_home`). Orbit runs the backend as `pulsar orbit-tool`, so it gets
+  (`surfaces.orbit.backend.check_plugin_home`). Orbit runs the backend as `pulsar orbit-tool`, so it gets
   the same `App`.
 - **Relative media paths** start from the `media_base` `App.runtime` passes to the `Runtime`: the
-  process cwd for the CLI and MCP server, the workspace root for the Orbit backend. Core
-  refuses a relative path with no base.
+  process cwd for the CLI and MCP server, the workspace root for the Orbit backend. Media
+  loading refuses a relative path with no base.
 - **Caller label.** `Runtime.caller` reads `PULSAR_CALLER` from the environment `App` was given.
 
 ## Errors

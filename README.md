@@ -90,6 +90,6 @@ Design docs live in [docs/design](docs/design/) ([conventions](docs/design/CONVE
 make check    # uv lock --check, ruff, basedpyright strict, pytest (offline)
 ```
 
-`src/pulsar/core` is provider-neutral and imports no HTTP; `providers/x` is the X adapter;
-`app` joins them into the verbs; `cli/`, `mcp.py` and `orbit_tool.py` are the front ends on
-top.
+The packages under `src/pulsar` are channel-neutral and import no HTTP, except `channels/x`,
+the X channel; `app` joins them into the verbs; `surfaces/` (the CLI, the MCP server and the
+Orbit backend) are the front ends on top, and import only `app`.

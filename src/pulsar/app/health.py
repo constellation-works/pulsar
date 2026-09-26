@@ -22,21 +22,20 @@ import time
 from pathlib import Path
 from typing import Any, Literal, assert_never
 
-from pulsar.core import (
+from pulsar.accounts import (
     ACTIVE,
-    AUTH_EXPIRED,
     REAUTH_REQUIRED,
     REVOKED,
     Account,
     AccountRegistry,
-    PulsarError,
-    Settings,
     check_handle,
     expected_handles,
     home_command,
     login_command,
 )
-from pulsar.providers.x import REFRESH_AHEAD_SECONDS, load_client_id
+from pulsar.channels.x import REFRESH_AHEAD_SECONDS, load_client_id
+from pulsar.errors import AUTH_EXPIRED, PulsarError
+from pulsar.home import Settings
 
 from .interfaces import Report, Runtime
 

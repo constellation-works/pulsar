@@ -9,7 +9,7 @@ doc_role: decisions
 type: design
 summary: Why logins are verified before storing, why a wide home is refused rather than fixed, and why refresh re-reads the store.
 tags: [accounts, auth, credentials]
-paths: ["src/pulsar/providers/x/auth.py", "src/pulsar/core/fsutil.py", "src/pulsar/providers/x/client.py", "src/pulsar/core/store.py", "src/pulsar/core/paths.py"]
+paths: ["src/pulsar/channels/x/auth.py", "src/pulsar/home/files.py", "src/pulsar/channels/x/client.py", "src/pulsar/accounts/store.py", "src/pulsar/home/paths.py"]
 related_features: [publishing]
 related_artifacts: [ORB-13027, ORB-13028, ORB-13138]
 ---
@@ -44,7 +44,7 @@ New tools and schemas are checked for credential-shaped parameters in tests
 ## Verify the token's owner before storing a login
 
 **Recorded:** 2026-09-26 · [ORB-13028]
-**Code anchors:** `src/pulsar/providers/x/auth.py::complete_login`
+**Code anchors:** `src/pulsar/channels/x/auth.py::complete_login`
 
 ### Context
 
@@ -67,7 +67,7 @@ re-checks the bound handle the same way.
 ## Refuse a wide home, never narrow it
 
 **Recorded:** 2026-09-26 · [ORB-13027]
-**Code anchors:** `src/pulsar/core/fsutil.py::require_private`
+**Code anchors:** `src/pulsar/home/files.py::require_private`
 
 ### Context
 
@@ -88,7 +88,7 @@ pulsar keeps secrets in.
 ## Refuse a symlinked home, resolve nothing
 
 **Recorded:** 2026-09-26 · [ORB-13138]
-**Code anchors:** `src/pulsar/core/paths.py::Paths.check_home`, `src/pulsar/core/fsutil.py::require_private`
+**Code anchors:** `src/pulsar/home/paths.py::Paths.check_home`, `src/pulsar/home/files.py::require_private`
 
 ### Context
 
@@ -114,7 +114,7 @@ Directories above the home are not inspected: naming the home is the operator's 
 ## Unreadable credentials are not a logout
 
 **Recorded:** 2026-09-26 · [ORB-13138]
-**Code anchors:** `src/pulsar/core/store.py::FernetFileStore.load`
+**Code anchors:** `src/pulsar/accounts/store.py::FernetFileStore.load`
 
 ### Context
 
@@ -138,7 +138,7 @@ the last resort once the key is gone for good.
 ## Re-read the store when a refresh is rejected
 
 **Recorded:** 2026-09-26 · [ORB-13027]
-**Code anchors:** `src/pulsar/providers/x/client.py::XClient`
+**Code anchors:** `src/pulsar/channels/x/client.py::XClient`
 
 ### Context
 
@@ -160,7 +160,7 @@ one, use it instead of reporting `auth_expired`.
 ## The browser is opened, not supervised
 
 **Recorded:** 2026-09-26 · [ORB-13138]
-**Code anchors:** `src/pulsar/providers/x/auth.py::authorize`
+**Code anchors:** `src/pulsar/channels/x/auth.py::authorize`
 
 ### Context
 

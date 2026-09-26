@@ -29,7 +29,7 @@
 - **Inject dependencies, or move the module down.** A module gets what it
   depends on as an argument: a class takes it in its constructor, a function
   takes it as a parameter. It does not import or build it for itself. For
-  example, `pulsar.main` builds the `App` and passes it to `pulsar.cli.run`.
+  example, `pulsar.main` builds the `App` and passes it to `pulsar.surfaces.cli.run`.
   If a module is used by only one higher module, move it beneath that module
   instead: `cli/toolkit/` sits under `cli/` because only the CLI uses it.
 - **Type an injected dependency by its interface.** The parameter's type is a
@@ -41,7 +41,7 @@
 - **Each package exposes what others use in its `__init__.py`.** Everything
   imported from outside a package is re-exported in its `__init__.py` and
   listed in `__all__`. Callers import the package, not its leaf files: for
-  example, `from pulsar.cli import toolkit`, then `toolkit.notice`.
+  example, `from pulsar.surfaces.cli import toolkit`, then `toolkit.notice`.
 - **A package holds only leaf modules that belong to the group it is named
   for.** `commands/` holds commands. What the commands stand on is not a
   command, so it lives in `toolkit/`. A flat, generic package that holds

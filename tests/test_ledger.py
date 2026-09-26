@@ -21,10 +21,12 @@ import pytest
 from mcp.client._memory import InMemoryTransport
 from mcp.client.session import ClientSession
 
-from pulsar.core.errors import OUTCOME_UNKNOWN
-from pulsar.core.ledger import (
+from pulsar.app import Runtime
+from pulsar.errors import OUTCOME_UNKNOWN
+from pulsar.ledger import (
     FAILED,
     PUBLISHED,
+    SCHEMA_V1,
     SCHEMA_VERSION,
     SUBMITTING,
     UNKNOWN,
@@ -33,8 +35,7 @@ from pulsar.core.ledger import (
     SqliteLedger,
     request_digest,
 )
-from pulsar.core.ledger.schema import SCHEMA_V1
-from pulsar.mcp import Runtime, build_server
+from pulsar.surfaces.mcp import build_server
 
 from .conftest import SECRETS, make_runtime
 from .media_samples import MP4

@@ -6,7 +6,7 @@ last_validated: 2026-09-26
 
 # Reference: `config.toml`
 
-Optional, in the pulsar home ([settings.py](../../../../src/pulsar/core/settings.py)). Every key
+Optional, in the pulsar home ([settings.py](../../../../src/pulsar/home/settings.py)). Every key
 has a default. An unknown key or bad value fails at load with `invalid_config` whose message
 starts with the resolved path of the file and names the key (`detail: {path, key}`), rather
 than falling back silently. It is the only source of settings for every surface, the Orbit

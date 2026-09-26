@@ -1,4 +1,4 @@
-"""The Orbit exec backend (``orbit_tool.py``) and the plugin manifest around it.
+"""The Orbit exec backend (``surfaces/orbit/backend.py``) and the plugin manifest around it.
 
 These run the backend in-process; ``orbit plugin test <clean export> --grant fs,network``
 runs the same goldens (``tests/conformance/``) through Orbit and its sandbox.
@@ -16,10 +16,10 @@ import jsonschema
 import pytest
 import yaml
 
-from pulsar import orbit_tool
 from pulsar.app import LocalApp, default_paths, ops
-from pulsar.core.paths import Paths
+from pulsar.home import Paths
 from pulsar.main import main as pulsar_main
+from pulsar.surfaces.orbit import backend as orbit_tool
 
 from .conftest import ALIAS, SECRETS, make_app, register
 from .media_samples import PNG

@@ -11,7 +11,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from pulsar.app import LocalApp, configure_logging, default_paths
-from pulsar.cli import run
+from pulsar.surfaces.cli import run
 
 
 def main(argv: Sequence[str] | None = None) -> int:
