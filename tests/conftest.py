@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import fcntl
 import json
+import os
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs
 
 import httpx
 import pytest
@@ -148,3 +154,85 @@ class FakeX:
 @pytest.fixture
 def fake_x() -> FakeX:
     return FakeX()
+
+
+class RotatingTokenEndpoint:
+    """X's OAuth token endpoint with real rotation semantics.
+
+    Each successful refresh issues a new access/refresh pair and invalidates
+    the refresh token it consumed; a spent or unknown refresh token gets 400
+    ``invalid_grant``, as on X. State lives in a JSON file (updated under its
+    own ``flock``, standing in for X's server-side atomicity) so separate OS
+    processes built from the same ``state_file`` share one endpoint.
+    """
+
+    def __init__(self, state_file: os.PathLike[str] | str, *, delay: float = 0.0) -> None:
+        self.state_file = Path(state_file)
+        self.delay = delay  # simulated latency, spent while the caller holds its lock
+
+    def seed(self, refresh_token: str) -> None:
+        self.state_file.write_text(
+            json.dumps({"valid_refresh": refresh_token, "generation": 0, "calls": 0})
+        )
+
+    @contextlib.contextmanager
+    def _state(self):
+        with self.state_file.open("r+") as fh:
+            fcntl.flock(fh, fcntl.LOCK_EX)
+            state = json.load(fh)
+            yield state
+            fh.seek(0)
+            fh.truncate()
+            json.dump(state, fh)
+
+    def calls(self) -> int:
+        return json.loads(self.state_file.read_text())["calls"]
+
+    def rotate(self, refresh_token: str, *, count: bool = True) -> dict[str, Any] | None:
+        """Consume ``refresh_token``: the new token response, or None if it is spent."""
+        with self._state() as state:
+            state["calls"] += int(count)
+            if refresh_token != state["valid_refresh"]:
+                return None
+            state["generation"] += 1
+            gen = state["generation"]
+            state["valid_refresh"] = f"refresh-gen{gen}-ZZZZ"
+        return {
+            "token_type": "bearer",
+            "expires_in": 7200,
+            "access_token": f"access-gen{gen}-YYYY",
+            "refresh_token": f"refresh-gen{gen}-ZZZZ",
+            "scope": "tweet.read tweet.write users.read offline.access",
+        }
+
+    async def handle(self, request: httpx.Request) -> httpx.Response:
+        if not request.url.path.endswith("/oauth2/token"):
+            return httpx.Response(404, json={"title": "Not Found"})
+        if self.delay:
+            await asyncio.sleep(self.delay)
+        form = parse_qs(request.content.decode())
+        issued = self.rotate(form.get("refresh_token", [""])[0])
+        if issued is None:
+            return httpx.Response(
+                400,
+                json={"error": "invalid_grant", "error_description": "Value passed was invalid"},
+            )
+        return httpx.Response(200, json=issued)
+
+    def transport(self) -> httpx.MockTransport:
+        return httpx.MockTransport(self.handle)
+
+
+@pytest.fixture
+def token_endpoint(tmp_path) -> RotatingTokenEndpoint:
+    endpoint = RotatingTokenEndpoint(tmp_path / "x-token-endpoint.json")
+    endpoint.seed(REFRESH)
+    return endpoint
+
+
+@pytest.fixture
+def private_umask():
+    """A permissive (group-writable) umask, so every 0600 must come from pulsar itself."""
+    old = os.umask(0o002)
+    yield
+    os.umask(old)

@@ -1,12 +1,20 @@
+import asyncio
+import fcntl
 import json
+import multiprocessing
+import os
 import time
+from pathlib import Path
 
+import httpx
 import pytest
 
+from pulsar.config import Paths
 from pulsar.errors import AuthExpired, PulsarError
+from pulsar.store import TokenBundle, TokenStore
 from pulsar.xapi import MediaProcessingError, XClient
 
-from .conftest import ACCESS, ROTATED_ACCESS, ROTATED_REFRESH
+from .conftest import ACCESS, REFRESH, ROTATED_ACCESS, ROTATED_REFRESH, RotatingTokenEndpoint
 
 pytestmark = pytest.mark.anyio
 
@@ -227,3 +235,170 @@ async def test_upload_video_processing_timeout(store, authed, fake_x, monkeypatc
     assert exc.value.detail["state"] == "in_progress"
     assert clock.sleeps == [2, 1]
     assert len(fake_x.calls("GET", "/media/upload")) == 1
+
+
+# -- refresh across clients and processes -------------------------------------
+
+
+def _expired(bundle):
+    bundle.expires_at = time.time() - 10
+    return bundle
+
+
+async def test_two_clients_on_one_home_refresh_once(paths, bundle, token_endpoint):
+    TokenStore(paths).save(_expired(bundle))
+    token_endpoint.delay = 0.2  # the first refresher holds the lock across this
+    clients = [XClient(TokenStore(paths), transport=token_endpoint.transport()) for _ in range(2)]
+    try:
+        tokens = await asyncio.gather(*(c.access_token() for c in clients))
+    finally:
+        for c in clients:
+            await c.aclose()
+    assert token_endpoint.calls() == 1
+    assert tokens == ["access-gen1-YYYY", "access-gen1-YYYY"]
+    assert TokenStore(paths).load().refresh_token == "refresh-gen1-ZZZZ"
+
+
+def _refresh_in_child(home, state_file, barrier, results):
+    async def run():
+        endpoint = RotatingTokenEndpoint(state_file, delay=0.3)
+        client = XClient(TokenStore(Paths(Path(home))), transport=endpoint.transport())
+        try:
+            return await client.access_token()
+        finally:
+            await client.aclose()
+
+    barrier.wait()
+    try:
+        results.put(("ok", asyncio.run(run())))
+    except PulsarError as exc:
+        results.put(("error", exc.code))
+
+
+async def test_two_processes_on_one_home_refresh_once(paths, bundle, token_endpoint):
+    TokenStore(paths).save(_expired(bundle))
+    ctx = multiprocessing.get_context("spawn")
+    barrier, results = ctx.Barrier(2), ctx.Queue()
+    procs = [
+        ctx.Process(
+            target=_refresh_in_child,
+            args=(str(paths.home), str(token_endpoint.state_file), barrier, results),
+        )
+        for _ in range(2)
+    ]
+    for p in procs:
+        p.start()
+    outcomes = [await asyncio.to_thread(results.get, timeout=60) for _ in procs]
+    for p in procs:
+        await asyncio.to_thread(p.join, 30)
+        assert p.exitcode == 0
+    assert outcomes == [("ok", "access-gen1-YYYY")] * 2
+    assert token_endpoint.calls() == 1
+
+
+async def test_refresh_waits_boundedly_for_the_lock(paths, authed, token_endpoint, monkeypatch):
+    monkeypatch.setattr("pulsar.xapi.REFRESH_LOCK_WAIT_SECONDS", 0.2)
+    client = XClient(TokenStore(paths), transport=token_endpoint.transport())
+    fd = os.open(paths.refresh_lock, os.O_RDWR | os.O_CREAT, 0o600)
+    fcntl.flock(fd, fcntl.LOCK_EX)  # another process mid-refresh, and stuck
+    try:
+        with pytest.raises(PulsarError) as exc:
+            await client.refresh(authed)
+    finally:
+        os.close(fd)
+        await client.aclose()
+    assert exc.value.code == "api_error"
+    assert exc.value.detail["retryable"] is True
+    assert token_endpoint.calls() == 0
+
+
+async def test_rejected_refresh_uses_newer_bundle_from_a_lockless_process(
+    paths, bundle, token_endpoint
+):
+    store = TokenStore(paths)
+    store.save(_expired(bundle))
+
+    async def rogue_rotates_first(request):
+        # An older pulsar that ignores the lock rotated with the same refresh
+        # token and saved its result while our POST was in flight.
+        issued = token_endpoint.rotate(REFRESH, count=False)
+        store.save(TokenBundle.from_token_response(issued, client_id=bundle.client_id))
+        return await token_endpoint.handle(request)
+
+    client = XClient(store, transport=httpx.MockTransport(rogue_rotates_first))
+    try:
+        assert await client.access_token() == "access-gen1-YYYY"
+    finally:
+        await client.aclose()
+    assert token_endpoint.calls() == 1  # ours, rejected with invalid_grant
+    assert store.load().refresh_token == "refresh-gen1-ZZZZ"
+
+
+async def test_rejected_refresh_retries_with_newer_but_expiring_bundle(
+    paths, bundle, token_endpoint
+):
+    store = TokenStore(paths)
+    store.save(_expired(bundle))
+
+    async def rogue_rotates_first(request):
+        if token_endpoint.calls() == 0:
+            issued = {**token_endpoint.rotate(REFRESH, count=False), "expires_in": 0}
+            store.save(TokenBundle.from_token_response(issued, client_id=bundle.client_id))
+        return await token_endpoint.handle(request)
+
+    client = XClient(store, transport=httpx.MockTransport(rogue_rotates_first))
+    try:
+        assert await client.access_token() == "access-gen2-YYYY"
+    finally:
+        await client.aclose()
+    assert token_endpoint.calls() == 2
+
+
+async def test_genuinely_revoked_refresh_token_is_auth_expired(paths, bundle, token_endpoint):
+    store = TokenStore(paths)
+    store.save(_expired(bundle))
+    token_endpoint.rotate(REFRESH, count=False)  # spent elsewhere; nothing newer saved here
+    client = XClient(store, transport=token_endpoint.transport())
+    try:
+        with pytest.raises(AuthExpired):
+            await client.access_token()
+    finally:
+        await client.aclose()
+    assert token_endpoint.calls() == 1
+    assert store.load().refresh_token == REFRESH  # a failed refresh never clobbers the store
+
+
+async def test_refresh_does_not_clobber_a_concurrent_login(paths, bundle, token_endpoint):
+    store = TokenStore(paths)
+    store.save(_expired(bundle))
+    relogin = TokenBundle(
+        access_token="access-relogin-QQQQ",
+        refresh_token="refresh-relogin-RRRR",
+        expires_at=time.time() + 7200,
+        scope="",
+        client_id=bundle.client_id,
+    )
+
+    async def human_relogs_in_mid_refresh(request):
+        response = await token_endpoint.handle(request)
+        store.save(relogin)  # `pulsar auth login` does not take the refresh lock
+        return response
+
+    client = XClient(store, transport=httpx.MockTransport(human_relogs_in_mid_refresh))
+    try:
+        assert await client.access_token() == relogin.access_token
+    finally:
+        await client.aclose()
+    assert store.load() == relogin
+
+
+async def test_insecure_storage_is_not_auth_expired(paths, authed, fake_x):
+    os.chmod(paths.token_file, 0o644)
+    client = XClient(TokenStore(paths), transport=fake_x.transport())
+    try:
+        with pytest.raises(PulsarError) as exc:
+            await client.me()
+    finally:
+        await client.aclose()
+    assert exc.value.code == "insecure_storage"
+    assert fake_x.requests == []

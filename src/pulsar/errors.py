@@ -15,6 +15,7 @@ RATE_LIMITED = "rate_limited"
 NOT_FOUND = "not_found"
 API_ERROR = "api_error"
 INVALID_CONFIG = "invalid_config"
+INSECURE_STORAGE = "insecure_storage"
 
 
 class PulsarError(Exception):

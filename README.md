@@ -43,6 +43,15 @@ uv sync
 Refresh happens automatically. When a refresh fails (token revoked, app reset),
 tools return `auth_expired` and a human re-runs `auth login`.
 
+Several pulsar processes may share one home (a stdio server per client, plus
+`auth status`). X rotates the refresh token on every use, so refreshes are
+serialised across processes with an exclusive `flock` on `refresh.lock`: the
+first process refreshes, the others wait (up to 45 s, then `api_error`) and
+reuse the bundle it saved. If X still rejects a refresh token because a
+process that ignores the lock (an older pulsar mid-upgrade) rotated it first,
+pulsar re-reads the store and uses the newer bundle instead of reporting
+`auth_expired`.
+
 ## Configuration
 
 Optional `config.toml` in the pulsar home. Every key has a default, and an
@@ -101,6 +110,7 @@ Failures never raise into the client; they come back as
 | code | meaning | what to do |
 |---|---|---|
 | `auth_expired` | no token, or refresh failed (revoked / app reset) | stop; a human runs `pulsar auth login` |
+| `insecure_storage` | the pulsar home is wider than 0700, or `key` / `tokens.enc` wider than 0600 or not owned by the server's user | stop; a human runs the `chmod` in `message` (also `detail.fix`) — not a re-login |
 | `invalid_text` | empty, over 280 weighted chars, control chars, reply+quote together | rewrite |
 | `secret_detected` | text matches a credential pattern | rewrite; never retry verbatim |
 | `invalid_media` | bad path/base64, path outside `media.roots` or not a regular file, content that is not png/jpeg/gif/webp/mp4 or does not match the declared/extension MIME (`detail: {declared, sniffed}`), oversized media, or failed/timed-out video processing | fix the input or inspect X's processing detail |
@@ -189,9 +199,24 @@ who claimed to make a write, after the fact.
   cannot verify intent; that rule lives with the caller (and is repeated in the
   tool description and server instructions).
 - Encrypted-at-rest means Fernet with a key file beside the bundle (both 0600,
-  directory 0700). It protects against backups, `cat`, and stray commits — not
-  against a compromised host account. That is the intended boundary: the
-  *agent* never holds secrets; the connector process does.
+  directory 0700). Saves are atomic (temp file, `fsync`, rename), so a crash
+  mid-refresh never destroys the only refresh token, and concurrent first
+  saves agree on one key. Every file pulsar creates in its home — `key`,
+  `tokens.enc`, `client.json`, `whoami.json`, `writes.jsonl`, `refresh.lock` —
+  is 0600 regardless of umask.
+- What that protects against: the bundle leaking in plaintext through
+  backups, `cat`/`grep` over the home, a stray commit, or another local user.
+  pulsar refuses to load or save credentials when the home is wider than
+  0700, or `key`/`tokens.enc` wider than 0600 or owned by another uid
+  (`insecure_storage`, with the exact `chmod` fix), rather than use a token
+  others could have copied.
+- What it does not protect against: any process running as the same uid can
+  read the key and the ciphertext and decrypt them. On the Mac that includes
+  an Orbit-sandboxed worker that can read `~/.config`. The long-term fix is
+  host-held secrets outside the user's files (ORB-13008, ORB-13009); the
+  store sits behind a `CredentialStore` interface so that can drop in. Until
+  then the boundary is: the *agent* never holds secrets; the connector
+  process does.
 
 ## Development
 

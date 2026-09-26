@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from .config import Paths
+from .fsutil import append_private
 
 DEFAULT_CALLER_ENV = "PULSAR_CALLER"
 
@@ -46,6 +47,5 @@ class WriteLog:
         if extra:
             entry.update(extra)
         self.paths.ensure()
-        with self.paths.write_log.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(entry, sort_keys=True) + "\n")
+        append_private(self.paths.write_log, json.dumps(entry, sort_keys=True) + "\n")
         return entry

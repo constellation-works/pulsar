@@ -24,9 +24,11 @@ from .errors import (
     AuthExpired,
     PulsarError,
 )
-from .store import TokenBundle, TokenStore
+from .store import CredentialConflict, CredentialStore, TokenBundle
 
 REFRESH_AHEAD_SECONDS = 120
+# Longer than one token POST (the HTTP timeout) so a waiter outlasts a live refresher.
+REFRESH_LOCK_WAIT_SECONDS = 45.0
 IMAGE_CHUNK_BYTES = 1024 * 1024
 VIDEO_CHUNK_BYTES = 4 * 1024 * 1024
 PROCESSING_TIMEOUT_SECONDS = 300
@@ -80,7 +82,7 @@ def map_http_error(resp: httpx.Response) -> PulsarError:
 class XClient:
     def __init__(
         self,
-        store: TokenStore,
+        store: CredentialStore,
         *,
         transport: httpx.AsyncBaseTransport | None = None,
         base_url: str = X_API_BASE,
@@ -110,38 +112,46 @@ class XClient:
             raise AuthExpired("no X authorization on this host; run `pulsar auth login`")
         return bundle
 
+    def _expiring(self, bundle: TokenBundle) -> bool:
+        return self._now() + REFRESH_AHEAD_SECONDS >= bundle.expires_at
+
     async def access_token(self) -> str:
         bundle = await self._bundle()
-        if self._now() + REFRESH_AHEAD_SECONDS >= bundle.expires_at:
+        if self._expiring(bundle):
             bundle = await self.refresh(bundle)
         return bundle.access_token
 
     async def refresh(self, bundle: TokenBundle) -> TokenBundle:
+        """Replace ``bundle`` (expiring, or rejected by X) with a working one.
+
+        X rotates the refresh token on every use, so a second refresh with the
+        same token fails. The asyncio lock coalesces refreshes inside this
+        process; the store's cross-process lock is held from the re-load to
+        the save, so another process sharing this home either refreshes first
+        (and we reuse its bundle) or waits for us.
+        """
         async with self._refresh_lock:
-            current = self.store.load() or bundle
-            if (
-                current.access_token != bundle.access_token
-                and self._now() + REFRESH_AHEAD_SECONDS < current.expires_at
-            ):
-                return current  # someone else refreshed while we waited
+            async with self.store.refresh_lock(REFRESH_LOCK_WAIT_SECONDS):
+                return await self._refresh_locked(bundle)
+
+    async def _refresh_locked(self, stale: TokenBundle) -> TokenBundle:
+        current = await self._bundle()
+        if current.access_token != stale.access_token and not self._expiring(current):
+            return current  # another refresher (this process or another) got there first
+        # Two attempts: the second only after a rejected refresh token turned out
+        # to have been rotated by a process that ignored the lock.
+        for _ in range(2):
             if not current.refresh_token:
                 raise AuthExpired("no refresh token stored; run `pulsar auth login`")
-            try:
-                resp = await self._http.post(
-                    self.token_url,
-                    data={
-                        "grant_type": "refresh_token",
-                        "refresh_token": current.refresh_token,
-                        "client_id": current.client_id,
-                    },
-                    headers={"Content-Type": "application/x-www-form-urlencoded"},
-                )
-            except httpx.HTTPError as exc:
-                raise PulsarError(
-                    API_ERROR, f"token refresh failed: {exc.__class__.__name__}"
-                ) from exc
+            resp = await self._post_refresh(current)
             if resp.status_code in (400, 401, 403):
-                raise AuthExpired()
+                newer = self.store.load()
+                if newer is None or newer.refresh_token == current.refresh_token:
+                    raise AuthExpired()
+                if not self._expiring(newer):
+                    return newer
+                current = newer
+                continue
             if resp.status_code >= 400:
                 raise map_http_error(resp)
             fresh = TokenBundle.from_token_response(
@@ -149,8 +159,27 @@ class XClient:
             )
             if fresh.refresh_token is None:
                 fresh.refresh_token = current.refresh_token
-            self.store.save(fresh)
+            try:
+                self.store.save(fresh, expected_previous=current)
+            except CredentialConflict:
+                # Only a new `auth login` writes without the lock; its binding wins.
+                return await self._bundle()
             return fresh
+        raise AuthExpired()
+
+    async def _post_refresh(self, bundle: TokenBundle) -> httpx.Response:
+        try:
+            return await self._http.post(
+                self.token_url,
+                data={
+                    "grant_type": "refresh_token",
+                    "refresh_token": bundle.refresh_token,
+                    "client_id": bundle.client_id,
+                },
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+        except httpx.HTTPError as exc:
+            raise PulsarError(API_ERROR, f"token refresh failed: {exc.__class__.__name__}") from exc
 
     # -- transport ----------------------------------------------------------
 

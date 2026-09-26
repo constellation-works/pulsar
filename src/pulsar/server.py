@@ -28,6 +28,7 @@ from mcp.types import ToolAnnotations
 from . import __version__
 from .config import Paths, default_paths
 from .errors import PulsarError
+from .fsutil import write_private_atomic
 from .guard import validate_text
 from .media import load_media
 from .settings import Prices, Settings, load_settings
@@ -78,7 +79,7 @@ class Runtime:
                 pass
         me = await self.client.me()
         self.paths.ensure()
-        cache.write_text(json.dumps(me) + "\n")
+        write_private_atomic(cache, (json.dumps(me) + "\n").encode())
         return me
 
 

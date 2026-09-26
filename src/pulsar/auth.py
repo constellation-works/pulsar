@@ -31,6 +31,7 @@ from .config import (
     callback_url,
 )
 from .errors import API_ERROR, PulsarError
+from .fsutil import write_private_atomic
 from .store import TokenBundle, TokenStore
 
 
@@ -136,9 +137,8 @@ def wait_for_callback(state: str, *, timeout: float = 300.0) -> dict[str, list[s
 
 def save_client_id(paths: Paths, client_id: str) -> None:
     paths.ensure()
-    paths.client_file.write_text(
-        json.dumps({"client_id": client_id, "redirect_uri": callback_url()}) + "\n"
-    )
+    record = {"client_id": client_id, "redirect_uri": callback_url()}
+    write_private_atomic(paths.client_file, (json.dumps(record) + "\n").encode())
 
 
 def load_client_id(paths: Paths) -> str | None:

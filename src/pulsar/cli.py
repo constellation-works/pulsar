@@ -42,7 +42,11 @@ def _auth_login(args: argparse.Namespace) -> int:
 def _auth_status(args: argparse.Namespace) -> int:
     paths = default_paths()
     store = TokenStore(paths)
-    bundle = store.load()
+    try:
+        bundle = store.load()
+    except PulsarError as exc:  # insecure_storage: a chmod away, not a re-login
+        print(json.dumps({"home": str(paths.home), "error": exc.to_result()}, indent=2))
+        return 1
     out = {
         "home": str(paths.home),
         "client_id": load_client_id(paths),
