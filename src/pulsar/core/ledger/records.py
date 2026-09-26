@@ -19,7 +19,7 @@ class State(StrEnum):
 
     Rows use every state; items never ``partial`` or ``skipped`` (the
     schema's CHECK constraints enforce both). Branch on a state with an
-    exhaustive ``match`` ending in ``assert_never`` (STD-02@2 §R27), so a new
+    exhaustive ``match`` ending in ``assert_never``, so a new
     state fails type checking at every decision it affects.
     """
 

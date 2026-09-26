@@ -204,7 +204,7 @@ class XChannel:
         A post that comes back without a usable id or ``created_at`` is left
         out and the listing is marked incomplete: reconcile may call an item
         absent only on a complete listing, and a post it could not read is
-        not evidence of absence (STD-02 §R16: no invented timestamp).
+        not evidence of absence (no invented timestamp).
         """
         params: dict[str, Any] = {
             "max_results": 100,

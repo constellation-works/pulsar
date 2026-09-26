@@ -1,9 +1,4 @@
-"""Provider-neutral core: plan, ledger, policy, storage, errors. No HTTP.
-
-This module is the core's public API: the layers above (providers, app) import
-from ``pulsar.core`` only, and only what ``__all__`` lists. Modules inside core
-import each other directly. ``tests/test_layering.py`` enforces both.
-"""
+"""Provider-neutral core: plan, ledger, policy, storage, errors. No HTTP."""
 
 from __future__ import annotations
 

@@ -415,7 +415,7 @@ def test_credential_conflict_is_a_retryable_internal_error():
     assert err.code == "internal" and err.retryable is True
 
 
-# -- symlinks are refused, never followed (STD-05 §R7, §R9) -----------------------------
+# -- symlinks are refused, never followed -----------------------------
 
 
 @pytest.mark.parametrize("target", ["key_file", "token_file", "accounts_file"])
@@ -479,7 +479,7 @@ def test_a_symlinked_lock_file_is_refused(store, bundle, tmp_path):
     assert exc.value.code == "insecure_storage" and victim.read_text() == "untouched"
 
 
-# -- durable writes (STD-03 §R5) ---------------------------------------------------------
+# -- durable writes ---------------------------------------------------------
 
 
 def test_publish_new_private_creates_once_and_fsyncs_the_parent(tmp_path, monkeypatch):

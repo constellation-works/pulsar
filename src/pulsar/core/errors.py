@@ -74,7 +74,7 @@ class PulsarError(Exception):
         return {"ok": False, "error": error}
 
     def to_result(self) -> dict[str, Any]:
-        # One shape whatever the error: ``detail`` is null, never absent (STD-01 §R11).
+        # One shape whatever the error: ``detail`` is null, never absent.
         return {
             "ok": False,
             "code": self.code,

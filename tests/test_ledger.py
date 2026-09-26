@@ -401,7 +401,7 @@ async def test_schemas_mark_caller_advisory_and_document_the_key(session):
     for name in ("create_post", "upload_media", "delete_post"):
         props = by_name[name].input_schema["properties"]
         assert "not identity" in props["caller"]["description"], (
-            "caller is self-asserted (STD-05 §R2); the schema must not let agents read it as auth"
+            "caller is self-asserted; the schema must not let agents read it as auth"
         )
     for name in ("create_post", "delete_post"):
         props = by_name[name].input_schema["properties"]

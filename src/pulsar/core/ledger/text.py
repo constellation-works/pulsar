@@ -1,4 +1,4 @@
-"""Free text on its way into the ledger: the one redaction hook (STD-05@1 §R13).
+"""Free text on its way into the ledger: the one redaction hook.
 
 Every column that can hold free text (an error message from a provider, a
 note, the self-asserted caller label, string values in ``meta_json``) is

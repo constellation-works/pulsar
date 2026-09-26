@@ -92,7 +92,7 @@ pulsar keeps secrets in.
 
 ### Context
 
-STD-05@1 §R9 asks that state holding secrets is not reached through a symlink. The operator
+State holding secrets should not be reached through a symlink. The operator
 chooses the home (`PULSAR_HOME`), so a symlinked home could be a deliberate relocation, or a
 link planted to point pulsar's key and tokens somewhere another process controls. Resolving it
 would make the check pass on whatever the link points at.
@@ -121,7 +121,7 @@ Directories above the home are not inspected: naming the home is the operator's 
 `load` used to return "no bundle" when decryption failed. Every caller then reported
 `auth_expired` and sent a human to `pulsar auth login`, which overwrites the bundle: the fix for
 a replaced key destroyed the one credential that could still have been recovered. A bundle with
-fields from a newer pulsar was treated the same way (STD-03@2 §R10, STD-02@2 §R26).
+fields from a newer pulsar was treated the same way.
 
 ### Decision
 
@@ -160,7 +160,6 @@ one, use it instead of reporting `auth_expired`.
 ## The browser is opened, not supervised
 
 **Recorded:** 2026-09-26 · [ORB-13138]
-**Deviates from:** STD-03@2 §R11, §R16
 **Code anchors:** `src/pulsar/providers/x/auth.py::authorize`
 
 ### Context

@@ -126,7 +126,7 @@ def _status(args: argparse.Namespace, ctx: toolkit.Context) -> int:
 
 def _logout(args: argparse.Namespace, ctx: toolkit.Context) -> int:
     # Refuse before touching anything: not even the first-use migration runs
-    # without --confirm (STD-01 §R5).
+    # without --confirm.
     if not args.confirm:
         raise toolkit.UsageError(
             f"logging out {args.account or 'the default account'} deletes its tokens and "
@@ -138,5 +138,5 @@ def _logout(args: argparse.Namespace, ctx: toolkit.Context) -> int:
 
 
 def _migrate(args: argparse.Namespace, ctx: toolkit.Context) -> int:
-    """Report what the move would do; ``--confirm`` makes it (STD-01 §R5)."""
+    """Report what the move would do; ``--confirm`` makes it."""
     return toolkit.emit(ctx.app.auth_migrate(account=args.account, confirm=args.confirm), ctx)

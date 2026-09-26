@@ -1,4 +1,4 @@
-"""Deterministic lock handshakes for tests (STD-04 §R9: no sleep-then-assert)."""
+"""Deterministic lock handshakes for tests (no sleep-then-assert)."""
 
 from __future__ import annotations
 

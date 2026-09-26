@@ -3,7 +3,7 @@
 Every command builds one payload and prints it on stdout in the mode
 ``render.resolve_mode`` picked: a table or key-value view on a terminal,
 tab-separated lines when piped, or the payload as one JSON document.
-Notices (empty results, deprecations, notes) go to stderr (STD-01 §R12).
+Notices (empty results, deprecations, notes) go to stderr.
 """
 
 from __future__ import annotations

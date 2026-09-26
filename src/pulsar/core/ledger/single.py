@@ -71,11 +71,10 @@ def claim(
                     (State.SUBMITTING, caller_text, handle, alias, meta_json, now, key),
                 )
             case State.SUBMITTING if _abandoned(existing, stale_before):
-                # A sender that crashed mid-request left this row claimed, and
-                # without items reconcile never sees it. Its tool has no
-                # duplicate effect, so the retry takes the row over (STD-02@2
-                # §R33) instead of refusing the key for good; the takeover is
-                # recorded in ``note`` and ``attempts``.
+                # A sender that crashed mid-request left this row claimed, and without
+                # items reconcile never sees it. Its tool has no duplicate effect, so the
+                # retry takes the row over instead of refusing the key for good; the
+                # takeover is recorded in ``note`` and ``attempts``.
                 note = (
                     f"re-armed at {now}: attempt {existing.attempts} was still submitting "
                     f"(last updated {existing.updated_at}, before the stale cutoff "

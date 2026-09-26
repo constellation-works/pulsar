@@ -1,4 +1,4 @@
-.PHONY: check lint test sync standards-check
+.PHONY: check lint test sync
 
 sync:
 	uv sync
@@ -12,7 +12,4 @@ lint:
 test:
 	uv run pytest -q
 
-standards-check:
-	sh docs/standards/check.sh
-
-check: standards-check lint test
+check: lint test

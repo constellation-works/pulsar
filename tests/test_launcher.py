@@ -1,10 +1,10 @@
-"""bin/pulsar, the entry point Orbit runs (STD-04 §R1), driven as a subprocess.
+"""bin/pulsar, the entry point Orbit runs, driven as a subprocess.
 
 A stub ``uv`` stands in for the dependency sync: it records each call and
 makes ``$UV_PROJECT_ENVIRONMENT/bin/python`` a wrapper around the interpreter
 running these tests, which already has pulsar's dependencies. The plugin root
 is a copy (launcher, lock, src) so a test can change the lock; the child's
-environment is built from scratch (STD-03 §R20) and nothing touches the network.
+environment is built from scratch and nothing touches the network.
 """
 
 from __future__ import annotations
@@ -79,8 +79,7 @@ class Plugin:
         self, envelope: object = ENVELOPE, **overrides: str | None
     ) -> subprocess.CompletedProcess[str]:
         # Its own session, so the launcher, timeout(1), the stub uv and the
-        # Python it execs are all reaped with the group whatever happens
-        # (STD-03 §R11, §R18).
+        # Python it execs are all reaped with the group whatever happens.
         proc = subprocess.Popen(
             ["/bin/sh", str(self.root / "bin" / "pulsar")],
             stdin=subprocess.PIPE,
@@ -144,8 +143,7 @@ def test_a_missing_orbit_variable_is_an_envelope_not_a_crash(plugin, missing):
 
 
 # The launcher's fixed fallbacks after PATH and $HOME. A host may really have
-# a uv there, so this test points them into its own temp dir (STD-04 §R7, §R8:
-# it runs everywhere, never skips).
+# a uv there, so this test points them into its own temp dir (it runs everywhere, never skips).
 UV_FALLBACKS = ("/opt/homebrew/bin/uv", "/usr/local/bin/uv")
 
 

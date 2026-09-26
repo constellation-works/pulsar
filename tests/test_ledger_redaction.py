@@ -1,4 +1,4 @@
-"""Free text reaches the ledger file only through the one redaction hook (STD-05@1 §R13).
+"""Free text reaches the ledger file only through the one redaction hook.
 
 ``REDACTED_COLUMNS`` is the inventory. These tests hold it to the schema (every
 TEXT column is either in it or known to be structured) and to the writers

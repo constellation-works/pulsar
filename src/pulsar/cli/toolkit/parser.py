@@ -1,4 +1,4 @@
-"""The argparse pieces every command declares itself with (STD-01 §R4, §R25).
+"""The argparse pieces every command declares itself with.
 
 ``CommandParser`` leaves printing a usage error to ``main`` and lists its
 subcommands in titled groups the way ``orbit`` does; ``Commands`` adds a
@@ -54,7 +54,7 @@ class CommandParser(argparse.ArgumentParser):
 
 
 def global_options() -> CommandParser:
-    """The global flags (STD-01 §R4): declared once, accepted before and after
+    """The global flags: declared once, accepted before and after
     the subcommand. SUPPRESS keeps a subcommand from resetting the root's value."""
     common = CommandParser(add_help=False)
     common.add_argument(

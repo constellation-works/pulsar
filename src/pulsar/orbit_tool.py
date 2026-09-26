@@ -75,7 +75,7 @@ ENVELOPE_VERSION = 1
 SOURCE_MAX_BYTES = 256 * 1024
 
 # Each tool's input keys: the request schemas' properties (a test holds them
-# equal). Anything else is refused, not ignored (STD-01 §R29).
+# equal). Anything else is refused, not ignored.
 INPUTS: dict[str, frozenset[str]] = {
     "status": frozenset({"account"}),
     "validate": frozenset({"plan", "source", "account"}),
@@ -109,7 +109,7 @@ def plugin_paths(environ: Mapping[str, str]) -> Paths:
 
     Under Orbit the sandbox can write only the plugin state, so a
     ``PULSAR_HOME`` naming any other home cannot be honoured; it is refused
-    before any work (STD-01 §R28) rather than ignored, which would give this
+    before any work rather than ignored, which would give this
     call a different ledger from the CLI's and defeat its duplicate guard.
     """
     home_env = environ.get("HOME")
@@ -249,7 +249,7 @@ PLAN_VERDICTS = frozenset({INVALID_PLAN, INVALID_TEXT, INVALID_MEDIA, SECRET_DET
 
 def _read_source(call: Call, source: str) -> str:
     """The plan file ``source`` names, read without following a symlink out of the
-    workspace between the check and the open (STD-05 §R7, §R9)."""
+    workspace between the check and the open."""
     if call.workspace is None:
         raise PulsarError(INVALID_ARGUMENT, "`source` needs a workspace")
     workspace = call.workspace

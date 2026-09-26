@@ -88,7 +88,7 @@ account with every key present (null when unknown): `alias`, `status`, `expected
 `reauth_required`, `error`, and `health` with its `reason`. Exit 0 only when every reported
 account is `healthy`.
 
-- **`health`** is three-valued, because unknown is never reported as healthy (STD-02 §R29):
+- **`health`** is three-valued, because unknown is never reported as healthy:
   `healthy` (active, identity cached for this binding and matching, token valid or just
   refreshed); `unverified` (nothing known to be wrong, but local state cannot settle it: no
   cached identity, or an expired access token whose refresh was not exercised); `unhealthy`
@@ -160,8 +160,8 @@ refreshes rather than trusting an invented lifetime. A failure inside pulsar aft
 - `accounts.json` carries a `version` and `min_reader_version`, the oldest version that still
   reads it correctly (a version that only adds fields keeps it; one that removes, renames or
   reinterprets a field raises it). One from a newer pulsar is read to resolve an account only
-  when it names this version a reader; otherwise it is refused with `invalid_config`
-  (STD-03 §R10). Every write to a newer registry (login, logout, status changes, migration)
+  when it names this version a reader; otherwise it is refused with `invalid_config`.
+  Every write to a newer registry (login, logout, status changes, migration)
   is refused with `invalid_config` naming the file and both versions, before anything is
   stored.
 
@@ -211,6 +211,6 @@ commands.
 - [ORB-13027] — added atomic owner-only storage, the refresh lock and `auth status --live`.
 - [ORB-13028] — added the registry, aliases, verified login, `expected_handle` and migration.
 - [ORB-13039] — proposed: bind the post token to the looked-up identity.
-- [ORB-13138] — aligned storage, locks, errors and the login listener with STD-02/03/05.
+- [ORB-13138] — aligned storage, locks, errors and the login listener with the constellation standards.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

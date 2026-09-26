@@ -61,7 +61,7 @@ def _serve(args: argparse.Namespace, ctx: toolkit.Context) -> int:
     from pulsar.mcp import build_server, loopback_security
 
     if args.transport != "http" and (args.host is not None or args.port is not None):
-        # stdio has no address: a --host or --port here would be silently unused (STD-01 §R28).
+        # stdio has no address: a --host or --port here would be silently unused.
         raise toolkit.UsageError(
             "--host and --port apply only to --transport http",
             detail={"transport": args.transport},

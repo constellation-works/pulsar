@@ -91,7 +91,7 @@ def test_settling_an_unclaimed_key_is_an_internal_error(paths):
         assert exc.value.detail == {"idempotency_key": "never-claimed"}
 
 
-# -- a crashed delete or upload does not block its key forever (STD-02@2 §R33) ------
+# -- a crashed delete or upload does not block its key forever ------
 
 
 def claim_delete(ledger, **kwargs):

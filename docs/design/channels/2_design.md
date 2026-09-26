@@ -22,7 +22,7 @@ The adapter contract and the X adapter as built. Other providers are in
 ## 1. The Contract
 
 [adapter.py](../../../src/pulsar/core/adapter.py) `Channel` is a protocol; core imports no
-provider and no HTTP library (`tests/test_layering.py`).
+provider and no HTTP library.
 
 | Method | Network | Contract |
 |---|---|---|

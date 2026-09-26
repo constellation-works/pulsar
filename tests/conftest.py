@@ -32,7 +32,7 @@ ALIAS = "x:constworks"
 
 def collect(results: Any, procs: list[Any], *, timeout: float = 60.0) -> list[Any]:
     """One result per child from ``results``, failing fast when a child dies
-    without answering rather than waiting out the timeout (STD-03 §R17)."""
+    without answering rather than waiting out the timeout."""
     out: list[Any] = []
     deadline = time.monotonic() + timeout
     while len(out) < len(procs):
@@ -50,7 +50,7 @@ def collect(results: Any, procs: list[Any], *, timeout: float = 60.0) -> list[An
 
 
 def reap(procs: list[Any]) -> None:
-    """Stop and wait for every child, however the test ended (STD-03 §R18)."""
+    """Stop and wait for every child, however the test ended."""
     for p in procs:
         if p.is_alive():
             p.terminate()
@@ -81,10 +81,10 @@ def register(
 
 @pytest.fixture(autouse=True)
 def hermetic_env(tmp_path_factory, monkeypatch) -> None:
-    """No test sees the operator's home, config or Orbit state (STD-03 §R20):
+    """No test sees the operator's home, config or Orbit state:
     HOME, XDG_CONFIG_HOME and PULSAR_HOME point at a throwaway directory, and
     the variables that would redirect the home or label writes are cleared,
-    and no live credential from an earlier test is masked (STD-04 §R6)."""
+    and no live credential from an earlier test is masked."""
     root = tmp_path_factory.mktemp("env")
     monkeypatch.setenv("HOME", str(root / "home"))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(root / "xdg"))

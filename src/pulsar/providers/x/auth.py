@@ -8,13 +8,12 @@ a token for another account than the one named is refused
 token being stored under the right name (2026-09-16). The MCP server never
 runs this.
 
-The loopback listener is not trusted because it is loopback (STD-05 §R16,
-§R17): a request counts only with a ``Host`` naming the exact authority it
-bound (``127.0.0.1:<port>`` or ``localhost:<port>``), no ``Origin`` other than
-that same loopback origin, and the ``state`` this login sent. Anything else
-is refused and recorded nowhere, so another local page or process cannot end
-the wait or feed in a code. The consent URL goes to ``notify`` (stderr by
-default), never to stdout.
+The loopback listener is not trusted because it is loopback: a request counts
+only with a ``Host`` naming the exact authority it bound (``127.0.0.1:<port>``
+or ``localhost:<port>``), no ``Origin`` other than that same loopback origin,
+and the ``state`` this login sent. Anything else is refused and recorded
+nowhere, so another local page or process cannot end the wait or feed in a
+code. The consent URL goes to ``notify`` (stderr by default), never to stdout.
 """
 
 from __future__ import annotations
@@ -154,7 +153,7 @@ class CallbackServer(HTTPServer):
 class _Callback(BaseHTTPRequestHandler):
     server: CallbackServer  # pyright: ignore[reportIncompatibleVariableOverride]
     # A connection that sends nothing (a browser's preconnect) is dropped after
-    # this long, so it cannot hold ``wait`` past its deadline (STD-03 §R22).
+    # this long, so it cannot hold ``wait`` past its deadline.
     timeout = 5.0
 
     def _reply(self, status: int, body: bytes) -> None:
@@ -353,7 +352,7 @@ def open_quietly(url: str) -> None:
 
     A launched browser inherits stdout, and some launchers print to it
     ("Opening in existing browser session."), which would land before the
-    command's JSON (STD-01 §R12). Login writes nothing to stdout until the
+    command's JSON. Login writes nothing to stdout until the
     human has approved, so the brief swap cannot hide pulsar's own output.
     """
     sys.stdout.flush()

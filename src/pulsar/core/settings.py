@@ -34,7 +34,7 @@ and may not be ``/``, the user's home, or an ancestor of it; name the
 directory the media actually lives in. ``~`` expands against the user's home
 the surface resolved (``Paths.user_home``); core never looks it up itself.
 
-Numbers are checked at load (STD-02 §R28): finite (TOML's ``nan`` and ``inf``
+Numbers are checked at load: finite (TOML's ``nan`` and ``inf``
 are refused), within the ``MAX_*`` bounds below, integers where integers are
 meant. The file itself must not be a symlink, another user's, or writable by
 group/other users: it sets budgets, media roots and ``expected_handle``.

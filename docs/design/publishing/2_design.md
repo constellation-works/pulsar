@@ -134,13 +134,13 @@ the write lock. States, columns, usage accounting and schema migration are speci
   not words joined by separators), so `password=correct-horse-battery-staple` in a post is
   prose, not a hit. The live values the process has loaded (each account's access and
   refresh token, the store key; 16 characters or more) are matched by value as `live
-  credential`, since X's OAuth 2 tokens have no shape (STD-05 §R14). A hit is
+  credential`, since X's OAuth 2 tokens have no shape. A hit is
   `secret_detected` naming the pattern, never the match. It is a backstop: most secrets
   match no pattern.
 - **Redaction at rest** (`guard.redact`): free text pulsar persists or logs (the caller label,
   provider error messages, notes, `meta` strings, `writes.jsonl` lines, stderr logs) passes
   through `redact`, which masks the same live values and shapes as `[redacted:<label>]` and keeps the words
-  around them (STD-05 §R13). The ledger's inventory is `ledger/text.py`'s `REDACTED_COLUMNS`.
+  around them. The ledger's inventory is `ledger/text.py`'s `REDACTED_COLUMNS`.
 - **Media confinement** ([media.py](../../../src/pulsar/core/media.py)): files are read only
   from configured roots, opened without following symlinks, size-checked before reading, and
   typed by content. See [specs/media-confinement.md](./specs/media-confinement.md).

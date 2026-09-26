@@ -1,4 +1,4 @@
-"""The human view of each CLI command's payload (STD-01 §R6).
+"""The human view of each CLI command's payload.
 
 A view only selects and arranges what the payload holds: it never adds a
 value, and every record in the payload is a line of some table. Detail

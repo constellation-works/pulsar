@@ -1,4 +1,4 @@
-"""How the ``pulsar`` CLI renders a command's payload (STD-01 §R6–§R9, §R14–§R18).
+"""How the ``pulsar`` CLI renders a command's payload.
 
 Every command builds one payload; ``json`` prints it as it is, and the human
 forms are derived from it through a view: a list of blocks, each a key-value
@@ -39,10 +39,10 @@ class ModeConflict(ValueError):
 
 
 def resolve_mode(flag: str | None, json_flag: bool, env: Mapping[str, str], isatty: bool) -> Mode:
-    """The output mode: explicit flag > ``PULSAR_FORMAT`` > ``auto`` (STD-01 §R8).
+    """The output mode: explicit flag > ``PULSAR_FORMAT`` > ``auto``.
 
     ``--json`` is shorthand for ``--format json``; the two naming different
-    modes is a usage error (§R7). An unrecognized environment value is
+    modes is a usage error. An unrecognized environment value is
     ``auto``, not a failure.
     """
     if json_flag and flag not in (None, "json"):
@@ -58,7 +58,7 @@ def resolve_mode(flag: str | None, json_flag: bool, env: Mapping[str, str], isat
 
 def json_requested(argv: Sequence[str], env: Mapping[str, str]) -> bool:
     """Whether this invocation asked for JSON, read from the raw arguments and
-    the environment, for a usage error found before parsing is done (§R19)."""
+    the environment, for a usage error found before parsing is done."""
     args = list(argv)
     for i, arg in enumerate(args):
         if arg == "--":
@@ -74,7 +74,7 @@ def json_requested(argv: Sequence[str], env: Mapping[str, str]) -> bool:
 
 @dataclass(frozen=True)
 class Terminal:
-    """Color and width, decided once (STD-01 §R17). ``width`` None: do not truncate."""
+    """Color and width, decided once. ``width`` None: do not truncate."""
 
     color: bool = False
     width: int | None = None
@@ -196,7 +196,7 @@ def fields(
 # -- rendering ------------------------------------------------------------------------
 
 ROLES: dict[str, Role] = {
-    # One table from domain values to roles (STD-01 §R18); unmapped is neutral.
+    # One table from domain values to roles; unmapped is neutral.
     "healthy": "ok",
     "published": "ok",
     "active": "ok",
@@ -232,7 +232,7 @@ def paint(text: str, value: str, term: Terminal) -> str:
 
 
 def text(value: Any) -> str:
-    """One cell or field value as text (types stay in the payload, STD-01 §R11)."""
+    """One cell or field value as text (types stay in the payload)."""
     if value is None:
         return "-"
     if isinstance(value, bool):
@@ -292,7 +292,7 @@ def _table(block: Table, term: Terminal) -> list[str]:
 
 def _fit(columns: Sequence[Column], widths: list[int], width: int | None) -> list[int]:
     """Shrink the flexible columns, rightmost first, until the row fits
-    ``width``; with no known width nothing is cut (STD-01 §R15)."""
+    ``width``; with no known width nothing is cut."""
     if width is None:
         return widths
     widths = list(widths)

@@ -75,7 +75,7 @@ The plugin's home is `~/.orbit/state/plugins/pulsar/home`; point the CLI at it w
 ## Documentation
 
 Design docs live in [docs/design](docs/design/) ([conventions](docs/design/CONVENTIONS.md),
-[architecture](docs/design/ARCHITECTURE.md), [standards conformance](docs/design/CONFORMANCE.md)):
+[architecture](docs/design/ARCHITECTURE.md)):
 
 - [Accounts](docs/design/accounts/1_overview.md): login, token storage, refresh.
 - [Publishing](docs/design/publishing/1_overview.md): plans, the ledger, idempotency, policy,
@@ -87,9 +87,9 @@ Design docs live in [docs/design](docs/design/) ([conventions](docs/design/CONVE
 ## Development
 
 ```sh
-make check    # standards check, uv lock --check, ruff, basedpyright strict, pytest (offline)
+make check    # uv lock --check, ruff, basedpyright strict, pytest (offline)
 ```
 
 `src/pulsar/core` is provider-neutral and imports no HTTP; `providers/x` is the X adapter;
 `app` joins them into the verbs; `cli/`, `mcp.py` and `orbit_tool.py` are the front ends on
-top. `tests/test_layering.py` enforces the order.
+top.

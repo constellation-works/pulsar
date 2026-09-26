@@ -630,7 +630,7 @@ async def test_store_io_runs_off_the_event_loop(store, authed, fake_x, monkeypat
     assert seen and loop_thread not in seen
 
 
-# -- the OAuth loopback callback (STD-05 §R16, §R17) ------------------------------------
+# -- the OAuth loopback callback ------------------------------------
 
 
 @pytest.fixture
@@ -655,7 +655,7 @@ def callback():
 
 def test_a_silent_connection_cannot_hold_the_login_past_its_deadline(monkeypatch):
     """A preconnect that never sends a request is dropped, so ``wait`` still
-    times out (STD-03 §R22) instead of blocking on the socket."""
+    times out instead of blocking on the socket."""
     shipped = auth._Callback.timeout
     assert shipped is not None and 0 < shipped <= 30, "the handler's socket timeout is set"
     monkeypatch.setattr(auth._Callback, "timeout", 0.5)  # the same mechanism, faster

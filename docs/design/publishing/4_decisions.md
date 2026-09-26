@@ -128,7 +128,6 @@ account user id), not the plan digest.
 ## X's duplicate refusal is classified from its text
 
 **Recorded:** 2026-09-26 · [ORB-13138]
-**Deviates from:** STD-02@2 §R10
 **Code anchors:** `src/pulsar/providers/x/client.py`
 
 ### Context
@@ -151,7 +150,6 @@ substring; everything else is classified from status codes and fields.
 ## Publisher ledger writes run on the event loop
 
 **Recorded:** 2026-09-26 · [ORB-13138]
-**Deviates from:** STD-03@2 §R1 (blocking calls off async threads)
 **Code anchors:** `src/pulsar/core/publisher.py::Publisher.publish`, `src/pulsar/core/publisher.py::Publisher.reconcile`, `src/pulsar/mcp.py::_settle_on_error`, `src/pulsar/mcp.py::_record_success`
 
 ### Context
@@ -179,7 +177,6 @@ every surface, the CLI included.
 ## `writes.jsonl` is a best-effort export
 
 **Recorded:** 2026-09-26 · [ORB-13138]
-**Deviates from:** STD-03@2 §R8
 **Code anchors:** `src/pulsar/core/writelog.py::WriteLog.export`
 
 ### Context
@@ -201,13 +198,12 @@ write already happened, and reporting it as failed would invite a duplicate.
 ## A stale delete is re-armed and a lost delete is retryable
 
 **Recorded:** 2026-09-26 · [ORB-13138]
-**Deviates from:** STD-03@2 §R31
 **Code anchors:** `src/pulsar/core/ledger/records.py::REARMABLE_TOOLS`, `src/pulsar/core/ledger/facade.py::Ledger.claim`, `src/pulsar/mcp.py::delete_post`, `src/pulsar/providers/x/client.py::XClient._post_refresh`
 
 ### Context
 
-§R31 says work a silent peer holds is never reclaimed because a TTL lapsed; only an explicit,
-recorded reclaim may take it. A `delete_post` row stays `submitting` when its sender dies
+Work a silent peer holds is not reclaimed because a TTL lapsed; only an explicit, recorded
+reclaim may take it. A `delete_post` row stays `submitting` when its sender dies
 mid-request, and its key (default `delete:<post_id>`) would then refuse every later delete of
 that post with `outcome_unknown`, with nothing to reconcile: legacy rows have no items.
 
@@ -227,18 +223,17 @@ caller is told to retry rather than to reconcile. A lost token-refresh reply is 
 ### Consequences
 
 - A crashed delete does not block that post's deletion for good.
-- Cost: an automatic reclaim after a TTL, which §R31 forbids in general; confined to requests
+- Cost: an automatic reclaim after a TTL, which pulsar avoids in general; confined to requests
   whose repeat is harmless, and tests pin that `create_post` is never taken over.
 
 ## Protocol strings are validated at the edge, not wrapped in types
 
 **Recorded:** 2026-09-26 · [ORB-13138]
-**Deviates from:** STD-02@2 §R14
 **Code anchors:** `src/pulsar/core/ledger/keys.py::check_key`, `src/pulsar/providers/x/client.py::check_x_id`, `src/pulsar/core/plan.py::alias_provider`
 
 ### Context
 
-§R14 (a SHOULD) prefers newtypes with validating constructors for ids, keys and selectors over
+Newtypes with validating constructors for ids, keys and selectors are an alternative to
 bare strings checked by helpers. pulsar's are idempotency keys, account aliases, X post and
 media ids, and digests.
 

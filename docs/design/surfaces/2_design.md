@@ -25,8 +25,8 @@ streamable HTTP on a loopback address (`--transport http --host 127.0.0.1 --port
 `--host` accepts only `127.0.0.1`, `localhost` or `::1`; both flags are refused without
 `--transport http`). Over HTTP a request whose `Host` is not one of the bound loopback
 `name:port` authorities, or whose `Origin` is not `http://` plus one of them, is refused
-(421, 403) before any tool runs (STD-05 §R16; §R17 is a recorded deviation for clients that
-send no `Origin`). Register it with a client, for
+(421, 403) before any tool runs; a request with no `Origin` is accepted, for MCP clients
+([decision](./4_decisions.md#a-post-without-an-origin-is-an-mcp-client-not-a-browser)). Register it with a client, for
 example `claude mcp add pulsar -- uv --directory /path/to/pulsar run pulsar serve`.
 
 | Tool | Annotation | Provider call | Input → output |
@@ -46,7 +46,7 @@ example `claude mcp add pulsar -- uv --directory /path/to/pulsar run pulsar serv
   detail?}`. An unexpected exception becomes a non-retryable `internal` naming its type; nothing
   raises into the client.
 - Arguments are strict: every input schema has `additionalProperties: false`, and an unknown
-  argument is refused, not ignored (STD-01 §R29). `create_post` always returns `replayed`.
+  argument is refused, not ignored. `create_post` always returns `replayed`.
 - Planning, media reads and claims run in a worker thread so one slow call does not stall the
   server; the publisher's per-post ledger writes stay on the loop (see
   [Publishing — Decisions](../publishing/4_decisions.md)).
@@ -150,8 +150,8 @@ is linked as `pulsar-publish`.
 
 - **Home.** `$ORBIT_PLUGIN_STATE/home` (`~/.orbit/state/plugins/pulsar/home`): the sandbox can
   write only the plugin state. The CLI and MCP server reach the same home with `PULSAR_HOME`;
-  a `PULSAR_HOME` under Orbit that names any other home is `invalid_config` before any work
-  (STD-01 §R28), since the call could not use it. Outside Orbit
+  a `PULSAR_HOME` under Orbit that names any other home is `invalid_config` before any work,
+  since the call could not use it. Outside Orbit
   (`pulsar orbit-tool` for debugging) the usual home applies.
 - **Settings.** The home's `config.toml` is the only source. `[plugins.pulsar]` has a closed,
   empty schema; a call that carries keys is `invalid_argument`.
@@ -172,7 +172,7 @@ is linked as `pulsar-publish`.
 - **Envelope.** [orbit_tool.py](../../../src/pulsar/orbit_tool.py) reads
   `{schema_version: 1, tool, input, context}` and writes exactly one JSON line,
   `{ok: true, output}` or `{ok: false, error: {code, message, retryable, detail?}}`, exit 0
-  (a recorded deviation from STD-01 §R20). It never raises; an unexpected exception is
+  ([decision](./4_decisions.md#pulsar-orbit-tool-exits-0-when-it-answered)). It never raises; an unexpected exception is
   `internal`. Diagnostics go to stderr.
 - **Install tree.** The installer refuses symlinks anywhere in the tree (so `CLAUDE.md` is a
   file containing `@AGENTS.md`), and a working tree carries a `.venv`; install from `git

@@ -89,7 +89,7 @@ def _off_the_loop(calls: list[str], name: str, fn):
         except RuntimeError:
             calls.append(name)
             return fn(*args, **kwargs)
-        raise AssertionError(f"{name} ran on the event loop (STD-03 §R1)")
+        raise AssertionError(f"{name} ran on the event loop")
 
     return wrapper
 
@@ -122,7 +122,7 @@ async def test_account_and_credential_io_runs_off_the_event_loop(
 @pytest.mark.anyio
 async def test_a_missing_login_names_the_home_to_log_in_to(paths, status):
     """Under Orbit the home is the plugin's, so a bare ``pulsar auth login``
-    would bind the operator's default home instead (STD-02 §R26)."""
+    would bind the operator's default home instead."""
     register(paths, None, status=status)
     rt = Runtime(paths, settings=Settings())
     try:

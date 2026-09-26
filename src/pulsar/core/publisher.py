@@ -268,7 +268,7 @@ class Publisher:
     def preflight(self, prepared: Prepared, *, idempotency_key: str | None = None) -> None:
         """The checks ``publish`` makes before claiming, without claiming: when
         the plan is due and whether the policy admits it now. A dry run calls
-        this so it refuses what the live call would (STD-02 §R34)."""
+        this so it refuses what the live call would."""
         now = self._now()
         self._check_due(prepared.plan, now)
         key = check_key(idempotency_key) or default_key(prepared.digest, prepared.bound.user_id)
@@ -362,7 +362,7 @@ class Publisher:
         """Record an item's failed or unknown outcome from inside an ``except``.
 
         A ledger failure here is logged, never raised over the error or
-        cancellation being handled (STD-03 §R4); the item stays
+        cancellation being handled; the item stays
         ``submitting``, which reconcile settles.
         """
         try:
@@ -500,9 +500,9 @@ class Publisher:
         Verdicts are written in one transaction only if the row is still as
         it was listed; a row a live sender touched meanwhile is left alone.
         One row that cannot be reconciled (a rate limit, a bad timestamp) is
-        reported with its key and cause, and the others still run (STD-02
-        §R32); its row is left as it was. ``auth_expired`` is the account's,
-        not a row's, and ends the run.
+        reported with its key and cause, and the others still run; its row
+        is left as it was. ``auth_expired`` is the account's, not a row's,
+        and ends the run.
         """
         now = self._now()
         results: list[dict[str, Any]] = []

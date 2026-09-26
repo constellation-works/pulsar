@@ -1,4 +1,4 @@
-"""How a ``pulsar`` failure is printed and what it exits with (STD-01 §R19, §R20).
+"""How a ``pulsar`` failure is printed and what it exits with.
 
 Exit codes: 0 success, 1 the command failed (or reported something not
 settled or not healthy), 2 a usage error. A failure prints nothing on stdout

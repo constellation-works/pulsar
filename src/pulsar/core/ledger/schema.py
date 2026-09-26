@@ -141,7 +141,7 @@ SCHEMA_VERSION = max(MIGRATIONS)
 def is_busy(exc: sqlite3.Error) -> bool:
     """Another connection holds the lock: worth waiting for, not a failure.
 
-    Decided from SQLite's result code (STD-02@2 §R10); the low byte is the
+    Decided from SQLite's result code; the low byte is the
     primary code under an extended one such as ``SQLITE_BUSY_SNAPSHOT``.
     """
     code: int | None = getattr(exc, "sqlite_errorcode", None)
@@ -168,9 +168,9 @@ def user_version(conn: sqlite3.Connection) -> int:
 
 
 def newer_than_supported(path: Path, version: int) -> PulsarError:
-    """This pulsar must not write, migrate down or reinterpret a newer file
-    (STD-03@2 §R10), and a long-running process must notice when a newer
-    pulsar migrates the file under it, so every connection checks."""
+    """This pulsar must not write, migrate down or reinterpret a newer file,
+    and a long-running process must notice when a newer pulsar migrates the
+    file under it, so every connection checks."""
     return PulsarError(
         INVALID_CONFIG,
         f"ledger {path} has schema v{version}, newer than this pulsar understands "
@@ -180,7 +180,7 @@ def newer_than_supported(path: Path, version: int) -> PulsarError:
 
 
 def needs_migration(path: Path, version: int) -> PulsarError:
-    """A read-only open never migrates (STD-01@2 §R31); the operator does."""
+    """A read-only open never migrates; the operator does."""
     return PulsarError(
         INVALID_CONFIG,
         f"ledger {path} has schema v{version} and this pulsar reads v{SCHEMA_VERSION}; "

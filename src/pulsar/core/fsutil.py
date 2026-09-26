@@ -6,17 +6,17 @@ so whole-file writes go through a temp file, ``fsync``, ``rename`` and an
 ``publish_new_private`` for a file that must be created exactly once). Files
 are created 0600 from the first byte rather than chmod-ed afterwards, and
 directories 0700, so there is no window in which another local user can
-open them (STD-05 §R8).
+open them.
 
-State is validated where it is loaded (STD-05 §R9): ``require_private``
+State is validated where it is loaded: ``require_private``
 refuses a path that is a symlink, owned by another user, or open to group
 and other users, and never follows a symlink to decide (``lstat``). Writes
-never follow a symlink in the final component either (STD-05 §R7).
+never follow a symlink in the final component either.
 
 Cross-process locks (``hold_lock``, ``hold_lock_async``) are ``flock``s taken
 against a deadline. The holder writes ``{pid, label, acquired_at}`` into the
 lock file right after acquiring, so a waiter that times out can say who holds
-it (STD-03 §R7). That record is diagnostic only: ownership is the ``flock``.
+it. That record is diagnostic only: ownership is the ``flock``.
 """
 
 from __future__ import annotations

@@ -155,7 +155,7 @@ def test_cost_comes_from_the_configured_price_table():
     assert validate_text("see https://example.com", prices).estimated_cost_usd == 0.5
 
 
-# -- live values (STD-05 §R14) ----------------------------------------------------------
+# -- live values ----------------------------------------------------------
 
 # An X OAuth 2 token has no prefix and no header around it: only its value gives it away.
 SHAPELESS = "dGhpcy1pcy1ub3QtYS1zaGFwZWQtdG9rZW4tMTIz"

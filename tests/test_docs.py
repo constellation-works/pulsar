@@ -1,4 +1,4 @@
-"""The docs as contracts (STD-04 §R13, §R14): links resolve, design docs carry their
+"""The docs as contracts: links resolve, design docs carry their
 frontmatter, and every documented ``pulsar`` command parses against the real CLI."""
 
 import re
@@ -12,7 +12,6 @@ import yaml
 from pulsar.cli import build_parser
 
 ROOT = Path(__file__).resolve().parents[1]
-# docs/standards is vendored read-only and checked by its own script.
 DOCS = sorted(
     [
         ROOT / "README.md",
@@ -154,7 +153,7 @@ def test_documented_commands_parse(where, span):
 
 
 def test_no_symlink_is_tracked():
-    """The plugin installer refuses symlinks anywhere in the tree (STD-05 §R9)."""
+    """The plugin installer refuses symlinks anywhere in the tree."""
     listing = subprocess.run(
         ["git", "ls-files", "-s"], cwd=ROOT, capture_output=True, text=True, check=True
     ).stdout

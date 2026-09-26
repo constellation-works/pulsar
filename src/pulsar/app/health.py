@@ -1,6 +1,6 @@
 """Account health: what ``pulsar auth status`` and ``pulsar.status`` report.
 
-Health is three-valued (STD-02 §R29: unknown never reads as healthy):
+Health is three-valued (unknown never reads as healthy):
 
 - ``healthy``: bound, active, the stored binding's identity is known and
   matches the alias, and the access token is still valid (or ``--live``
@@ -11,9 +11,9 @@ Health is three-valued (STD-02 §R29: unknown never reads as healthy):
 - ``unhealthy``: something is known to be wrong (not bound, logged out,
   re-authorization required, a handle mismatch, unreadable storage).
 
-The default report reads only local state: no network, no writes (STD-01
-§R31). ``live`` is the explicit check that costs a refresh (which rotates
-the token pair) and a ``/users/me`` read, and records what it proved.
+The default report reads only local state: no network, no writes.
+``live`` is the explicit check that costs a refresh (which rotates the
+token pair) and a ``/users/me`` read, and records what it proved.
 """
 
 from __future__ import annotations

@@ -1,5 +1,5 @@
 """The CLI's rendering layer: mode resolution, the terminal decision, and the
-table, piped and key-value forms (STD-01 §R7–§R9, §R14–§R18)."""
+table, piped and key-value forms."""
 
 import io
 import re
@@ -32,7 +32,7 @@ class Tty(io.StringIO):
         raise io.UnsupportedOperation("no descriptor")
 
 
-# -- mode (§R7, §R8) -------------------------------------------------------------------
+# -- mode -------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -76,7 +76,7 @@ def test_a_usage_error_knows_whether_json_was_asked_for(argv, env, wanted):
     assert json_requested(argv, env) is wanted
 
 
-# -- terminal (§R17) -------------------------------------------------------------------
+# -- terminal -------------------------------------------------------------------
 
 
 def test_a_pipe_gets_no_color_and_no_width():
@@ -104,7 +104,7 @@ def test_the_width_is_columns_else_unknown():
     assert resolve_terminal(Tty(), {}).width is None
 
 
-# -- rendering (§R9, §R14–§R16, §R18) --------------------------------------------------
+# -- rendering --------------------------------------------------
 
 ROWS = [
     {"name": "x:constworks", "state": "published", "count": 3, "text": "Orbit v0.26 is out"},

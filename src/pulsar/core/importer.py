@@ -188,7 +188,7 @@ def import_posted(
     report = ImportReport(applied=apply)
     # A dry run inserts nothing, so it remembers what it would have inserted:
     # a key repeated later in the file is then classified as the real run
-    # would classify it (STD-02 §R34).
+    # would classify it.
     would_insert: dict[str, dict[str, object]] = {}
     with Path(path).open("rb") as fh:
         for number, raw in enumerate(fh, start=1):

@@ -32,7 +32,7 @@ it correctly, ``min_reader_version``. A registry written by a newer pulsar (a
 higher version) is read to resolve an account only when it declares this
 version a reader; otherwise it is refused (``invalid_config``). This pulsar
 never writes a newer registry, because its rewrite would drop what the newer
-one added (STD-03 §R10).
+one added.
 """
 
 from __future__ import annotations

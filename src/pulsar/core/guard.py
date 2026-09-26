@@ -2,7 +2,7 @@
 
 It matches credential *shapes* (provider key prefixes, bearer headers, PEM
 blocks, JWTs) and machine-generated values assigned to a secret-named key,
-never vocabulary (STD-05 §R14). A key prefix must start a token, so
+never vocabulary. A key prefix must start a token, so
 ``task-sk-learning-pipeline-v2`` is an identifier, not a key; and
 ``password: correct-horse-battery-staple`` is prose, because the value does
 not look generated. ``redact`` masks the same shapes for text that is about
@@ -102,8 +102,8 @@ SECRET_PATTERNS: tuple[SecretPattern, ...] = (
 
 
 # The credential values this process has loaded (tokens, the store key). X's
-# OAuth 2 tokens have no recognisable shape, so they are matched by value
-# (STD-05 §R14). Only long values are kept: a short one could be a word.
+# OAuth 2 tokens have no recognisable shape, so they are matched by value.
+# Only long values are kept: a short one could be a word.
 LIVE_LABEL = "live credential"
 LIVE_MIN_LENGTH = 16
 _live: set[str] = set()

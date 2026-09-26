@@ -57,8 +57,8 @@ log = logging.getLogger(__name__)
 
 
 class RedactingFilter(logging.Filter):
-    """Masks credential shapes in every log line before a handler writes it
-    (STD-05 §R13): stderr is kept by MCP hosts and Orbit's run logs."""
+    """Masks credential shapes in every log line before a handler writes it:
+    stderr is kept by MCP hosts and Orbit's run logs."""
 
     def filter(self, record: logging.LogRecord) -> bool:
         message = record.getMessage()
@@ -92,7 +92,7 @@ def default_paths(environ: Mapping[str, str] | None = None) -> Paths:
     """The home layout for this process: ``PULSAR_HOME``, else ``~/.config/pulsar``.
 
     The one place a surface turns the process environment and ``$HOME`` into
-    ``Paths``; core only ever receives the result (STD-02 §R3).
+    ``Paths``; core only ever receives the result.
     """
     return Paths.from_environ(os.environ if environ is None else environ, Path.home())
 
@@ -105,7 +105,7 @@ class Runtime:
     account gets its own ``XClient`` over its own credential store, so
     accounts refresh independently.
 
-    ``read_only`` is for the reports (STD-01 §R31): the ledger is opened
+    ``read_only`` is for the reports: the ledger is opened
     read-only and nothing is migrated, so a report changes nothing on disk.
     """
 
@@ -144,7 +144,7 @@ class Runtime:
     def caller(self, explicit: str | None, default: str = "unknown") -> str:
         """The audit label for a write: the argument, else ``PULSAR_CALLER``, else ``default``.
 
-        Self-asserted and recorded as such; never identity (STD-05 §R2).
+        Self-asserted and recorded as such; never identity.
         """
         caller = explicit or self.environ.get(CALLER_ENV) or default
         if scan_for_secrets(caller):
@@ -193,7 +193,7 @@ class Runtime:
         """Mark ``alias`` ``reauth_required`` when what runs inside ends in ``auth_expired``.
 
         The registry write takes a file lock, so it runs in a thread, off the
-        loop other sessions share (STD-03 §R1); a failure to record it is
+        loop other sessions share; a failure to record it is
         logged and never replaces the ``auth_expired`` the caller must see.
         """
         try:

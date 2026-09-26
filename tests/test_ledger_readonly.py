@@ -1,4 +1,4 @@
-"""``Ledger(read_only=True)``: reports that create, lock and migrate nothing (STD-01@2 §R31).
+"""``Ledger(read_only=True)``: reports that create, lock and migrate nothing.
 
 Most of these run against a home the test makes read-only (0500), then
 compare every file's mode, mtime and digest before and after.

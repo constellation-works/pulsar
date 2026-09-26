@@ -77,7 +77,7 @@ def test_v1_database_new_ids_do_not_reuse_old_ones(paths):
 
 
 def test_fresh_and_upgraded_ledgers_have_identical_schemas(paths, tmp_path):
-    """STD-03@2 §R23: a new file and one migrated from v1 end the same."""
+    """A new file and one migrated from v1 end the same."""
     build_v1_ledger(paths)
     Ledger(paths).migrate()
     fresh = Paths(tmp_path / "fresh-home")
@@ -109,7 +109,7 @@ def test_newer_schema_is_refused(paths):
 
 
 def test_a_running_ledger_stops_once_a_newer_pulsar_migrates_the_file(paths):
-    """STD-03@2 §R10/§R26: the check is per connection, not once per process."""
+    """The check is per connection, not once per process."""
     ledger = Ledger(paths)
     ledger.claim(key="k", tool="delete_post", digest="d", account=ME, caller="t")
     bump(paths, SCHEMA_VERSION + 1)
@@ -135,7 +135,7 @@ def bump(paths, version: int) -> None:
 
 
 def test_busy_is_classified_from_the_result_code(paths):
-    """STD-02@2 §R10: not from the message text."""
+    """Not from the message text."""
     Ledger(paths).migrate()
     holder = sqlite3.connect(paths.ledger_db, isolation_level=None)
     other = sqlite3.connect(paths.ledger_db, timeout=0, isolation_level=None)

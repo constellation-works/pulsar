@@ -107,7 +107,7 @@ class TokenBundle:
             raise ValueError("token response has no access_token")
         refresh = fields.get("refresh_token")
         # No ``expires_in`` means we do not know when the token dies. Rather
-        # than invent a lifetime (STD-02 §R16), treat it as expiring now: the
+        # than invent a lifetime, treat it as expiring now: the
         # next call refreshes first, which costs one token POST at worst.
         expires_in = fields.get("expires_in")
         return cls(
@@ -163,12 +163,12 @@ class CredentialConflict(PulsarError):
 
 def home_command(home: Path, command: str) -> str:
     """``pulsar <command>`` pinned to ``home``, so a remedy shown by the Orbit
-    plugin acts on the plugin's home, not the operator's default (STD-02 §R26)."""
+    plugin acts on the plugin's home, not the operator's default."""
     return f"PULSAR_HOME={shlex.quote(str(home))} pulsar {command}"
 
 
 def _register(bundle: TokenBundle) -> None:
-    """Mask this bundle's tokens in every log line and stored text (STD-05 §R14)."""
+    """Mask this bundle's tokens in every log line and stored text."""
     register_live_secret(bundle.access_token)
     register_live_secret(bundle.refresh_token)
 

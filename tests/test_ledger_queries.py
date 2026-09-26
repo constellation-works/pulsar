@@ -80,7 +80,7 @@ def test_count_is_the_total_history_matches_without_its_limit(paths):
 
 
 def test_last_published_filters_before_the_limit(paths):
-    """STD-01@2 §R33: 60 newer unpublished rows do not hide the published one."""
+    """60 newer unpublished rows do not hide the published one."""
     clock = Clock(DAY)
     ledger = Ledger(paths, clock=clock)
     assert ledger.last_published("x:constworks") is None

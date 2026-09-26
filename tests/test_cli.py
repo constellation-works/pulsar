@@ -137,7 +137,7 @@ def test_an_empty_result_says_so_on_stderr(paths, capsys):
     assert "no ledger rows" in err
 
 
-# -- human output (STD-01 §R7-§R9, §R16, §R19) --------------------------------------
+# -- human output --------------------------------------
 
 
 @pytest.mark.parametrize(("argv", "section"), [([], "Publish:"), (["auth"], "Commands:")])
@@ -320,7 +320,7 @@ def test_auth_migrate_moves_legacy_credentials(paths, bundle, legacy_store, stor
     preview = json.loads(out)
     assert code == 0 and preview["applied"] is False and preview["state"] == "pending"
     assert preview["alias"] == ALIAS and "--confirm" in preview["message"]
-    assert paths.token_file.exists() and store.load() is None, "a report moves nothing (§R5)"
+    assert paths.token_file.exists() and store.load() is None, "a report moves nothing"
     code, out, _ = _run(capsys, ["auth", "migrate", "--account", ALIAS, "--confirm"])
     report = json.loads(out)
     assert code == 0 and report["applied"] is True and report["state"] == "migrated"
@@ -449,7 +449,7 @@ def test_serve_binds_only_loopback(capsys):
     assert "invalid choice: '0.0.0.0'" in capsys.readouterr().err
 
 
-# -- help (STD-01 §R24) -------------------------------------------------------------
+# -- help -------------------------------------------------------------
 
 
 def _commands():
@@ -500,7 +500,7 @@ def test_every_option_has_help():
     assert missing == [], f"options without help text: {missing}"
 
 
-# -- machine output goldens (STD-01 §R24) ---------------------------------------------
+# -- machine output goldens ---------------------------------------------
 
 OUTPUT_GOLDENS = Path(__file__).parent / "goldens" / "cli"
 

@@ -7,7 +7,7 @@ the report on stdout and the error on stderr. Only ``publish --confirm``,
 ``reconcile`` (when something is unresolved) and ``import-posted --confirm``
 (for an account whose identity is not cached yet) reach the network. The
 reports (``status``, ``history``, ``validate``) read the home without
-changing it (STD-01 §R31).
+changing it.
 """
 
 from __future__ import annotations
@@ -63,7 +63,7 @@ def read_plan(path: Path) -> Plan:
 
 
 def check_limit(limit: int) -> int:
-    """``limit`` as given, or ``invalid_argument``: never clamped (STD-01 §R29)."""
+    """``limit`` as given, or ``invalid_argument``: never clamped."""
     if isinstance(limit, bool) or not 1 <= limit <= HISTORY_LIMIT_MAX:
         raise PulsarError(
             INVALID_ARGUMENT,
@@ -106,7 +106,7 @@ def budget_report(
 def history_report(
     paths: Paths, *, account: str | None = None, limit: int = HISTORY_LIMIT_DEFAULT
 ) -> Report:
-    """The newest ledger rows, with how many matched in all (STD-01 §R34)."""
+    """The newest ledger rows, with how many matched in all."""
     limit = check_limit(limit)
     rt = Runtime(paths, read_only=True)
     alias = rt.account(account).alias if account is not None else None
@@ -145,7 +145,7 @@ async def publish_report(
     Every account's plan is prepared (bound, identity checked, validated,
     media loaded) before the first one is published, so a problem found
     offline in a later account's variant stops the command before anything
-    is sent (STD-02 §R34).
+    is sent.
     """
     if not confirm:
         return await _publish_preview(paths, plan_path, account, idempotency_key, caller)
@@ -155,7 +155,7 @@ async def publish_report(
     try:
         who = rt.caller(caller, default=CLI_CALLER)
         key = check_key(idempotency_key)
-        # Registry reads and media hashing go to a thread (STD-03 §R1).
+        # Registry reads and media hashing go to a thread.
         plan, targets = await asyncio.to_thread(rt.plan_targets, read_plan(plan_path), account)
         _one_account_per_key(key, targets)
         prepared: list[Prepared] = []
@@ -168,7 +168,7 @@ async def publish_report(
                 async with rt.watch_expiry(alias):
                     outcome = await rt.publisher.publish(ready, idempotency_key=key, caller=who)
             except PulsarError as exc:
-                # The same keys as a receipt, so every entry has one shape (STD-01 §R11).
+                # The same keys as a receipt, so every entry has one shape.
                 results.append(
                     {
                         "ok": False,
@@ -203,7 +203,7 @@ async def _publish_preview(
 ) -> Report:
     """``publish`` without ``--confirm``: every offline check the live run
     makes, in its order (the caller label, the key, the plan, the schedule
-    and the policy), and nothing written (STD-02 §R34)."""
+    and the policy), and nothing written."""
     rt = Runtime(paths, read_only=True)
     try:
         rt.caller(caller, default=CLI_CALLER)
@@ -329,7 +329,7 @@ async def import_report(
 def migrate_report(paths: Paths, *, confirm: bool = False) -> Report:
     """Bring the home up to date in place: the ledger schema, then the
     phase 1 credential layout. Without ``confirm`` it reports what it would
-    do and changes nothing (STD-01 §R5): an upgraded ledger is refused by an
+    do and changes nothing: an upgraded ledger is refused by an
     older pulsar, and moved credentials do not move back."""
     if not confirm:
         rt = Runtime(paths, read_only=True)

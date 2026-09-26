@@ -48,7 +48,7 @@ class WriteLog:
         }
         if extra:
             entry.update(extra)
-        # The export is a second durable copy: the same redaction as the ledger (STD-05 §R13).
+        # The export is a second durable copy: the same redaction as the ledger.
         line = redact_strings(entry)
         self.paths.ensure()
         append_private(self.paths.write_log, json.dumps(line, sort_keys=True) + "\n")

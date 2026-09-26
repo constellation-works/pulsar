@@ -1,9 +1,4 @@
-"""X (Twitter): OAuth 2.0 PKCE, the v2 API client, capabilities.
-
-This module is the X provider's public API: the layers above import from
-``pulsar.providers.x`` only, and only what ``__all__`` lists. Modules inside
-the package import each other directly. ``tests/test_layering.py`` enforces it.
-"""
+"""X (Twitter): OAuth 2.0 PKCE, the v2 API client, capabilities."""
 
 from __future__ import annotations
 

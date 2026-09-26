@@ -81,8 +81,7 @@ TOOL_NAMES = (
     "delete_post",
 )
 
-# The names a loopback HTTP server answers to, by bind address (STD-05 §R19:
-# `pulsar serve` binds nothing else).
+# The names a loopback HTTP server answers to, by bind address (`pulsar serve` binds nothing else).
 LOOPBACK_NAMES: dict[str, tuple[str, ...]] = {
     "127.0.0.1": ("127.0.0.1", "localhost"),
     "localhost": ("127.0.0.1", "localhost"),
@@ -217,7 +216,7 @@ def _guarded(
 
 
 def _strict(tool: Tool) -> Tool:
-    """Refuse arguments the tool does not declare (STD-01 §R29).
+    """Refuse arguments the tool does not declare.
 
     The SDK's argument models ignore unknown keys, so a misspelt ``acount``
     would post as the default account. Forbidding extras makes it a
@@ -307,8 +306,7 @@ def build_server(runtime: Runtime | None = None) -> MCPServer:
         who = rt.caller(caller)
         if dry_run:
             # Not a write: nothing reaches the ledger or writes.jsonl. The same
-            # offline checks as the live call, in the same order (STD-02
-            # §R34): the account, the plan, the policy.
+            # offline checks as the live call, in the same order: the account, the plan, the policy.
             alias = (await asyncio.to_thread(rt.account, account)).alias
             prepared = await asyncio.to_thread(
                 _legacy_post,
@@ -527,7 +525,7 @@ def _mib(limit: int) -> int:
 
 
 def loopback_security(host: str, port: int) -> TransportSecuritySettings:
-    """Host and Origin checks for the loopback HTTP transport (STD-05 §R16, §R17).
+    """Host and Origin checks for the loopback HTTP transport.
 
     Only the exact authority the server is bound to, and an ``http`` Origin
     naming that same authority, are accepted; the SDK's own default allows
@@ -576,7 +574,7 @@ def _legacy_post(
 
 
 def _legacy_receipt(outcome: Outcome, prepared: Prepared) -> dict[str, Any]:
-    """The phase 1 receipt shape, plus ``replayed`` (always present, STD-01 §R11)."""
+    """The phase 1 receipt shape, plus ``replayed`` (always present)."""
     live = outcome.live.get(0)
     item = outcome.record.items[0]
     out: dict[str, Any] = {
@@ -635,7 +633,7 @@ def _settle_failure(
 ) -> None:
     """Record a failed or unknown outcome. Runs inside an ``except``: a ledger
     failure here is logged, never raised over the error (or cancellation) the
-    caller must see (STD-03 §R4); the row stays ``submitting`` for reconcile."""
+    caller must see; the row stays ``submitting`` for reconcile."""
     try:
         rt.ledger.fail(key, err, meta=error_meta(err) if error_meta else None)
     except Exception:

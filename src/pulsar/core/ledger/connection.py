@@ -1,9 +1,9 @@
 """Opening the ledger file: read-write for state changes, read-only for reports.
 
-A read-write open creates the home and the file (0600, before SQLite sees
-it) and is what every state change and migration uses. A read-only open
-(STD-01@2 §R31) creates nothing, takes no write lock and never migrates, so
-reports work against a read-only home.
+A read-write open creates the home and the file (0600, before SQLite sees it)
+and is what every state change and migration uses. A read-only open creates
+nothing, takes no write lock and never migrates, so reports work against a
+read-only home.
 """
 
 from __future__ import annotations

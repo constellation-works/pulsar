@@ -5,7 +5,7 @@ and never touch the network. Store reads and writes (Fernet, fsync) run in a
 worker thread so a refresh never blocks the event loop; the per-client
 ``asyncio.Lock`` and the store's cross-process lock keep one refresh in
 flight per account. Text X sends back is embedded in error messages only
-through ``bounded_text`` (STD-03 §R15).
+through ``bounded_text``.
 """
 
 from __future__ import annotations
@@ -272,7 +272,7 @@ class XClient:
             ) from exc
         except httpx.HTTPError as exc:
             # The POST may have reached X, which rotates the pair on use: say
-            # so rather than report a plain failure (STD-03 §R31).
+            # so rather than report a plain failure.
             raise PulsarError(
                 API_ERROR,
                 f"token refresh reply lost ({exc.__class__.__name__}); X may have rotated the "

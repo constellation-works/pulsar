@@ -14,9 +14,9 @@ default ``~/.config/pulsar``). Several accounts share it::
 phase 1 single-account layout, kept only so it can be migrated. Nothing in
 here is a secret by itself.
 
-Core never reads the environment or ``$HOME`` itself (STD-02 §R3): a surface
+Core never reads the environment or ``$HOME`` itself: a surface
 resolves them once (``Paths.from_environ``) and hands the result down. The
-home itself must not be a symlink (STD-05 §R9): pulsar resolves nothing, so
+home itself must not be a symlink: pulsar resolves nothing, so
 an operator whose state lives elsewhere points ``PULSAR_HOME`` at the real
 directory.
 """

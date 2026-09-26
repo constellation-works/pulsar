@@ -42,7 +42,7 @@ def _now() -> str:
 class Ledger:
     """The ledger at ``paths.ledger_db``.
 
-    ``read_only=True`` is for reports (STD-01@2 §R31): it creates no
+    ``read_only=True`` is for reports: it creates no
     directory or file, never migrates or switches the journal mode, takes
     no write lock, and works in a read-only home. A missing file reads as
     empty; a file older than this pulsar is refused with the remedy
@@ -88,7 +88,7 @@ class Ledger:
         processes share the file; the busy timeout makes them queue rather
         than fail. The schema version is read on every connection, not once
         per process: a long-running server must stop the moment a newer
-        pulsar migrates the file under it (STD-03@2 §R10, §R26). Migrations
+        pulsar migrates the file under it. Migrations
         run on the first connection, and again only if the file is older.
         """
         path = self.paths.ledger_db

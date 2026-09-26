@@ -2,11 +2,7 @@
 entry point ``pulsar.main`` builds and supplies), the runtime that joins
 providers to the core, the operator verbs (``ops``) and account health
 (``health``).
-
-This module is app's public API and the front ends' only way down: ``cli``,
-``mcp`` and ``orbit_tool`` import from ``pulsar.app`` only, and only what
-``__all__`` lists; they never import ``core`` or ``providers``. What they need
-from below is re-exported here. ``tests/test_layering.py`` enforces it.
+What the front ends need from ``core`` and ``providers`` is re-exported here.
 """
 
 from __future__ import annotations

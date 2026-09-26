@@ -157,7 +157,7 @@ async def test_two_accounts_one_needing_reauth_exits_1(paths, bundle):
     assert other["account"] == {"user_id": "2", "username": "other"}
     assert f"PULSAR_HOME={paths.home} pulsar auth login --account x:other" in attention(
         other, paths.home
-    ), "the remedy names the home it applies to (STD-02 §R26)"
+    ), "the remedy names the home it applies to"
 
     out, code = await auth_report(paths, account="X:@ConstWorks")
     assert code == 0 and [e["alias"] for e in out["accounts"]] == ["x:constworks"]

@@ -662,7 +662,7 @@ def _newer_registry(paths, **declared):
 
 @pytest.mark.parametrize("min_reader", [2, None, "1", True])
 def test_a_newer_registry_that_does_not_declare_this_reader_is_refused(paths, bundle, min_reader):
-    """STD-03 §R10: newer state is read only when its writer declared it compatible."""
+    """Newer state is read only when its writer declared it compatible."""
     register(paths, bundle, handle="constworks", provider_user_id="1")
     before = _newer_registry(paths, min_reader_version=min_reader)
     err = _codes(lambda: AccountRegistry(paths).resolve(None, Settings()))
