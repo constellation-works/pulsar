@@ -6,11 +6,17 @@ plain_post_usd = 0.015
 url_post_usd = 0.20
 
 [media]
-roots = ["~/workspace/constellation/marketing"]   # default: the caller's cwd
+roots = ["~/workspace/constellation/marketing"]   # default: none, path uploads off
 ```
 
 Nothing in here is a secret. Unknown keys are refused so a typo cannot
 silently fall back to a default.
+
+Without ``[media] roots``, ``upload_media`` accepts only ``base64``: a path
+upload publishes a local file, and the server's cwd (``/`` or ``$HOME`` under
+some MCP hosts) is no safe default. A root must be absolute and may not be
+``/``, the user's home, or an ancestor of it; name the directory the media
+actually lives in.
 """
 
 from __future__ import annotations
@@ -39,11 +45,8 @@ class Prices:
 @dataclass(frozen=True)
 class Settings:
     prices: Prices = field(default_factory=Prices)
-    # Empty means "the process cwd at call time".
+    # Empty means path uploads are off (base64 only).
     media_roots: tuple[Path, ...] = ()
-
-    def effective_media_roots(self) -> tuple[Path, ...]:
-        return self.media_roots or (Path.cwd(),)
 
 
 def _table(data: dict[str, Any], key: str, allowed: set[str]) -> dict[str, Any]:
@@ -65,6 +68,20 @@ def _price(section: dict[str, Any], key: str, default: float) -> float:
     return float(value)
 
 
+def _media_root(raw: str) -> Path:
+    root = Path(raw).expanduser()
+    if not root.is_absolute():
+        raise PulsarError(INVALID_CONFIG, f"config.toml: media root {raw!r} must be absolute")
+    resolved = root.resolve()
+    if Path.home().resolve().is_relative_to(resolved):
+        raise PulsarError(
+            INVALID_CONFIG,
+            f"config.toml: media root {raw!r} is / or the home directory (or above it); "
+            "name the directory the media lives in",
+        )
+    return root
+
+
 def parse_settings(data: dict[str, Any]) -> Settings:
     unknown = set(data) - {"prices", "media"}
     if unknown:
@@ -79,7 +96,7 @@ def parse_settings(data: dict[str, Any]) -> Settings:
             plain_post_usd=_price(prices, "plain_post_usd", DEFAULT_PLAIN_POST_USD),
             url_post_usd=_price(prices, "url_post_usd", DEFAULT_URL_POST_USD),
         ),
-        media_roots=tuple(Path(r).expanduser() for r in roots),
+        media_roots=tuple(_media_root(r) for r in roots),
     )
 
 

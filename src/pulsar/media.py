@@ -7,9 +7,10 @@ secrets match none of its patterns. The defences here are, in order:
 
 1. **Roots.** A path is resolved (``~`` expanded, symlinks followed, relative
    paths against the server's cwd) and must land inside one of the configured
-   media roots (``config.toml [media] roots``, default the server's cwd). A
-   symlink that escapes the roots is refused; the pulsar home, where the
-   token bundle and key live, is refused even when a root contains it.
+   media roots (``config.toml [media] roots``; with none configured, path
+   uploads are refused and only ``base64`` is accepted). A symlink that
+   escapes the roots is refused; the pulsar home, where the token bundle and
+   key live, is refused even when a root contains it.
 2. **Regular files only**, opened without following symlinks at any
    component (a walk from the root with ``O_NOFOLLOW``), so a path swapped
    for a symlink after resolution cannot redirect the read. The opened fd
@@ -30,11 +31,11 @@ import binascii
 import mimetypes
 import os
 import stat
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from pathlib import Path
 
 from .config import IMAGE_MIME_TYPES, MAX_IMAGE_BYTES, MAX_VIDEO_BYTES, VIDEO_MIME_TYPES
-from .errors import INVALID_MEDIA, SECRET_DETECTED, PulsarError
+from .errors import INVALID_CONFIG, INVALID_MEDIA, SECRET_DETECTED, PulsarError
 from .guard import scan_for_secrets
 
 SUPPORTED_MIME_TYPES = IMAGE_MIME_TYPES | VIDEO_MIME_TYPES
@@ -229,7 +230,7 @@ def load_media(
     base64_data: str | None,
     mime: str | None,
     *,
-    roots: Iterable[Path],
+    roots: Sequence[Path],
     deny: Iterable[Path] = (),
 ) -> tuple[bytes, str]:
     """Return ``(bytes, mime)`` ready for X, or raise ``invalid_media`` / ``secret_detected``.
@@ -241,6 +242,12 @@ def load_media(
     if bool(path) == bool(base64_data):
         raise PulsarError(INVALID_MEDIA, "pass exactly one of `path` or `base64`")
     if path:
+        if not roots:
+            raise PulsarError(
+                INVALID_CONFIG,
+                "upload by path is off: the operator has not set [media] roots in "
+                "config.toml; pass `base64` instead",
+            )
         try:
             data, claimed = _load_path(path, mime, roots, deny)
         except OSError as exc:

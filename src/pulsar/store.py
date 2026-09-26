@@ -25,7 +25,15 @@ ORB-13009); until then the boundary is the one the spec asks for: the
 Refresh coordination also lives here: X rotates the refresh token on every
 use, so two processes sharing one home must never refresh at the same time.
 ``refresh_lock`` is an exclusive ``flock`` on ``refresh.lock`` that the
-refresher holds across load → token POST → save.
+refresher holds across load → token POST → save. ``rebind`` (login) and
+``clear`` (logout) take the same lock, so a refresh in flight can never
+write the previous account's rotated tokens over a new login, or back after
+a logout.
+
+Each login mints a ``binding_id`` that refreshes carry forward. The cached
+identity (``whoami.json``) records the binding it describes and is ignored
+once that no longer matches the stored bundle, so a lookup that raced a
+re-login cannot keep naming the old account.
 """
 
 from __future__ import annotations
@@ -37,7 +45,8 @@ import json
 import os
 import tempfile
 import time
-from collections.abc import AsyncIterator
+import uuid
+from collections.abc import AsyncIterator, Iterator
 from contextlib import AbstractAsyncContextManager
 from dataclasses import asdict, dataclass
 from typing import Protocol
@@ -45,10 +54,12 @@ from typing import Protocol
 from cryptography.fernet import Fernet, InvalidToken
 
 from .config import Paths
-from .errors import API_ERROR, INSECURE_STORAGE, PulsarError
+from .errors import API_ERROR, INSECURE_STORAGE, AuthExpired, PulsarError
 from .fsutil import FILE_MODE, require_private, write_private_atomic
 
 LOCK_POLL_SECONDS = 0.05
+# Longer than one token POST (the HTTP timeout) so a waiter outlasts a live refresher.
+REFRESH_LOCK_WAIT_SECONDS = 45.0
 
 
 @dataclass
@@ -59,6 +70,8 @@ class TokenBundle:
     scope: str
     client_id: str
     token_type: str = "bearer"
+    # Minted per login, carried across refreshes; None for bundles saved before it existed.
+    binding_id: str | None = None
 
     def expires_within(self, seconds: float) -> bool:
         return time.time() + seconds >= self.expires_at
@@ -76,6 +89,25 @@ class TokenBundle:
             client_id=client_id,
             token_type=data.get("token_type", "bearer"),
         )
+
+
+def cached_identity(paths: Paths, bundle: TokenBundle) -> dict[str, str] | None:
+    """The cached ``{user_id, username}`` if it describes ``bundle``'s binding, else None."""
+    try:
+        cached = json.loads(paths.whoami_cache.read_text())
+    except (FileNotFoundError, ValueError):
+        return None
+    if not isinstance(cached, dict) or not {"user_id", "username"} <= cached.keys():
+        return None
+    if cached.get("binding_id") != bundle.binding_id:
+        return None
+    return {"user_id": str(cached["user_id"]), "username": str(cached["username"])}
+
+
+def save_identity(paths: Paths, binding_id: str | None, me: dict[str, str]) -> None:
+    """Cache ``me`` as the identity of ``binding_id`` (the bundle it was looked up with)."""
+    record = {**me, "binding_id": binding_id}
+    write_private_atomic(paths.whoami_cache, (json.dumps(record) + "\n").encode())
 
 
 class CredentialConflict(PulsarError):
@@ -108,7 +140,17 @@ class CredentialStore(Protocol):
         """
         ...
 
-    def clear(self) -> None: ...
+    def rebind(self, bundle: TokenBundle) -> TokenBundle:
+        """Store a freshly issued bundle as a new binding, under the refresh lock.
+
+        Mints the ``binding_id`` and drops the cached identity. Returns the
+        bundle as stored.
+        """
+        ...
+
+    def clear(self) -> None:
+        """Forget the binding (tokens and cached identity), under the refresh lock."""
+        ...
 
     def refresh_lock(self, timeout: float) -> AbstractAsyncContextManager[None]:
         """Exclusive across processes; failing to get it within ``timeout`` is ``api_error``."""
@@ -197,7 +239,13 @@ class FernetFileStore:
             raw = self._fernet(create=False).decrypt(self.paths.token_file.read_bytes())
         except (InvalidToken, FileNotFoundError):
             return None
-        return TokenBundle(**json.loads(raw))
+        try:
+            return TokenBundle(**json.loads(raw))
+        except (ValueError, TypeError) as exc:
+            raise AuthExpired(
+                f"the stored X token bundle is unreadable ({exc.__class__.__name__}); "
+                "a human must re-run `pulsar auth login`"
+            ) from exc
 
     def save(self, bundle: TokenBundle, *, expected_previous: TokenBundle | None = None) -> None:
         # The compare is atomic with the write only while the caller holds
@@ -208,30 +256,67 @@ class FernetFileStore:
         blob = self._fernet(create=True).encrypt(json.dumps(asdict(bundle)).encode())
         write_private_atomic(self.paths.token_file, blob)
 
+    def rebind(self, bundle: TokenBundle) -> TokenBundle:
+        bundle.binding_id = uuid.uuid4().hex
+        with self.refresh_lock_sync(REFRESH_LOCK_WAIT_SECONDS):
+            self.save(bundle)
+            self._drop_identity()
+        return bundle
+
     def clear(self) -> None:
-        for p in (self.paths.token_file, self.paths.whoami_cache):
-            if p.exists():
-                p.unlink()
+        if not self.paths.home.exists():
+            return
+        with self.refresh_lock_sync(REFRESH_LOCK_WAIT_SECONDS):
+            if self.paths.token_file.exists():
+                self.paths.token_file.unlink()
+            self._drop_identity()
+
+    def _drop_identity(self) -> None:
+        with contextlib.suppress(FileNotFoundError):
+            self.paths.whoami_cache.unlink()
+
+    # -- refresh lock -------------------------------------------------------
+
+    def _lock_fd(self) -> int:
+        self._prepare_home()
+        return os.open(self.paths.refresh_lock, os.O_RDWR | os.O_CREAT, FILE_MODE)
+
+    def _try_lock(self, fd: int, deadline: float, timeout: float) -> bool:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except BlockingIOError:
+            if time.monotonic() >= deadline:
+                raise PulsarError(
+                    API_ERROR,
+                    f"another pulsar process held the token refresh lock for over "
+                    f"{timeout:g}s; retry later",
+                    detail={"lock": str(self.paths.refresh_lock), "retryable": True},
+                ) from None
+            return False
 
     @contextlib.asynccontextmanager
     async def refresh_lock(self, timeout: float) -> AsyncIterator[None]:
-        self._prepare_home()
-        fd = os.open(self.paths.refresh_lock, os.O_RDWR | os.O_CREAT, FILE_MODE)
+        fd = self._lock_fd()
         try:
             deadline = time.monotonic() + timeout
-            while True:
-                try:
-                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    break
-                except BlockingIOError:
-                    if time.monotonic() >= deadline:
-                        raise PulsarError(
-                            API_ERROR,
-                            f"another pulsar process held the token refresh lock for over "
-                            f"{timeout:g}s; retry later",
-                            detail={"lock": str(self.paths.refresh_lock), "retryable": True},
-                        ) from None
-                    await asyncio.sleep(LOCK_POLL_SECONDS)
+            while not self._try_lock(fd, deadline, timeout):
+                await asyncio.sleep(LOCK_POLL_SECONDS)
+            try:
+                yield
+            finally:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
+    @contextlib.contextmanager
+    def refresh_lock_sync(self, timeout: float) -> Iterator[None]:
+        """``refresh_lock`` for the synchronous CLI paths (login, logout)."""
+        fd = self._lock_fd()
+        try:
+            deadline = time.monotonic() + timeout
+            while not self._try_lock(fd, deadline, timeout):
+                time.sleep(LOCK_POLL_SECONDS)
             try:
                 yield
             finally:

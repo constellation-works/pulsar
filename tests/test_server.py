@@ -4,6 +4,7 @@ import base64
 import json
 import re
 
+import httpx
 import pytest
 from mcp.client._memory import InMemoryTransport
 from mcp.client.session import ClientSession
@@ -11,6 +12,7 @@ from mcp.client.session import ClientSession
 from pulsar.config import MAX_IMAGE_BYTES, MAX_VIDEO_BYTES
 from pulsar.server import TOOL_NAMES, Runtime, build_server
 from pulsar.settings import Settings
+from pulsar.store import TokenBundle
 
 from .conftest import SECRETS
 from .media_samples import JPEG, MP4, PEM_KEY
@@ -22,8 +24,10 @@ pytestmark = pytest.mark.anyio
 
 
 @pytest.fixture
-async def session(paths, fake_x):
-    rt = Runtime(paths, transport=fake_x.transport())
+async def session(paths, fake_x, tmp_path):
+    rt = Runtime(
+        paths, settings=Settings(media_roots=(tmp_path / "media",)), transport=fake_x.transport()
+    )
     server = build_server(rt)
     async with InMemoryTransport(server) as (read, write):
         async with ClientSession(read, write) as s:
@@ -34,7 +38,7 @@ async def session(paths, fake_x):
 
 @pytest.fixture
 def media_dir(tmp_path, monkeypatch):
-    """The default media root is the server's cwd; put the test there."""
+    """The session's configured media root, also the cwd for relative paths."""
     d = tmp_path / "media"
     d.mkdir()
     monkeypatch.chdir(d)
@@ -376,13 +380,35 @@ async def test_upload_media_refuses_a_private_key_outside_the_roots(
     assert fake_x.requests == []
 
 
-async def test_upload_media_refuses_pulsar_home_even_under_a_root(
-    session, authed, fake_x, paths, tmp_path, monkeypatch
-):
-    monkeypatch.chdir(tmp_path)  # cwd root now contains the pulsar home
-    out = _payload(await session.call_tool("upload_media", {"path": str(paths.token_file)}))
+async def test_upload_media_refuses_pulsar_home_even_under_a_root(authed, fake_x, paths, tmp_path):
+    rt = Runtime(paths, settings=Settings(media_roots=(tmp_path,)), transport=fake_x.transport())
+    async with InMemoryTransport(build_server(rt)) as (read, write):
+        async with ClientSession(read, write) as s:
+            await s.initialize()
+            out = _payload(await s.call_tool("upload_media", {"path": str(paths.token_file)}))
+    await rt.client.aclose()
     assert out["code"] == "invalid_media" and "pulsar's own state" in out["message"]
     assert fake_x.requests == []
+
+
+async def test_upload_by_path_is_off_without_configured_roots(
+    authed, fake_x, paths, tmp_path, monkeypatch
+):
+    """With no [media] roots the server's cwd (maybe / or $HOME) is not a default root."""
+    (tmp_path / "pic.png").write_bytes(PNG_1PX)
+    monkeypatch.chdir(tmp_path)
+    rt = Runtime(paths, settings=Settings(), transport=fake_x.transport())
+    async with InMemoryTransport(build_server(rt)) as (read, write):
+        async with ClientSession(read, write) as s:
+            await s.initialize()
+            for path in ("pic.png", str(tmp_path / "pic.png")):
+                out = _payload(await s.call_tool("upload_media", {"path": path}))
+                assert out["code"] == "invalid_config" and "base64" in out["message"]
+            assert fake_x.requests == []
+            b64 = base64.b64encode(PNG_1PX).decode()
+            ok = _payload(await s.call_tool("upload_media", {"base64": b64}))
+            assert ok["ok"] is True
+    await rt.client.aclose()
 
 
 @pytest.mark.parametrize(
@@ -450,3 +476,136 @@ async def test_delete_post(session, authed, fake_x, paths):
     assert out == {"ok": True, "post_id": "101", "deleted": True}
     line = json.loads(paths.write_log.read_text().splitlines()[-1])
     assert line["tool"] == "delete_post" and line["post_id"] == "101"
+
+
+@pytest.mark.parametrize(
+    "post_id", ["../users/1/retweets/555", "101?x=1", "101#f", "abc", "", "1" * 20, "１０１"]
+)
+async def test_delete_post_refuses_anything_but_a_numeric_id(session, authed, fake_x, post_id):
+    """A path segment in the id would steer DELETE to another endpoint (un-retweet, ...)."""
+    out = _payload(await session.call_tool("delete_post", {"post_id": post_id}))
+    assert out["ok"] is False and out["code"] == "invalid_argument"
+    assert fake_x.requests == []
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        {"reply_to_post_id": "../1"},
+        {"quote_post_id": "1/likes"},
+        {"media_ids": ["710000", "7?x"]},
+    ],
+)
+async def test_create_post_refuses_non_numeric_ids(session, authed, fake_x, paths, args):
+    out = _payload(await session.call_tool("create_post", {"text": "hi", **args}))
+    assert out["ok"] is False and out["code"] == "invalid_argument"
+    assert fake_x.requests == [] and not paths.ledger_db.exists()
+    if "media_ids" not in args:
+        out = _payload(await session.call_tool("validate_post", {"text": "hi", **args}))
+        assert out["code"] == "invalid_argument"
+
+
+@pytest.mark.parametrize(
+    "token_response",
+    [
+        lambda: httpx.Response(200, text="<html>maintenance</html>"),
+        lambda: httpx.Response(200, json={"token_type": "bearer"}),
+    ],
+)
+async def test_unreadable_refresh_is_a_failed_write_not_outcome_unknown(
+    paths, store, bundle, fake_x, token_response
+):
+    """Only the token POST was sent, so the post certainly did not happen."""
+    import time
+
+    bundle.expires_at = time.time() - 10
+    store.save(bundle)
+
+    def handle(request):
+        if request.url.path.endswith("/oauth2/token"):
+            fake_x.requests.append(request)
+            return token_response()
+        return fake_x.handle(request)
+
+    paths.whoami_cache.write_text(json.dumps({"user_id": "1234567890", "username": "constworks"}))
+    rt = Runtime(paths, settings=Settings(), transport=httpx.MockTransport(handle))
+    async with InMemoryTransport(build_server(rt)) as (read, write):
+        async with ClientSession(read, write) as s:
+            await s.initialize()
+            out = _payload(
+                await s.call_tool("create_post", {"text": "hello", "idempotency_key": "k1"})
+            )
+    await rt.client.aclose()
+    assert out["code"] == "api_error" and "token refresh failed" in out["message"]
+    assert fake_x.calls("POST", "/tweets") == []
+    assert rt.ledger.get("k1").state == "failed"
+
+
+async def test_post_that_went_live_stays_ok_when_bookkeeping_fails(
+    paths, authed, fake_x, monkeypatch, caplog
+):
+    from pulsar.errors import INSECURE_STORAGE, PulsarError
+
+    rt = Runtime(paths, settings=Settings(), transport=fake_x.transport())
+
+    def broken_publish(*_a, **_k):
+        raise PulsarError(INSECURE_STORAGE, "home went wide mid-flight")
+
+    monkeypatch.setattr(rt.ledger, "publish", broken_publish)
+    async with InMemoryTransport(build_server(rt)) as (read, write):
+        async with ClientSession(read, write) as s:
+            await s.initialize()
+            out = _payload(await s.call_tool("create_post", {"text": "hello"}))
+    await rt.client.aclose()
+    assert out["ok"] is True and out["post_id"] == "101"
+    assert "101" in caplog.text, "the live post id must be recoverable from the log"
+
+
+async def test_unexpected_exceptions_become_results_not_tracebacks(
+    paths, authed, fake_x, monkeypatch
+):
+    rt = Runtime(paths, settings=Settings(), transport=fake_x.transport())
+
+    async def broken_me():
+        raise KeyError("data")
+
+    monkeypatch.setattr(rt.client, "me", broken_me)
+    async with InMemoryTransport(build_server(rt)) as (read, write):
+        async with ClientSession(read, write) as s:
+            await s.initialize()
+            out = _payload(await s.call_tool("whoami", {}))
+    await rt.client.aclose()
+    assert out == {
+        "ok": False,
+        "code": "api_error",
+        "message": "internal error: KeyError",
+        "retryable": False,
+    }
+
+
+@pytest.mark.parametrize("junk", ["[1, 2]", '"str"', "{not json", '{"user_id": "1"}'])
+async def test_malformed_identity_cache_is_ignored(session, authed, fake_x, paths, junk):
+    paths.whoami_cache.write_text(junk)
+    out = _payload(await session.call_tool("whoami", {}))
+    assert out["username"] == "constworks" and fake_x.calls("GET", "/users/me")
+
+
+async def test_identity_looked_up_before_a_relogin_is_not_trusted_after_it(
+    paths, store, bundle, fake_x
+):
+    """A whoami that raced `auth login` writes the old account under the old binding."""
+    from pulsar.auth import bind
+    from pulsar.store import save_identity
+
+    old = bind(paths, "client-xyz", bundle)
+    rt = Runtime(paths, settings=Settings(), transport=fake_x.transport())
+    save_identity(paths, old.binding_id, {"user_id": "1", "username": "old-account"})
+    assert (await rt.whoami())["username"] == "old-account"
+    new = TokenBundle(**{**bundle.__dict__, "binding_id": None})
+    bind(paths, "client-xyz", new)
+    # the racing lookup lands after the re-login cleared the cache
+    save_identity(paths, old.binding_id, {"user_id": "1", "username": "old-account"})
+    assert (await rt.whoami())["username"] == "constworks"
+    assert (await rt.whoami())["username"] == "constworks"
+    assert len(fake_x.calls("GET", "/users/me")) == 1
+    await rt.client.aclose()

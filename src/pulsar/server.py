@@ -26,7 +26,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import sqlite3
 import uuid
 from collections.abc import Awaitable, Callable
 from typing import Annotated, Any
@@ -38,15 +37,14 @@ from pydantic import Field
 
 from . import __version__
 from .config import Paths, default_paths
-from .errors import API_ERROR, OutcomeUnknown, PulsarError
-from .fsutil import write_private_atomic
+from .errors import API_ERROR, INVALID_TEXT, AuthExpired, OutcomeUnknown, PulsarError
 from .guard import validate_text
 from .ledger import PUBLISHED, Ledger, check_key, default_key, request_digest
 from .media import load_media
 from .settings import Prices, Settings, load_settings
-from .store import TokenStore
+from .store import TokenStore, cached_identity, save_identity
 from .writelog import WriteLog, resolve_caller, text_sha256
-from .xapi import MediaProcessingError, XClient
+from .xapi import MediaProcessingError, XClient, check_x_id
 
 log = logging.getLogger(__name__)
 
@@ -108,18 +106,18 @@ class Runtime:
         self.ledger = Ledger(self.paths, export=self.log.export)
 
     async def whoami(self, *, live: bool = False) -> dict[str, str]:
-        """The bound account: cached after the first call, from X when ``live``."""
-        cache = self.paths.whoami_cache
-        if not live and cache.exists():
-            try:
-                cached = json.loads(cache.read_text())
-                if {"user_id", "username"} <= cached.keys():
-                    return {"user_id": cached["user_id"], "username": cached["username"]}
-            except ValueError:
-                pass
+        """The bound account: cached after the first call, from X when ``live``.
+
+        The cache is tagged with the binding it was looked up under, so a
+        lookup that raced a re-login is ignored rather than trusted.
+        """
+        bundle = self.store.load()
+        if bundle is None:
+            raise AuthExpired("no X authorization on this host; run `pulsar auth login`")
+        if not live and (cached := cached_identity(self.paths, bundle)) is not None:
+            return cached
         me = await self.client.me()
-        self.paths.ensure()
-        write_private_atomic(cache, (json.dumps(me) + "\n").encode())
+        save_identity(self.paths, bundle.binding_id, me)
         return me
 
 
@@ -131,6 +129,15 @@ def _guarded(
             return await fn(*args, **kwargs)
         except PulsarError as exc:
             return exc.to_result()
+        except Exception as exc:
+            # A bug or an unexpected shape from X/disk. Writes already settle
+            # their ledger row (outcome_unknown once a post may be in flight),
+            # so this only turns a traceback into a result; not retryable,
+            # because nothing says a repeat would go differently.
+            log.exception("pulsar: unexpected error in %s", fn.__name__)
+            return PulsarError(
+                API_ERROR, f"internal error: {exc.__class__.__name__}", retryable=False
+            ).to_result()
 
     wrapper.__name__ = fn.__name__
     wrapper.__doc__ = fn.__doc__
@@ -144,7 +151,11 @@ def _validate(
 ) -> dict[str, Any]:
     report = validate_text(text, prices)
     if reply_to_post_id and quote_post_id:
-        raise PulsarError("invalid_text", "a post cannot be both a reply and a quote in v1")
+        raise PulsarError(INVALID_TEXT, "a post cannot be both a reply and a quote in v1")
+    if reply_to_post_id:
+        check_x_id(reply_to_post_id, "reply_to_post_id")
+    if quote_post_id:
+        check_x_id(quote_post_id, "quote_post_id")
     return {
         "ok": True,
         "text": text,
@@ -210,6 +221,7 @@ def build_server(runtime: Runtime | None = None) -> MCPServer:
         idempotency_key: IdempotencyKey = None,
     ) -> dict[str, Any]:
         validated = _validate(text, reply_to_post_id, quote_post_id, rt.settings.prices)
+        media_ids = [check_x_id(m, "media_ids") for m in media_ids or []] or None
         key = check_key(idempotency_key)
         if dry_run:
             # Not a write: nothing reaches the ledger or writes.jsonl.
@@ -218,9 +230,9 @@ def build_server(runtime: Runtime | None = None) -> MCPServer:
         digest = request_digest(
             "create_post",
             text=text,
-            reply_to_post_id=str(reply_to_post_id) if reply_to_post_id else None,
-            quote_post_id=str(quote_post_id) if quote_post_id else None,
-            media_ids=[str(m) for m in media_ids or []],
+            reply_to_post_id=str(reply_to_post_id).strip() if reply_to_post_id else None,
+            quote_post_id=str(quote_post_id).strip() if quote_post_id else None,
+            media_ids=media_ids or [],
         )
         key = key or default_key(digest, me["user_id"])
         record = rt.ledger.claim(
@@ -258,8 +270,9 @@ def build_server(runtime: Runtime | None = None) -> MCPServer:
         description=(
             "Upload an image (png/jpeg/gif/webp, <=5 MiB) or MP4 video "
             "(video/mp4, <=100 MiB) for a later create_post. Pass `path` (a regular file "
-            "inside the operator's media roots; relative paths are from the server's cwd) "
-            "or `base64`. The type is sniffed from the content; a `mime` or extension that "
+            "inside the operator's configured media roots; relative paths are from the "
+            "server's cwd; refused as invalid_config when no roots are set) or `base64`. "
+            "The type is sniffed from the content; a `mime` or extension that "
             "disagrees is refused. Video waits for X processing to succeed. Returns {media_id}. "
             "`caller` is an advisory audit label, not identity."
         ),
@@ -273,7 +286,7 @@ def build_server(runtime: Runtime | None = None) -> MCPServer:
         caller: Caller = None,
     ) -> dict[str, Any]:
         data, resolved_mime = load_media(
-            path, base64, mime, roots=rt.settings.effective_media_roots(), deny=(rt.paths.home,)
+            path, base64, mime, roots=rt.settings.media_roots, deny=(rt.paths.home,)
         )
         me = await rt.whoami()
         facts = {"mime": resolved_mime, "bytes": len(data)}
@@ -304,7 +317,8 @@ def build_server(runtime: Runtime | None = None) -> MCPServer:
 
     @server.tool(
         description=(
-            "Delete a post by id. Only posts made by the bound account can be deleted. "
+            "Delete a post by its numeric X id. Only posts made by the bound account can be "
+            "deleted. "
             "Repeating a delete that already succeeded returns the stored receipt "
             "(replayed: true). `caller` is an advisory audit label, not identity."
         ),
@@ -314,9 +328,7 @@ def build_server(runtime: Runtime | None = None) -> MCPServer:
     async def delete_post(
         post_id: str, caller: Caller = None, idempotency_key: IdempotencyKey = None
     ) -> dict[str, Any]:
-        if not post_id or not str(post_id).strip():
-            raise PulsarError("invalid_text", "post_id is required")
-        post_id = str(post_id).strip()
+        post_id = check_x_id(post_id, "post_id")
         key = check_key(idempotency_key) or f"delete:{post_id}"
         me = await rt.whoami()
         record = rt.ledger.claim(
@@ -383,5 +395,9 @@ def _record_success(rt: Runtime, key: str, **fields: Any) -> None:
     caller might answer by posting again."""
     try:
         rt.ledger.publish(key, **fields)
-    except sqlite3.Error:
-        log.exception("ledger: could not record success for %s; row stays submitting", key)
+    except Exception:
+        log.exception(
+            "ledger: could not record success for %s (%s); row stays submitting",
+            key,
+            json.dumps({k: v for k, v in fields.items() if k != "meta"}, sort_keys=True),
+        )

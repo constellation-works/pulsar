@@ -7,6 +7,7 @@ and never touch the network.
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -18,6 +19,7 @@ from .errors import (
     API_ERROR,
     DUPLICATE,
     FORBIDDEN,
+    INVALID_ARGUMENT,
     INVALID_MEDIA,
     NOT_FOUND,
     RATE_LIMITED,
@@ -25,7 +27,7 @@ from .errors import (
     OutcomeUnknown,
     PulsarError,
 )
-from .store import CredentialConflict, CredentialStore, TokenBundle
+from .store import REFRESH_LOCK_WAIT_SECONDS, CredentialConflict, CredentialStore, TokenBundle
 
 # Raised before any request byte reaches X: no connection, no pool slot, or a
 # request httpx refused to build. Retrying one of these cannot double-write.
@@ -40,11 +42,27 @@ NOT_SENT_ERRORS: tuple[type[httpx.HTTPError], ...] = (
 )
 
 REFRESH_AHEAD_SECONDS = 120
-# Longer than one token POST (the HTTP timeout) so a waiter outlasts a live refresher.
-REFRESH_LOCK_WAIT_SECONDS = 45.0
 IMAGE_CHUNK_BYTES = 1024 * 1024
 VIDEO_CHUNK_BYTES = 4 * 1024 * 1024
 PROCESSING_TIMEOUT_SECONDS = 300
+
+
+_X_ID = re.compile(r"[0-9]{1,19}")
+
+
+def check_x_id(value: object, field: str) -> str:
+    """An X snowflake id (post, user, media) as a string, or ``invalid_argument``.
+
+    Ids are interpolated into request paths, so anything but digits could
+    steer a call to another endpoint (``../users/1/retweets/2``) or smuggle a
+    query string.
+    """
+    text = str(value).strip() if value is not None else ""
+    if not _X_ID.fullmatch(text):
+        raise PulsarError(
+            INVALID_ARGUMENT, f"{field} must be a numeric X id (1-19 digits)", detail={field: text}
+        )
+    return text
 
 
 class MediaProcessingError(PulsarError):
@@ -145,7 +163,20 @@ class XClient:
         """
         async with self._refresh_lock:
             async with self.store.refresh_lock(REFRESH_LOCK_WAIT_SECONDS):
-                return await self._refresh_locked(bundle)
+                try:
+                    return await self._refresh_locked(bundle)
+                except PulsarError:
+                    raise
+                except Exception as exc:
+                    # An unreadable 200, or a save that failed. Nothing but the
+                    # token POST was sent, so a write that got here did not
+                    # happen: never let this surface as outcome_unknown.
+                    raise PulsarError(
+                        API_ERROR,
+                        f"token refresh failed: {exc.__class__.__name__}. If later calls "
+                        "return auth_expired, a human must re-run `pulsar auth login`",
+                        retryable=True,
+                    ) from exc
 
     async def _refresh_locked(self, stale: TokenBundle) -> TokenBundle:
         current = await self._bundle()
@@ -172,10 +203,12 @@ class XClient:
             )
             if fresh.refresh_token is None:
                 fresh.refresh_token = current.refresh_token
+            fresh.binding_id = current.binding_id
             try:
                 self.store.save(fresh, expected_previous=current)
             except CredentialConflict:
-                # Only a new `auth login` writes without the lock; its binding wins.
+                # Login and logout hold the lock too, so this is a writer that
+                # ignored it; the stored binding wins over our rotation.
                 return await self._bundle()
             return fresh
         raise AuthExpired()
@@ -290,6 +323,7 @@ class XClient:
             ) from exc
 
     async def delete_post(self, post_id: str) -> bool:
+        post_id = check_x_id(post_id, "post_id")
         data = (await self.request("DELETE", f"/tweets/{post_id}")).json()
         return bool(data.get("data", {}).get("deleted", False))
 
@@ -305,7 +339,10 @@ class XClient:
             "/media/upload/initialize",
             json={"media_type": mime, "total_bytes": len(data), "media_category": category},
         )
-        media_id = str(init.json()["data"]["id"])
+        try:
+            media_id = check_x_id(init.json()["data"]["id"], "media_id")
+        except (ValueError, KeyError, TypeError, PulsarError) as exc:
+            raise PulsarError(API_ERROR, "X media init returned no usable media id") from exc
         for index, start in enumerate(range(0, len(data), chunk_size)):
             chunk = data[start : start + chunk_size]
             await self.request(

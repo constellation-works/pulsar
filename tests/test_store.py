@@ -208,3 +208,70 @@ def test_ensure_refuses_rather_than_silently_narrowing_a_wide_home(paths):
         paths.ensure()
     assert exc.value.code == "insecure_storage"
     assert stat.S_IMODE(os.stat(paths.home).st_mode) == 0o755, "never fixed behind the operator"
+
+
+@pytest.mark.anyio
+async def test_login_waits_for_a_refresh_in_flight_and_wins(store, bundle, paths):
+    """A refresher that passed its compare must not write the old account over a new login."""
+    import asyncio
+    import dataclasses
+
+    store.save(bundle)
+    relogin = dataclasses.replace(bundle, access_token="access-relogin", refresh_token="r2")
+    rotated = dataclasses.replace(bundle, access_token="access-rotated", refresh_token="r3")
+    async with store.refresh_lock(5):
+        assert store.load() == bundle  # the refresher's compare passes
+        login = threading.Thread(target=bind, args=(paths, "client-xyz", relogin))
+        login.start()
+        await asyncio.sleep(0.2)
+        assert login.is_alive(), "login must wait for the refresh lock"
+        store.save(rotated, expected_previous=bundle)
+    login.join(5)
+    assert store.load().access_token == "access-relogin"
+
+
+@pytest.mark.anyio
+async def test_logout_waits_for_a_refresh_in_flight(store, bundle, paths):
+    import asyncio
+
+    store.save(bundle)
+    async with store.refresh_lock(5):
+        logout = threading.Thread(target=store.clear)
+        logout.start()
+        await asyncio.sleep(0.2)
+        assert logout.is_alive()
+        store.save(bundle, expected_previous=bundle)
+    logout.join(5)
+    assert store.load() is None
+
+
+def test_login_gives_up_boundedly_when_the_lock_is_stuck(store, bundle, paths, monkeypatch):
+    import fcntl
+
+    monkeypatch.setattr("pulsar.store.REFRESH_LOCK_WAIT_SECONDS", 0.2)
+    store.save(bundle)
+    fd = os.open(paths.refresh_lock, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        with pytest.raises(PulsarError) as exc:
+            bind(paths, "client-xyz", bundle)
+        assert exc.value.code == "api_error"
+    finally:
+        os.close(fd)
+
+
+def test_refresh_keeps_the_binding_id(store, bundle):
+    stored = store.rebind(bundle)
+    assert stored.binding_id and store.load().binding_id == stored.binding_id
+
+
+def test_undecodable_bundle_is_auth_expired(store, authed, paths):
+    from cryptography.fernet import Fernet as F
+
+    key = paths.key_file.read_bytes().strip()
+    from pulsar.fsutil import write_private_atomic
+
+    write_private_atomic(paths.token_file, F(key).encrypt(b'{"unexpected": 1}'))
+    with pytest.raises(PulsarError) as exc:
+        store.load()
+    assert exc.value.code == "auth_expired"

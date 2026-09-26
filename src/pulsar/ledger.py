@@ -369,7 +369,7 @@ class Ledger:
         if self._export is not None:
             try:
                 self._export(record)
-            except OSError:
+            except Exception:
                 # The ledger row is committed and authoritative; a failed
                 # export must not turn a published post into an error the
                 # caller might "fix" by retrying.

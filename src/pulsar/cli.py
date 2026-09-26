@@ -15,7 +15,7 @@ from . import __version__
 from .auth import load_client_id, login
 from .config import CALLBACK_HOST, Paths, default_paths
 from .errors import PulsarError
-from .store import TokenStore
+from .store import TokenStore, cached_identity
 from .xapi import REFRESH_AHEAD_SECONDS
 
 
@@ -91,36 +91,43 @@ async def status_report(
         token_state=_token_state(expires_in),
         scope=bundle.scope,
     )
+    cached = cached_identity(paths, bundle)
     if offline:
-        if paths.whoami_cache.exists():
-            out["account"] = json.loads(paths.whoami_cache.read_text())
+        if cached is not None:
+            out["account"] = cached
             out["account_source"] = "cache"
-    else:
-        from .server import Runtime
+        return _finish(out)
+    from .server import Runtime
 
+    try:
         rt = Runtime(paths, transport=transport)
-        try:
-            if live:
-                cached = paths.whoami_cache.exists()
-                fresh = await rt.client.refresh(bundle)
-                out["refreshed"] = True
-                out["access_token_expires_in_s"] = int(fresh.expires_at - time.time())
-                out["token_state"] = _token_state(out["access_token_expires_in_s"])
-                out["account"] = await rt.whoami(live=True)
-                out["account_source"] = "live"
-                out["verified"] = True
-                out["whoami_cache"] = "refreshed" if cached else "created"
-            else:
-                had_cache = paths.whoami_cache.exists()
-                out["account"] = await rt.whoami()
-                out["account_source"] = "cache" if had_cache else "live"
-                out["verified"] = not had_cache
-        except PulsarError as exc:
-            out["error"] = exc.to_result()
-            if exc.code == "auth_expired":
-                out["reauth_required"] = True
-        finally:
-            await rt.client.aclose()
+    except PulsarError as exc:  # invalid_config: the tokens are fine, the settings are not
+        out["error"] = exc.to_result()
+        return _finish(out)
+    try:
+        if live:
+            fresh = await rt.client.refresh(bundle)
+            out["refreshed"] = True
+            out["access_token_expires_in_s"] = int(fresh.expires_at - time.time())
+            out["token_state"] = _token_state(out["access_token_expires_in_s"])
+            out["account"] = await rt.whoami(live=True)
+            out["account_source"] = "live"
+            out["verified"] = True
+            out["whoami_cache"] = "refreshed" if cached is not None else "created"
+        else:
+            out["account"] = await rt.whoami()
+            out["account_source"] = "cache" if cached is not None else "live"
+            out["verified"] = cached is None
+    except PulsarError as exc:
+        out["error"] = exc.to_result()
+        if exc.code == "auth_expired":
+            out["reauth_required"] = True
+    finally:
+        await rt.client.aclose()
+    return _finish(out)
+
+
+def _finish(out: dict[str, Any]) -> tuple[dict[str, Any], int]:
     if not out["verified"] and not out["reauth_required"]:
         out["note"] = (
             "account read from cache; refresh not exercised"
@@ -140,15 +147,31 @@ def _auth_status(args: argparse.Namespace) -> int:
 
 
 def _auth_logout(_: argparse.Namespace) -> int:
-    TokenStore(default_paths()).clear()
+    try:
+        TokenStore(default_paths()).clear()
+    except PulsarError as exc:
+        print(f"error [{exc.code}]: {exc.message}", file=sys.stderr)
+        return 1
     print("token bundle removed")
     return 0
 
 
 def _serve(args: argparse.Namespace) -> int:
-    from .server import build_server
+    from .server import Runtime, build_server
 
-    server = build_server()
+    try:
+        rt = Runtime()
+    except PulsarError as exc:
+        print(f"error [{exc.code}]: {exc.message}", file=sys.stderr)
+        return 1
+    roots = rt.settings.media_roots
+    # stderr: stdout is the MCP stream under --transport stdio.
+    print(
+        "pulsar: media path uploads "
+        + (f"confined to {', '.join(map(str, roots))}" if roots else "off (no [media] roots)"),
+        file=sys.stderr,
+    )
+    server = build_server(rt)
     if args.transport == "stdio":
         server.run("stdio")
     else:

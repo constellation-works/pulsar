@@ -169,15 +169,15 @@ def login(
     return bundle
 
 
-def bind(paths: Paths, client_id: str, bundle: TokenBundle) -> None:
+def bind(paths: Paths, client_id: str, bundle: TokenBundle) -> TokenBundle:
     """Persist a freshly issued bundle as this host's binding.
 
     A new token may belong to a different account than the last one, so the
     cached identity must not outlive the token it described — otherwise
     ``whoami`` and ``auth status`` keep naming the old account while posts go
-    to the new one.
+    to the new one. ``rebind`` holds the refresh lock, so a refresh already in
+    flight cannot overwrite this binding with the old account's tokens.
     """
-    TokenStore(paths).save(bundle)
+    stored = TokenStore(paths).rebind(bundle)
     save_client_id(paths, client_id)
-    if paths.whoami_cache.exists():
-        paths.whoami_cache.unlink()
+    return stored

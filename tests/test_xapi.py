@@ -500,3 +500,21 @@ async def test_401_after_another_process_rotated_retries_without_refreshing(stor
     finally:
         await client.aclose()
     assert fake_x.calls("POST", "/oauth2/token") == [], "no second rotation"
+
+
+async def test_refresh_carries_the_binding_forward(paths, bundle, fake_x):
+    store = TokenStore(paths)
+    bound = store.rebind(_expired(bundle))
+    client = XClient(store, transport=fake_x.transport())
+    try:
+        await client.access_token()
+    finally:
+        await client.aclose()
+    stored = store.load()
+    assert stored.access_token == ROTATED_ACCESS and stored.binding_id == bound.binding_id
+
+
+async def test_client_delete_refuses_a_path_as_an_id(client, authed, fake_x):
+    with pytest.raises(PulsarError) as exc:
+        await client.delete_post("../users/1/retweets/555")
+    assert exc.value.code == "invalid_argument" and fake_x.requests == []

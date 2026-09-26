@@ -47,6 +47,10 @@ uv sync
    `token_state: expired` when the access token has lapsed). `--live` is the
    proof: it rotates the token pair through the refresh lock, fetches the
    account from X, and rewrites the cache. It costs one `/users/me` read.
+   The cache is tagged with the login it describes (a `binding_id` minted by
+   `auth login` and carried across refreshes), so after a re-login it is
+   ignored until `/users/me` has been asked again, even if a lookup started
+   before the re-login finishes after it.
 
 Refresh happens automatically. When a refresh fails (token revoked, app reset),
 tools return `auth_expired` and a human re-runs `auth login`.
@@ -58,7 +62,9 @@ first process refreshes, the others wait (up to 45 s, then `api_error`) and
 reuse the bundle it saved. If X still rejects a refresh token because a
 process that ignores the lock (an older pulsar mid-upgrade) rotated it first,
 pulsar re-reads the store and uses the newer bundle instead of reporting
-`auth_expired`.
+`auth_expired`. `auth login` and `auth logout` take the same lock, so a
+refresh already in flight can never write the previous account's rotated
+tokens over a new login, or back after a logout.
 
 ## Configuration
 
@@ -72,12 +78,16 @@ plain_post_usd = 0.015   # X changes its price list; verify on the developer por
 url_post_usd = 0.20
 
 [media]
-roots = ["~/workspace/constellation/marketing"]   # default: the server's cwd
+roots = ["~/workspace/constellation/marketing"]   # default: none (path uploads off)
 ```
 
 `media.roots` are the only directories `upload_media` will read a `path` from
-(see [Media confinement](#media-confinement)). Keep them narrow: a root of `~`
-lets an agent upload any image in your home directory.
+(see [Media confinement](#media-confinement)). With none set, a `path` upload
+is refused with `invalid_config` and only `base64` works: the server's cwd is
+not a safe default, since some MCP hosts start servers in `/` or `$HOME`.
+Roots must be absolute (`~` is expanded), and `/`, the home directory and its
+ancestors are refused; name the directory the media lives in. `pulsar serve`
+prints the effective roots to stderr at startup.
 
 ## Run as an MCP server
 
@@ -99,7 +109,7 @@ claude mcp add pulsar -- uv --directory /path/to/pulsar run pulsar serve
 | `validate_post` | read-only | — | `text`, optional `reply_to_post_id`, `quote_post_id`; no network, no log |
 | `create_post` | publishes | `POST /2/tweets` | `text`, optional `reply_to_post_id`, `quote_post_id`, `media_ids`, `idempotency_key`, `dry_run` (legacy) |
 | `upload_media` | publishes | `POST /2/media/upload/initialize` → `/{id}/append` → `/{id}/finalize`; `GET /2/media/upload` for video status | png/jpeg/gif/webp images ≤5 MiB or MP4 video (`video/mp4`) ≤100 MiB; `path` (a regular file inside `media.roots`) or `base64`, optional `mime` (must match the sniffed content) → `{media_id}` after video processing succeeds |
-| `delete_post` | destructive | `DELETE /2/tweets/:id` | `post_id`, optional `idempotency_key` (default `delete:<post_id>`) → `{ok: true, post_id, deleted}` |
+| `delete_post` | destructive | `DELETE /2/tweets/:id` | `post_id` (numeric X id), optional `idempotency_key` (default `delete:<post_id>`) → `{ok: true, post_id, deleted}` |
 
 `validate_post` returns `{ok: true, text, weighted_length, has_url,
 estimated_cost_usd}` without touching the network. `create_post` returns
@@ -156,7 +166,8 @@ The *Annotation* column is what the server advertises through MCP tool
 annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`). See
 [The caller boundary](#the-caller-boundary) for why.
 
-Failures never raise into the client; they come back as
+Failures never raise into the client (an unexpected exception becomes a
+non-retryable `api_error` naming its type); they come back as
 `{ok: false, code, message, retryable, detail?}` so the agent can branch on
 `code`. `retryable` is true only when repeating the identical call later can
 succeed (`rate_limited`, `api_error`):
@@ -165,15 +176,15 @@ succeed (`rate_limited`, `api_error`):
 |---|---|---|
 | `auth_expired` | no token, or refresh failed (revoked / app reset) | stop; a human runs `pulsar auth login` |
 | `insecure_storage` | the pulsar home is wider than 0700, or `key` / `tokens.enc` wider than 0600 or not owned by the server's user | stop; a human runs the `chmod` in `message` (also `detail.fix`) — not a re-login |
-| `invalid_config` | `config.toml` has an unknown key, a bad value, or the ledger is from a newer pulsar | fix the file named in `message` |
+| `invalid_config` | `config.toml` has an unknown key or a bad value (including a media root that is `/`, `~` or above it), the ledger is from a newer pulsar, or a `path` upload with no `media.roots` configured | fix the file named in `message`; for uploads, pass `base64` or have the operator set roots |
 | `invalid_text` | empty, over 280 weighted chars, control chars, reply+quote together | rewrite |
-| `invalid_argument` | malformed `idempotency_key` | fix the key |
+| `invalid_argument` | malformed `idempotency_key`, or a `post_id` / `reply_to_post_id` / `quote_post_id` / `media_ids` entry that is not a 1–19 digit X id | fix the argument |
 | `secret_detected` | text (or media, or `idempotency_key`) matches a credential pattern | rewrite; never retry verbatim |
 | `invalid_media` | bad path/base64, path outside `media.roots` or not a regular file, content that is not png/jpeg/gif/webp/mp4 or does not match the declared/extension MIME (`detail: {declared, sniffed}`), oversized media, or failed/timed-out video processing | fix the input or inspect X's processing detail |
 | `duplicate` / `forbidden` / `rate_limited` / `not_found` | X's reason, passed through in `detail` | duplicate: change text; rate_limited: wait |
 | `idempotency_conflict` | the key was already used for a different request or account | use a new key |
 | `outcome_unknown` | the write may have reached X; see [above](#outcome_unknown) | do **not** retry; check the timeline |
-| `api_error` | anything else from X, or a network failure before the request was sent | retry later, report |
+| `api_error` | anything else from X, a network failure before the request was sent, or a token refresh that failed without X rejecting the refresh token (unreadable response, save failed) | retry later, report |
 
 The 100 MiB video cap is a local connector limit; X also checks the account's
 video size and duration entitlement when media is uploaded and attached to a
@@ -193,8 +204,8 @@ exfiltration route (`path: "~/.ssh/id_rsa", mime: "image/png"`). The secret
 scanner is not the defence — most secrets match none of its patterns. Instead:
 
 - **Roots.** `path` is `~`-expanded and fully resolved (symlinks followed;
-  a relative path resolves against the server's cwd, which is also the default
-  root). The result must be inside one of `media.roots`. A symlink that points
+  a relative path resolves against the server's cwd). The result must be
+  inside one of `media.roots`; with none configured, path uploads are off. A symlink that points
   outside the roots is refused; one that stays inside is fine. The pulsar home
   is refused even when a root contains it.
 - **Regular files only.** Directories, FIFOs and devices are refused before

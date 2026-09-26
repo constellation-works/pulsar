@@ -23,7 +23,6 @@ def test_prices_and_media_roots_from_config(paths, tmp_path):
     s = load_settings(paths)
     assert s.prices == Prices(plain_post_usd=0.02, url_post_usd=0.3)
     assert s.media_roots == (tmp_path,)
-    assert s.effective_media_roots() == (tmp_path,)
 
 
 @pytest.mark.parametrize(
@@ -45,9 +44,24 @@ def test_bad_config_is_refused_not_defaulted(paths, body):
     assert exc.value.code == "invalid_config"
 
 
-def test_empty_media_roots_mean_cwd(monkeypatch, tmp_path):
-    monkeypatch.chdir(tmp_path)
-    assert Settings().effective_media_roots() == (tmp_path,)
+def test_no_media_roots_by_default(paths):
+    assert load_settings(paths).media_roots == ()
+
+
+@pytest.mark.parametrize("root", ["/", "~", "~/..", "relative/media"])
+def test_broad_or_relative_media_roots_are_refused(paths, root):
+    paths.ensure()
+    paths.settings_file.write_text(f'[media]\nroots = ["{root}"]\n')
+    with pytest.raises(PulsarError) as exc:
+        load_settings(paths)
+    assert exc.value.code == "invalid_config"
+
+
+def test_a_directory_below_home_is_an_acceptable_root(paths, tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    paths.ensure()
+    paths.settings_file.write_text('[media]\nroots = ["~/marketing"]\n')
+    assert load_settings(paths).media_roots == (tmp_path / "marketing",)
 
 
 def _mode(p):
