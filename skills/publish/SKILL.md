@@ -1,6 +1,6 @@
 ---
 name: pulsar-publish
-description: Check pulsar's publishing accounts, budget and recent posts, and validate a post or thread plan offline before anyone publishes it, through the pulsar.* Orbit tools.
+description: Check pulsar's publishing accounts, budget and recent posts, and validate a post or thread plan offline before anyone publishes it, through the pulsar.* Orbit tools. Also walks a human through setting pulsar up (install, the X app, binding an account) when it is missing or unhealthy.
 ---
 
 # pulsar: publishing through one ledger
@@ -60,6 +60,14 @@ pulsar's job.
 | `budget_exceeded`, `daily_cap` | wait until `detail.retry_after`, or split the plan |
 | `insecure_storage`, `invalid_config` | stop; a human fixes the home named in `message` |
 | `invalid_argument` | fix the tool input |
+
+## Setup
+
+When pulsar is not installed, no account is bound, or `status` names a login,
+storage or config problem a human must fix, follow
+[references/setup.md](references/setup.md): it walks a human through
+installing pulsar, creating the X app, binding an account and connecting the
+plugin and MCP server, one checked step at a time.
 
 ## Credentials
 

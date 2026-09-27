@@ -144,10 +144,10 @@ beneath them, `surfaces/cli/toolkit/` holds what they are written against: `cont
 All are `execution_kind: read_only`, `mcp_scope: workspace`, with request and response
 schemas under [schemas/](../../../schemas/). An input key the request schema does not list is
 refused (`invalid_argument` naming it). The tools read the home without writing to it. Panels: *Pulsar accounts* (kv, `status`) and
-*Recent publications* (table, `history`). Two skills ship with it:
-[pulsar-publish](../../../skills/publish/SKILL.md) (check accounts, draft and validate
-a plan) and [pulsar-setup](../../../skills/setup/SKILL.md) (walk a human through
-installing pulsar and binding an account).
+*Recent publications* (table, `history`). The skill [skills/publish](../../../skills/publish/SKILL.md) is linked as `pulsar-publish`:
+checking accounts, drafting and validating a plan, and, in
+[references/setup.md](../../../skills/publish/references/setup.md), walking a human through
+installing pulsar and binding an account.
 
 ### How it runs
 

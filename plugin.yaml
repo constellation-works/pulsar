@@ -60,7 +60,7 @@ spec:
       input_schema: { $ref: schemas/history.request.json }
       output_schema: { $ref: schemas/history.response.json }
 
-  skills: [skills/publish, skills/setup]
+  skills: [skills/publish]
 
   config:
     # pulsar's settings live in config.toml in its home, the one source every

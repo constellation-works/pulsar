@@ -1,9 +1,7 @@
----
-name: pulsar-setup
-description: Walk a human through setting up pulsar on a posting host (install, the X developer app, the home and config.toml, binding an account, the Orbit plugin and the MCP server) and verify each step. Use when pulsar is not installed, no account is bound, or pulsar.status reports a login, storage or config problem.
----
+# Setting pulsar up with a human
 
-# pulsar: setting it up with a human
+Read this when pulsar is not installed, no account is bound, or `pulsar.status`
+reports a login, storage or config problem.
 
 pulsar publishes to X as accounts a human binds on one host, the *posting host*.
 Setting it up needs a browser, the X developer portal and a login, so the human
@@ -177,7 +175,7 @@ Then validate a one-post plan offline. Nothing is sent:
 PULSAR_HOME=<home> uv run pulsar validate plan.yaml
 ```
 
-From here, drafting and publishing follow the `pulsar-publish` skill. The first
+From here, drafting and publishing follow [the skill](../SKILL.md). The first
 live post is the human's call: `pulsar publish plan.yaml --confirm` costs money.
 
 ## After an upgrade
