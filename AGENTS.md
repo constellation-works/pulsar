@@ -1,8 +1,10 @@
 # Agent guidance
 
-- This repository is `pulsar`, the constellation's social write connector (X
-  today; Python, `uv`): an MCP server, the `pulsar` CLI and an Orbit plugin over
-  one core and one ledger. Reads are not its job.
+- This repository is `pulsar`, the constellation's social connector (X today;
+  Python, `uv`): an MCP server, the `pulsar` CLI and an Orbit plugin over one
+  core and one ledger. It writes, and reads only what engagement needs (the
+  account's mentions, its own posts' metrics); search and general timelines are
+  not its job, and it never stores what it reads.
 - Credentials never cross the tool boundary. No tool may accept a token, key,
   or secret as an argument, and no tool may return one. Token storage stays
   encrypted under the pulsar home directory.

@@ -29,10 +29,13 @@ What the plugin grows into with phase 4 ([ORB-13030]). Nothing here is built.
    | `publish` | mutating | workspace | an approved draft, or a plan under a standing policy |
    | `delete` | mutating | workspace | ledger-recorded delete |
    | `dispatch` | mutating | workspace | publish due approved drafts, reconcile unknown rows |
-   | `approve`, `reject`, `revoke` | mutating | none | human-only, via `orbit pulsar …` |
 
+   Approving is not a tool on any surface: a human records approvals from a terminal
+   ([Engagement — Decisions](../engagement/4_decisions.md#an-agents-draft-is-published-only-against-a-human-approval-of-its-digest)).
    Orbit lets agents call a mutating plugin tool only when the task's `required_tools` or the
    activity allowlist names it; with the approval check, explicit intent becomes structural.
+   The engagement tools (`engagements`, `metrics`, `publish`) are specified in
+   [Engagement](../engagement/1_overview.md).
 2. **Error detail on writes.** `budget_exceeded` needs `detail.retry_after` and
    `outcome_unknown` must reach callers as not retryable. The `valid: false` workaround does not
    fit writes; this waits on [ORB-13114] or needs a documented second shape.

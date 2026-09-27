@@ -22,11 +22,11 @@ built.
 
 ## 1. Open Questions
 
-1. **Where does content live?** Marketing's content records are `post.md` files. The
-   recommendation is a fenced ` ```pulsar ` YAML block inside `post.md` (one source of truth);
-   the alternative is a sibling `post.yaml`. Undecided.
-2. **How long does an approval last?** Approval records `{digest, approver, ts, ttl}`; the
-   default TTL is undecided.
+1. **Where does content live?** Decided for the engagement loop: a plan file beside the
+   content record (`plan.yaml` next to `post.md`), and one plan file per reply. Approvals
+   moved to [Engagement](../engagement/4_decisions.md#an-agents-draft-is-published-only-against-a-human-approval-of-its-digest).
+2. **Drafts as a ledger object.** A `submit` that stores a draft in pulsar, rather than a
+   file in the workspace, is still open; the engagement loop does without it.
 3. **How does a standing policy know its caller?** A policy such as `{routine:
    constworks-x-updates, max_per_day: 1}` must match a host-attested identity, not a
    self-asserted `caller`. Orbit's plugin context carries no task or run id yet ([ORB-13115]).

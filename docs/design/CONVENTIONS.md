@@ -152,5 +152,6 @@ Either way the entry names a real alternative and a non-trivial `Cost:`. Format:
 | Publishing | [publishing/](./publishing/) | claude |
 | Channels | [channels/](./channels/) | claude |
 | Surfaces | [surfaces/](./surfaces/) | claude |
+| Engagement | [engagement/](./engagement/) | claude |
 
 The lead keeps the folder in sync with the code and answers review comments. Anyone may edit.
