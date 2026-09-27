@@ -73,10 +73,10 @@ authenticates it.
 
 ## 2. Operator CLI
 
-[surfaces/cli/](../../../src/pulsar/cli/), verbs in [ops.py](../../../src/pulsar/app/ops.py),
+[cli/](../../../src/pulsar/cli/), verbs in [ops.py](../../../src/pulsar/app/ops.py),
 health in [health.py](../../../src/pulsar/app/health.py). The entry point `pulsar/main.py`
-builds a `LocalApp` and runs the CLI with it; `cli/main.py` builds the command tree and dispatches; each command declares its parser and holds its handler in `surfaces/cli/commands/`;
-beneath them, `surfaces/cli/toolkit/` holds what they are written against: `context.py` prints a payload and `errors.py` a failure.
+builds a `LocalApp` and runs the CLI with it; `cli/main.py` builds the command tree and dispatches; each command declares its parser and holds its handler in `src/pulsar/cli/commands/`;
+beneath them, `src/pulsar/cli/toolkit/` holds what they are written against: `context.py` prints a payload and `errors.py` a failure.
 
 - **Help.** `pulsar` or `pulsar auth` alone prints that level's help on stderr and exits 2.
   The root help lists the commands in groups (Accounts, Publish, Observe, Maintenance,

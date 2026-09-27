@@ -63,7 +63,7 @@ schema, and a call carrying keys is refused, not ignored.
 ## `validate` reports an invalid plan as a result
 
 **Recorded:** 2026-09-26 · [ORB-13029]
-**Code anchors:** `src/pulsar/app/plugin.py::validate`
+**Code anchors:** `src/pulsar/app/plugin.py::validate`, `src/pulsar/app/plugin.py::PLAN_VERDICTS`
 
 ### Context
 
@@ -74,7 +74,7 @@ to fix it. Orbit 0.24 passes only `code` and `message` of a plugin error on ([OR
 
 `pulsar.validate` returns `{valid: false, error: {code, message, retryable, detail}}` for a
 plan that fails validation (`invalid_plan`, `invalid_text`, `invalid_media`,
-`secret_detected`, `unsupported`: `orbit_tool.PLAN_VERDICTS`). Bad tool input (no plan, an
+`secret_detected`, `unsupported`: `src/pulsar/app/plugin.py::PLAN_VERDICTS`). Bad tool input (no plan, an
 unreadable source, an `account` that is not bound or not the plan's) and a broken home
 (`insecure_storage`, `invalid_config`, `lock_timeout`) stay tool errors.
 
@@ -242,8 +242,9 @@ means the backend crashed and its output is discarded.
 ### Decision
 
 `publish --yes` stays as an alias of `--confirm` and `auth status --offline` as a
-no-op, each warning on stderr, for one release; then both become usage errors. `auth logout`
-and `import-posted --confirm` are new requirements, not renames, and have no alias.
+no-op, each warning on stderr, for one release; then both become usage errors
+([CHANGELOG.md](../../../CHANGELOG.md)). `auth logout` and `import-posted --confirm`
+are new requirements, not renames, and have no alias.
 
 ### Consequences
 
