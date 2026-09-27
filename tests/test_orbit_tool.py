@@ -1,4 +1,4 @@
-"""The Orbit exec backend (``surfaces/orbit/backend.py``) and the plugin manifest around it.
+"""The Orbit exec backend (``orbit/backend.py``) and the plugin manifest around it.
 
 These run the backend in-process; ``orbit plugin test <clean export> --grant fs,network``
 runs the same goldens (``tests/conformance/``) through Orbit and its sandbox.
@@ -16,7 +16,7 @@ import jsonschema
 import pytest
 import yaml
 
-from pulsar.app import ops
+from pulsar.app import ops, plugin
 from pulsar.app.facade import LocalApp
 from pulsar.app.runtime import default_paths
 from pulsar.internal.fs import Paths
@@ -372,7 +372,7 @@ def test_validate_refuses_a_source_that_escapes_by_symlink(state, workspace, tmp
 
 
 def test_validate_refuses_an_oversized_or_binary_source(state, workspace):
-    (workspace / "big.yaml").write_bytes(b"#" * (orbit_tool.SOURCE_MAX_BYTES + 1))
+    (workspace / "big.yaml").write_bytes(b"#" * (plugin.SOURCE_MAX_BYTES + 1))
     (workspace / "bin.yaml").write_bytes(b"\xff\xfe")
     for name in ("big.yaml", "bin.yaml", "missing.yaml"):
         response = run(state, workspace, "validate", {"source": name})

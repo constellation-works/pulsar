@@ -1,7 +1,7 @@
 ---
 title: Surfaces — Decisions
 owner: claude
-last_updated: 2026-09-26
+last_updated: 2026-09-27
 last_validated: 2026-09-26
 status: Accepted
 feature: surfaces
@@ -9,7 +9,7 @@ doc_role: decisions
 type: design
 summary: Exec backend over mcp, one settings source, plan errors as results, workspace-confined plugin media, the launcher's shape, and CLI output modes.
 tags: [surfaces, orbit-plugin, mcp]
-paths: ["plugin.yaml", "bin/pulsar", "src/pulsar/orbit/backend.py", "src/pulsar/mcp/server.py", "src/pulsar/app/tools.py"]
+paths: ["plugin.yaml", "bin/pulsar", "src/pulsar/orbit/backend.py", "src/pulsar/mcp/server.py", "src/pulsar/app/tools.py", "src/pulsar/app/plugin.py"]
 related_features: [publishing, accounts]
 related_artifacts: [ORB-12124, ORB-13029]
 ---
@@ -63,7 +63,7 @@ schema, and a call carrying keys is refused, not ignored.
 ## `validate` reports an invalid plan as a result
 
 **Recorded:** 2026-09-26 · [ORB-13029]
-**Code anchors:** `src/pulsar/orbit/backend.py::validate`
+**Code anchors:** `src/pulsar/app/plugin.py::validate`
 
 ### Context
 
@@ -86,7 +86,7 @@ unreadable source, an `account` that is not bound or not the plan's) and a broke
 ## Plugin calls confine media to the workspace
 
 **Recorded:** 2026-09-26 · [ORB-13029]
-**Code anchors:** `src/pulsar/orbit/backend.py::_settings`, `src/pulsar/orbit/backend.py::_source_path`
+**Code anchors:** `src/pulsar/orbit/backend.py::_settings`, `src/pulsar/app/plugin.py::read_source`
 
 ### Context
 

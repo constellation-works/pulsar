@@ -32,7 +32,6 @@ from pydantic import ConfigDict, Field
 
 from pulsar import __version__
 from pulsar.app import tools as app_tools
-from pulsar.app.exports import MAX_IMAGE_BYTES, MAX_VIDEO_BYTES
 from pulsar.app.interfaces import Runtime
 from pulsar.internal.errors import INTERNAL, PulsarError
 
@@ -316,8 +315,8 @@ def build_server(rt: Runtime) -> MCPServer:
         Tool.from_function(
             upload_media,
             description=(
-                f"Upload an image (png/jpeg/gif/webp, <={_mib(MAX_IMAGE_BYTES)} MiB) or MP4 "
-                f"video (video/mp4, <={_mib(MAX_VIDEO_BYTES)} MiB) for a later create_post. "
+                f"Upload an image (png/jpeg/gif/webp, <={app_tools.MAX_IMAGE_MIB} MiB) or MP4 "
+                f"video (video/mp4, <={app_tools.MAX_VIDEO_MIB} MiB) for a later create_post. "
                 "Pass `path` (a regular file inside the operator's configured media roots; "
                 "relative paths are from the server's cwd; refused as invalid_config when no "
                 "roots are set) or `base64`. The type is sniffed from the content; a `mime` or "
@@ -344,10 +343,6 @@ def build_server(rt: Runtime) -> MCPServer:
         instructions=INSTRUCTIONS,
         tools=[_strict(t) for t in tools],
     )
-
-
-def _mib(limit: int) -> int:
-    return limit // (1024 * 1024)
 
 
 def loopback_security(host: str, port: int) -> TransportSecuritySettings:

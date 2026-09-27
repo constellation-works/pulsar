@@ -32,40 +32,24 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
-import stat
 import sys
 from collections.abc import Callable, Coroutine, Mapping
 from dataclasses import replace
 from pathlib import Path
 from typing import IO, Any
 
-from pulsar.app.exports import PUBLISHED, Plan, PlanRecord, home_command, open_beneath
-from pulsar.app.health import attention as health_attention
-from pulsar.app.health import auth_report
-from pulsar.app.interfaces import App, Runtime
-from pulsar.app.ops import HISTORY_LIMIT_DEFAULT, HISTORY_LIMIT_MAX, budget_report, check_limit
+from pulsar.app import plugin
+from pulsar.app.interfaces import App
+from pulsar.app.ops import HISTORY_LIMIT_DEFAULT, HISTORY_LIMIT_MAX
 from pulsar.app.runtime import PLUGIN_STATE_ENV
 from pulsar.app.settings import Settings, load_settings
-from pulsar.internal.errors import (
-    INTERNAL,
-    INVALID_ARGUMENT,
-    INVALID_CONFIG,
-    INVALID_MEDIA,
-    INVALID_PLAN,
-    INVALID_TEXT,
-    SECRET_DETECTED,
-    UNSUPPORTED,
-    PulsarError,
-)
+from pulsar.internal.errors import INTERNAL, INVALID_ARGUMENT, INVALID_CONFIG, PulsarError
 from pulsar.internal.fs import as_object, resolve_home
 
 log = logging.getLogger(__name__)
 
 NAMESPACE = "pulsar"
 ENVELOPE_VERSION = 1
-# A plan source is small YAML; refuse anything that is plainly not one.
-SOURCE_MAX_BYTES = 256 * 1024
 
 # Each tool's input keys: the request schemas' properties (a test holds them
 # equal). Anything else is refused, not ignored.
@@ -132,76 +116,14 @@ def _settings(app: App, call: Call) -> Settings:
 
 
 async def status(app: App, call: Call) -> Output:
-    """Accounts, token health, budget use, unresolved writes, last publication.
-
-    Offline and read-only: token health from local state (``unverified``
-    when that cannot settle it), nothing migrated or written.
-    """
+    """Accounts, token health, budget use, unresolved writes, last publication. Offline."""
     account = call.string("account")
     async with app.runtime(read_only=True) as rt:
-        auth, _ = await auth_report(rt, account=account)
-        budget, _ = budget_report(rt, account=account)
-        usage = {entry["alias"]: entry for entry in budget["accounts"]}
-        accounts: list[dict[str, Any]] = []
-        attention: list[str] = []
-        for entry in auth["accounts"]:
-            alias = entry["alias"]
-            spent = usage.get(alias, {})
-            row = {
-                "alias": alias,
-                "status": entry["status"],
-                "expected_handle": entry["expected_handle"],
-                "authorized": entry["authorized"],
-                "reauth_required": entry["reauth_required"],
-                "token_state": entry["token_state"],
-                "access_token_expires_in_s": entry["access_token_expires_in_s"],
-                "health": entry["health"],
-                "reason": entry["reason"],
-                "healthy": entry["healthy"],
-                "posts": spent.get("posts"),
-                "day": spent.get("day"),
-                "month": spent.get("month"),
-                "quiet": spent.get("quiet"),
-                "unresolved": spent.get("unresolved", []),
-                "last_published": _last_published(rt, alias),
-            }
-            accounts.append(row)
-            if (note := health_attention(entry, app.home)) is not None:
-                attention.append(note)
-            if row["unresolved"]:
-                attention.append(
-                    f"{alias}: {len(row['unresolved'])} write(s) with an unknown outcome "
-                    f"(`{home_command(app.home, f'reconcile --account {alias}')}`)"
-                )
-        if not accounts:
-            # No home here: this is a conformance golden and the sandbox's home varies.
-            attention.append("no account is bound (`pulsar auth login --account x:<handle>`)")
-        if auth["legacy"] is not None:
-            remedy = auth["legacy"]["message"] or (
-                f"run `{home_command(app.home, 'migrate --confirm')}`"
-            )
-            attention.append(f"legacy credentials: {remedy}")
-    return {
-        "default_account": auth["default_account"],
-        "healthy": not attention,
-        "attention": attention,
-        "accounts": accounts,
-    }
-
-
-def _last_published(rt: Runtime, alias: str) -> dict[str, Any] | None:
-    record = rt.ledger.last_published(alias)
-    if record is None:
-        return None
-    return {"key": record.key, "url": record.url, "at": record.updated_at}
+        return await plugin.status(rt, account=account)
 
 
 async def validate(app: App, call: Call) -> Output:
-    """What publishing a plan would send, per account. Offline; claims and sends nothing.
-
-    A plan that fails validation is a result (``valid: false``), not a tool
-    error: an agent drafting a post needs the code and detail to fix it.
-    """
+    """What publishing a plan would send, per account. Offline; claims and sends nothing."""
     raw_plan = call.input.get("plan")
     source = call.string("source")
     if (raw_plan is None) == (source is None):
@@ -209,80 +131,16 @@ async def validate(app: App, call: Call) -> Output:
     plan_input = as_object(raw_plan)
     if raw_plan is not None and plan_input is None:
         raise PulsarError(INVALID_ARGUMENT, "`plan` must be an object")
-    # An unreadable source is a bad argument (a tool error); what it says is the plan.
-    text = _read_source(call, source) if source is not None else None
+    text = None
+    if source is not None:
+        if call.workspace is None:
+            raise PulsarError(INVALID_ARGUMENT, "`source` needs a workspace")
+        text = plugin.read_source(call.workspace, source)
     account = call.string("account")
     # Relative media paths start at the workspace, never at this process's cwd.
     rt = app.runtime(read_only=True, settings=_settings(app, call), media_base=call.workspace)
     async with rt:
-        try:
-            if text is not None:
-                plan = Plan.from_yaml(text)
-            else:
-                plan = Plan.from_mapping(plan_input or {})
-            plan, targets = rt.plan_targets(plan, account)
-            reports = [rt.publisher.prepare(plan, rt.offline_bound(a)).report() for a in targets]
-        except PulsarError as exc:
-            if exc.code not in PLAN_VERDICTS:
-                raise  # the account, the home or the storage: a tool error, not a verdict
-            return {"valid": False, "error": exc.to_envelope()["error"]}
-    return {"valid": True, "accounts": reports}
-
-
-# What is wrong with the plan itself, which ``validate`` answers as ``valid: false``.
-PLAN_VERDICTS = frozenset({INVALID_PLAN, INVALID_TEXT, INVALID_MEDIA, SECRET_DETECTED, UNSUPPORTED})
-
-
-def _read_source(call: Call, source: str) -> str:
-    """The plan file ``source`` names, read without following a symlink out of the
-    workspace between the check and the open."""
-    if call.workspace is None:
-        raise PulsarError(INVALID_ARGUMENT, "`source` needs a workspace")
-    workspace = call.workspace
-    detail = {"source": source}
-    try:
-        path = (workspace / source).resolve(strict=True)
-    except (OSError, RuntimeError) as exc:
-        raise PulsarError(
-            INVALID_ARGUMENT, f"cannot read {source}: {_reason(exc)}", detail=detail
-        ) from exc
-    if not path.is_relative_to(workspace) or path == workspace:
-        raise PulsarError(
-            INVALID_ARGUMENT,
-            f"`source` must be a file inside the workspace ({workspace})",
-            detail=detail,
-        )
-    try:
-        before = os.lstat(path)
-        if not stat.S_ISREG(before.st_mode):
-            raise PulsarError(INVALID_ARGUMENT, f"{source} is not a regular file", detail=detail)
-        fd = open_beneath(path, workspace)
-    except OSError as exc:
-        raise PulsarError(
-            INVALID_ARGUMENT, f"cannot read {source}: {_reason(exc)}", detail=detail
-        ) from exc
-    try:
-        st = os.fstat(fd)
-        if not stat.S_ISREG(st.st_mode) or (st.st_dev, st.st_ino) != (before.st_dev, before.st_ino):
-            raise PulsarError(
-                INVALID_ARGUMENT, f"{source} changed while it was being opened", detail=detail
-            )
-        with os.fdopen(os.dup(fd), "rb") as fh:
-            data = fh.read(SOURCE_MAX_BYTES + 1)
-    finally:
-        os.close(fd)
-    if len(data) > SOURCE_MAX_BYTES:
-        raise PulsarError(
-            INVALID_ARGUMENT, f"{source} is over {SOURCE_MAX_BYTES} bytes", detail=detail
-        )
-    try:
-        return data.decode("utf-8")
-    except UnicodeDecodeError as exc:
-        raise PulsarError(INVALID_ARGUMENT, f"{source} is not UTF-8", detail=detail) from exc
-
-
-def _reason(exc: BaseException) -> str:
-    return exc.strerror if isinstance(exc, OSError) and exc.strerror else type(exc).__name__
+        return plugin.validate(rt, plan=plan_input, source_text=text, account=account)
 
 
 async def history(app: App, call: Call) -> Output:
@@ -291,29 +149,8 @@ async def history(app: App, call: Call) -> Output:
     limit = call.input.get("limit", HISTORY_LIMIT_DEFAULT)
     if not isinstance(limit, int):
         raise PulsarError(INVALID_ARGUMENT, f"`limit` must be an integer 1..{HISTORY_LIMIT_MAX}")
-    limit = check_limit(limit)
     async with app.runtime(read_only=True) as rt:
-        alias = rt.account(account).alias if account is not None else None
-        rows = [_row(r) for r in rt.ledger.history(limit=limit, account_alias=alias)]
-        total = rt.ledger.count(account_alias=alias)
-    return {"rows": rows, "total": total, "truncated": total > len(rows)}
-
-
-def _row(record: PlanRecord) -> dict[str, Any]:
-    return {
-        "key": record.key,
-        "tool": record.tool,
-        "account": record.account_alias,
-        "state": record.state,
-        "posts": len(record.items),
-        "published": sum(1 for i in record.items if i.state == PUBLISHED),
-        "url": record.url,
-        "cost_usd": round(sum(i.est_cost_usd for i in record.items), 6),
-        "error_code": record.error_code,
-        "caller": record.caller,
-        "created_at": record.created_at,
-        "updated_at": record.updated_at,
-    }
+        return plugin.history(rt, account=account, limit=limit)
 
 
 Handler = Callable[[App, Call], Coroutine[Any, Any, Output]]

@@ -51,7 +51,8 @@ translates requests and errors; it never decides policy and never touches a cred
 | Agent tools behind it (claim, send, settle) | [app/tools.py](../../../src/pulsar/app/tools.py) | [ORB-12124], [ORB-13028] |
 | CLI: auth, operator verbs, `serve`, `orbit-tool` | [cli/](../../../src/pulsar/cli/) | [ORB-13027], [ORB-13028], [ORB-13029] |
 | Operator verbs | [app/ops.py](../../../src/pulsar/app/ops.py) | [ORB-13028] |
-| Orbit exec backend | [orbit/backend.py](../../../src/pulsar/orbit/backend.py) | [ORB-13029] |
+| Orbit exec backend: envelopes, inputs, sandbox | [orbit/backend.py](../../../src/pulsar/orbit/backend.py) | [ORB-13029] |
+| Plugin tools behind it | [app/plugin.py](../../../src/pulsar/app/plugin.py) | [ORB-13029] |
 | Plugin manifest, launcher | [plugin.yaml](../../../plugin.yaml), [bin/pulsar](../../../bin/pulsar) | [ORB-13029] |
 | Tool schemas, skill, goldens | [schemas/](../../../schemas/), [skills/publish/](../../../skills/publish/SKILL.md), [tests/conformance/](../../../tests/conformance/pulsar.yaml) | [ORB-13029] |
 

@@ -28,8 +28,8 @@
 
 - The tree is the architecture; [ARCHITECTURE.md](docs/design/ARCHITECTURE.md) has it and
   `tests/test_layers.py` enforces it. Front ends (`cli`, `mcp`, `orbit`) use `app` and
-  `internal`, and reach `app/core` only through `app/exports.py`. `core` never imports
-  `app`; `internal` imports nothing above it.
+  `internal`, never `app/core`: each has its verbs in `app` (`ops`, `tools`, `plugin`).
+  `core` never imports `app`; `internal` imports nothing above it.
 - Inject dependencies: a class takes them in its constructor, a function as parameters.
   Only the entry point reads the process (environment, cwd, `$HOME`), and only `app/runtime.py`
   and `app/facade.py` build the implementations. Type an injected dependency by a

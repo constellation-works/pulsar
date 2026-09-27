@@ -29,7 +29,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from typing import Any
 
-from pulsar.app.core.channels.contract import Prices
+from pulsar.app.core.channels.contract import MAX_IMAGE_BYTES, MAX_VIDEO_BYTES, Prices
 from pulsar.app.core.channels.x import MediaProcessingError, check_x_id, validate_text
 from pulsar.app.core.ledger import PUBLISHED, SKIPPED, check_key, request_digest
 from pulsar.app.core.publishing import (
@@ -47,6 +47,10 @@ from .interfaces import Runtime
 log = logging.getLogger(__name__)
 
 Result = dict[str, Any]
+
+# What upload_media accepts, in MiB, for the tool's description.
+MAX_IMAGE_MIB = MAX_IMAGE_BYTES // (1024 * 1024)
+MAX_VIDEO_MIB = MAX_VIDEO_BYTES // (1024 * 1024)
 
 
 async def whoami(rt: Runtime, account: str | None) -> Result:

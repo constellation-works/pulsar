@@ -18,8 +18,8 @@ CORE = {
     "app.core.ledger",
     "app.core.publishing",
 }
-# What each unit may import besides itself. ``app`` is the app's own modules;
-# a front end reaching ``app.core`` goes through ``app/exports.py``.
+# What each unit may import besides itself. ``app`` is the app's own modules:
+# a front end never reaches ``app.core``.
 ALLOWED = {
     # the parents themselves: docstring-only (checked below)
     "internal": set(),
