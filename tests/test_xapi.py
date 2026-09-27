@@ -21,8 +21,10 @@ from pulsar.app.core.channels.x import (
     auth,
     bounded_text,
 )
+from pulsar.app.core.channels.x.client import PROVIDER_DETAIL_LIMIT_BYTES
 from pulsar.internal.errors import AuthExpired, OutcomeUnknown, PulsarError
 from pulsar.internal.fs import Paths
+from pulsar.internal.guard import scan_for_secrets
 
 from .conftest import (
     ACCESS,
@@ -159,6 +161,47 @@ async def test_http_errors_map_to_codes(client, authed, fake_x, status, body, co
         await client.create_post("hi")
     assert exc.value.code == code
     assert exc.value.detail
+
+
+@pytest.mark.parametrize(
+    ("status", "code", "retryable"),
+    [(429, "rate_limited", True), (503, "outcome_unknown", False)],
+)
+async def test_oversized_http_error_detail_is_bounded_and_full_body_is_logged_redacted(
+    client, authed, fake_x, capsys, status, code, retryable
+):
+    secret = "sk-ant-" + "Ab3Cd5Ef7Gh9Jk2Lm4Np6"
+    assigned_secret = "a8f3K2p9Qx7LmN4vB6tR1sZ0"
+    fake_x.tweet_status = status
+    fake_x.tweet_body = {
+        "title": "Too Many Requests",
+        "detail": "é" * 3000 + f" Bearer {secret} END-OF-BODY",
+        "extra": "full body includes this field",
+        "api_key": assigned_secret,
+        "access_token_echo": ACCESS,
+    }
+    with pytest.raises(PulsarError) as exc:
+        await client.create_post("hi")
+    detail = json.dumps(exc.value.detail, ensure_ascii=False)
+    stderr = capsys.readouterr().err
+    assert exc.value.code == code and exc.value.retryable is retryable
+    assert len(detail.encode("utf-8")) <= PROVIDER_DETAIL_LIMIT_BYTES
+    assert "[truncated]" in detail
+    assert "END-OF-BODY" in stderr and "full body includes this field" in stderr
+    assert "[redacted:" in stderr
+    assert secret not in detail and secret not in stderr
+    assert assigned_secret not in detail and assigned_secret not in stderr
+    assert ACCESS not in detail and ACCESS not in stderr
+    assert scan_for_secrets(detail) == [] and scan_for_secrets(stderr) == []
+
+
+async def test_duplicate_code_uses_full_body_even_when_detail_is_truncated(client, authed, fake_x):
+    fake_x.tweet_status = 403
+    fake_x.tweet_body = {"detail": "x" * 3000 + " duplicate content"}
+    with pytest.raises(PulsarError) as exc:
+        await client.create_post("hi")
+    assert exc.value.code == "duplicate" and not exc.value.retryable
+    assert "[truncated]" in json.dumps(exc.value.detail)
 
 
 async def test_delete_post(client, authed, fake_x):
@@ -393,14 +436,39 @@ async def test_upload_video_processing_failure_preserves_x_detail(client, authed
     assert fake_x.calls("GET", "/media/upload") == []
 
 
-async def test_provider_text_in_an_error_message_is_bounded(client, authed, fake_x):
+async def test_provider_text_in_an_error_message_is_bounded(client, authed, fake_x, capsys):
     essay = "codec " * 1000
     fake_x.media_finalize_info = {"state": "failed", "error": {"message": essay}}
     with pytest.raises(MediaProcessingError) as exc:
         await client.upload_media(b"video", "video/mp4")
     assert len(exc.value.message) < 700
     assert "[truncated 5500 of 6000 characters]" in exc.value.message
-    assert exc.value.detail["error"]["message"] == essay, "the full text stays in detail"
+    assert len(json.dumps(exc.value.detail).encode("utf-8")) <= PROVIDER_DETAIL_LIMIT_BYTES
+    assert "[truncated]" in json.dumps(exc.value.detail)
+    assert essay in capsys.readouterr().err
+
+
+async def test_oversized_processing_info_redacts_detail_message_and_log(
+    client, authed, fake_x, capsys
+):
+    secret = "sk-ant-" + "Ab3Cd5Ef7Gh9Jk2Lm4Np6"
+    assigned_secret = "a8f3K2p9Qx7LmN4vB6tR1sZ0"
+    fake_x.media_finalize_info = {
+        "state": "failed",
+        "error": {"message": "é" * 3000 + f" Bearer {secret} END-OF-PROCESSING"},
+        "api_key": assigned_secret,
+    }
+    with pytest.raises(MediaProcessingError) as exc:
+        await client.upload_media(b"video", "video/mp4")
+    detail = json.dumps(exc.value.detail, ensure_ascii=False)
+    stderr = capsys.readouterr().err
+    assert exc.value.code == "invalid_media" and not exc.value.retryable
+    assert len(detail.encode("utf-8")) <= PROVIDER_DETAIL_LIMIT_BYTES
+    assert "[truncated]" in detail
+    assert "END-OF-PROCESSING" in stderr and "[redacted:" in stderr
+    assert secret not in exc.value.message and secret not in detail and secret not in stderr
+    assert assigned_secret not in detail and assigned_secret not in stderr
+    assert scan_for_secrets(detail) == [] and scan_for_secrets(stderr) == []
 
 
 def test_bounded_text_marks_what_it_cuts():

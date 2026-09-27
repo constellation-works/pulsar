@@ -20,10 +20,12 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import json
 import re
+import sys
 import time
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
@@ -43,6 +45,7 @@ from pulsar.internal.errors import (
     PulsarError,
 )
 from pulsar.internal.fs import as_list, as_object, obj
+from pulsar.internal.guard import redact, scan_for_secrets
 
 from ..credentials import (
     REFRESH_LOCK_WAIT_SECONDS,
@@ -72,6 +75,8 @@ UPLOAD_DEADLINE_FLOOR_SECONDS = 30
 UPLOAD_MIN_BYTES_PER_SECOND = 256 * 1024
 # The most provider-supplied text an error message embeds.
 PROVIDER_TEXT_LIMIT = 500
+# Maximum UTF-8 size of JSON-serialized provider detail returned to callers.
+PROVIDER_DETAIL_LIMIT_BYTES = 2048
 
 
 _X_ID = re.compile(r"[0-9]{1,19}")
@@ -79,7 +84,7 @@ _X_ID = re.compile(r"[0-9]{1,19}")
 
 def bounded_text(value: object, limit: int = PROVIDER_TEXT_LIMIT) -> str:
     """``value`` as text of at most ``limit`` characters, visibly marked when cut."""
-    text = str(value)
+    text = redact(str(value))
     if len(text) <= limit:
         return text
     return f"{text[:limit]}… [truncated {len(text) - limit} of {len(text)} characters]"
@@ -102,21 +107,78 @@ def check_x_id(value: object, field: str) -> str:
 
 class MediaProcessingError(PulsarError):
     def __init__(self, state: str, message: str, *, detail: Any) -> None:
-        super().__init__(INVALID_MEDIA, message, detail=detail)
-        self.processing_state = state
+        _log_provider_body(detail)
+        super().__init__(INVALID_MEDIA, message, detail=_bounded_provider_detail(detail))
+        self.processing_state = bounded_text(state)
 
 
-def _error_detail(resp: httpx.Response) -> Any:
-    try:
-        body = resp.json()
-    except ValueError:
-        return bounded_text(resp.text)
+def _redact_provider(value: Any) -> Any:
+    """Redact JSON values and keys before serialization can expose a credential."""
+    if isinstance(value, str):
+        return redact(value)
+    if (fields := as_object(value)) is not None:
+        safe: dict[str, Any] = {}
+        for key, item in fields.items():
+            # The scanner recognizes generated credentials only with their
+            # secret-named key; scanning a value alone can miss them.
+            if isinstance(item, str) and "generic secret assignment" in scan_for_secrets(
+                f"{key}={item}"
+            ):
+                safe[redact(str(key))] = "[redacted:provider credential]"
+            else:
+                safe[redact(str(key))] = _redact_provider(item)
+        return safe
+    if isinstance(value, list):
+        return [_redact_provider(item) for item in cast(list[Any], value)]
+    return value
+
+
+def _serialized_detail(value: Any) -> str:
+    return json.dumps(value)
+
+
+def _bounded_provider_detail(value: Any, *, limit: int = PROVIDER_DETAIL_LIMIT_BYTES) -> Any:
+    """Keep the complete shape when small; otherwise return a marked JSON preview."""
+    safe = _redact_provider(value)
+    serialized = _serialized_detail(safe)
+    if len(serialized.encode("utf-8")) <= limit:
+        return safe
+    marker = "… [truncated]"
+    low, high = 0, len(serialized)
+    while low < high:
+        middle = (low + high + 1) // 2
+        preview = serialized[:middle] + marker
+        bounded: Any = {"truncated": preview} if isinstance(safe, dict) else preview
+        if len(_serialized_detail(bounded).encode("utf-8")) <= limit:
+            low = middle
+        else:
+            high = middle - 1
+    preview = serialized[:low] + marker
+    return {"truncated": preview} if isinstance(safe, dict) else preview
+
+
+def _log_provider_body(body: Any) -> None:
+    """Keep the full provider body in the process log, with secrets masked."""
+    full_body = json.dumps(_redact_provider(body), ensure_ascii=False)
+    print(f"X error body: {full_body}", file=sys.stderr)
+
+
+def _selected_error_body(body: Any) -> Any:
     if (fields := as_object(body)) is not None:
         # X returns either {"title","detail","type"} or {"errors":[...]}
         return {
             k: fields[k] for k in ("title", "detail", "type", "errors", "reason") if k in fields
         } or fields
     return body
+
+
+def _error_detail(resp: httpx.Response) -> Any:
+    try:
+        body = resp.json()
+    except ValueError:
+        body = resp.text
+    _log_provider_body(body)
+    return _bounded_provider_detail(_selected_error_body(body))
 
 
 def _detail_text(detail: Any) -> str:
@@ -131,7 +193,11 @@ def _detail_text(detail: Any) -> str:
 
 def map_http_error(resp: httpx.Response) -> PulsarError:
     detail = _error_detail(resp)
-    text = _detail_text(detail).lower()
+    try:
+        body = resp.json()
+    except ValueError:
+        body = resp.text
+    text = _detail_text(_selected_error_body(body)).lower()
     if resp.status_code == 429:
         return PulsarError(RATE_LIMITED, "X rate limit hit; retry later", detail=detail)
     if resp.status_code == 404:
@@ -376,9 +442,13 @@ class XClient:
         if resp.status_code == 401:
             raise self._expired("X refused the access token again right after a refresh")
         if resp.status_code >= 500 and non_idempotent:
+            cause = f"X answered HTTP {resp.status_code}"
             raise OutcomeUnknown(
-                f"X answered HTTP {resp.status_code}",
-                detail={"status": resp.status_code, "x": _error_detail(resp)},
+                cause,
+                detail=_bounded_provider_detail(
+                    {"status": resp.status_code, "x": _error_detail(resp)},
+                    limit=PROVIDER_DETAIL_LIMIT_BYTES - 64,
+                ),
             )
         if resp.status_code >= 400:
             raise map_http_error(resp)

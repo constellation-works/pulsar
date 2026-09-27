@@ -13,6 +13,12 @@ detail}` (`detail` null when there is none). Orbit: `{code, message, retryable, 
 when repeating the identical call later can succeed. Codes are defined in
 [internal/errors/codes.py](../../../../src/pulsar/internal/errors/codes.py).
 
+For X HTTP errors and media processing failures, `detail` is limited to 2048 bytes when
+serialized as UTF-8 JSON. Smaller details retain their shape; oversized details become a
+preview ending in `[truncated]` (inside a `truncated` field for objects). The full provider
+body is written to stderr with credential shapes and loaded credentials redacted. Error
+`code` and `retryable` are unaffected by the bound.
+
 | code | meaning | what to do |
 |---|---|---|
 | `auth_expired` | no account bound, logged out, no token, refresh failed (account then `reauth_required`), or legacy credentials needing `pulsar auth migrate --confirm` | stop; a human runs what `message` says |
