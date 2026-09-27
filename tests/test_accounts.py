@@ -18,15 +18,17 @@ from mcp.client.session import ClientSession
 from pulsar.app.core.account import (
     LEGACY_NEEDS_ALIAS,
     Account,
+    AccountConfig,
     AccountRegistry,
     FernetFileStore,
-    TokenBundle,
     canonical_alias,
     require_expected,
 )
 from pulsar.app.core.channels.contract import Identity
-from pulsar.app.core.channels.x import XClient, complete_login
-from pulsar.app.settings import AccountConfig, Settings
+from pulsar.app.core.channels.credentials import TokenBundle
+from pulsar.app.core.channels.x import XClient
+from pulsar.app.login import complete_login
+from pulsar.app.settings import Settings
 from pulsar.internal.errors import PulsarError
 from pulsar.internal.fs import account_slug, alias_from_slug
 from pulsar.mcp import build_server

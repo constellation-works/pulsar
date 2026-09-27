@@ -9,7 +9,7 @@ doc_role: overview
 type: design
 summary: How pulsar binds provider accounts to a host, stores their tokens, and proves which handle a write will post as.
 tags: [accounts, auth, oauth, credentials]
-paths: ["src/pulsar/app/core/account/registry.py", "src/pulsar/app/core/account/store.py", "src/pulsar/internal/fs/paths.py", "src/pulsar/internal/fs/files.py", "src/pulsar/app/core/channels/x/auth.py", "src/pulsar/app/core/channels/x/client.py"]
+paths: ["src/pulsar/app/core/account/registry.py", "src/pulsar/app/core/account/store.py", "src/pulsar/app/core/account/clients.py", "src/pulsar/app/core/channels/credentials.py", "src/pulsar/app/login.py", "src/pulsar/internal/fs/paths.py", "src/pulsar/internal/fs/files.py", "src/pulsar/app/core/channels/x/auth.py", "src/pulsar/app/core/channels/x/client.py"]
 related_features: [publishing, surfaces]
 related_artifacts: [ORB-12124, ORB-13027, ORB-13028, ORB-13039]
 ---
@@ -55,10 +55,13 @@ the alias names. No agent ever sees a token, and no tool can accept one.
 | Concern | File | Task |
 |---------|------|------|
 | Registry, alias canonicalisation, handle checks | [app/core/account/registry.py](../../../src/pulsar/app/core/account/registry.py) | [ORB-13028] |
-| Encrypted bundle store, `CredentialStore` interface | [app/core/account/store.py](../../../src/pulsar/app/core/account/store.py) | [ORB-13027] |
+| Encrypted bundle store | [app/core/account/store.py](../../../src/pulsar/app/core/account/store.py) | [ORB-13027] |
+| `CredentialStore` interface, `TokenBundle` | [app/core/channels/credentials.py](../../../src/pulsar/app/core/channels/credentials.py) | [ORB-13027] |
+| OAuth client ids (`client.json`) | [app/core/account/clients.py](../../../src/pulsar/app/core/account/clients.py) | [ORB-13028] |
 | Home layout, alias → directory slug | [internal/fs/paths.py](../../../src/pulsar/internal/fs/paths.py) | [ORB-13028] |
 | Owner-only files, atomic saves, `insecure_storage` | [internal/fs/files.py](../../../src/pulsar/internal/fs/files.py) | [ORB-13027] |
-| OAuth 2.0 PKCE login and identity check | [app/core/channels/x/auth.py](../../../src/pulsar/app/core/channels/x/auth.py) | [ORB-12124], [ORB-13028] |
+| OAuth 2.0 PKCE consent and code exchange | [app/core/channels/x/auth.py](../../../src/pulsar/app/core/channels/x/auth.py) | [ORB-12124] |
+| Login: identity check, then bind | [app/login.py](../../../src/pulsar/app/login.py) | [ORB-13028] |
 | Refresh under a per-account file lock | [app/core/channels/x/client.py](../../../src/pulsar/app/core/channels/x/client.py) | [ORB-13027] |
 | `pulsar auth login | status | logout | migrate` | [cli/commands/auth.py](../../../src/pulsar/cli/commands/auth.py) | [ORB-13027], [ORB-13028] |
 

@@ -12,7 +12,8 @@ from pathlib import Path
 import httpx
 import pytest
 
-from pulsar.app.core.account import FernetFileStore, TokenBundle
+from pulsar.app.core.account import FernetFileStore
+from pulsar.app.core.channels.credentials import TokenBundle
 from pulsar.app.core.channels.x import (
     CallbackServer,
     MediaProcessingError,

@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from .adapter import XChannel, fingerprint, post_url, remote_fingerprint
-from .auth import CallbackServer, complete_login, load_client_id, login, save_client_id
+from .auth import PROVIDER, CallbackServer
 from .client import REFRESH_AHEAD_SECONDS, MediaProcessingError, XClient, bounded_text, check_x_id
+from .config import callback_url
 from .interfaces import XApi
 from .text import validate_text, weighted_length
 
@@ -15,17 +16,16 @@ __all__ = [
     "remote_fingerprint",
     "XChannel",
     # auth
+    "PROVIDER",
     "CallbackServer",
-    "complete_login",
-    "load_client_id",
-    "login",
-    "save_client_id",
     # client
     "REFRESH_AHEAD_SECONDS",
     "bounded_text",
     "check_x_id",
     "MediaProcessingError",
     "XClient",
+    # config
+    "callback_url",
     # interfaces
     "XApi",
     # text

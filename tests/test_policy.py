@@ -7,8 +7,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from pulsar.app.core.ledger import Usage
-from pulsar.app.core.publishing import Policy, day_window, month_window, quiet_until
-from pulsar.app.settings import PolicyConfig
+from pulsar.app.core.publishing import Policy, PolicyConfig, day_window, month_window, quiet_until
 from pulsar.internal.errors import BUDGET_EXCEEDED, DAILY_CAP, QUIET_HOURS, PulsarError
 
 LA = ZoneInfo("America/Los_Angeles")

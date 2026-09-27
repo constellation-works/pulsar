@@ -52,21 +52,21 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pulsar.app.core.account import normalize_alias
+from pulsar.app.core.account import AccountConfig, normalize_alias
 from pulsar.app.core.channels.contract import (
     DEFAULT_PLAIN_POST_USD,
     DEFAULT_URL_POST_USD,
     FREE,
     Prices,
 )
+from pulsar.app.core.publishing import (
+    DEFAULT_DAILY_BUDGET_USD,
+    DEFAULT_MAX_POSTS_PER_DAY,
+    DEFAULT_MONTHLY_BUDGET_USD,
+    PolicyConfig,
+)
 from pulsar.internal.errors import INVALID_CONFIG, PulsarError
 from pulsar.internal.fs import Paths, as_list, as_object, expand_user, require_private
-
-# Agreed with Daniel on 2026-09-26: about 1 post a day today, so these leave
-# room for a launch day while stopping a runaway loop within a day.
-DEFAULT_DAILY_BUDGET_USD = 1.0
-DEFAULT_MONTHLY_BUDGET_USD = 10.0
-DEFAULT_MAX_POSTS_PER_DAY = 5
 
 # Upper bounds that catch a typo (an extra zero, a pasted cents value) at load
 # instead of letting it through a budget; docs/design/publishing/references/config.md.
@@ -76,25 +76,6 @@ MAX_MONTHLY_BUDGET_USD = 100_000.0
 MAX_POSTS_PER_DAY = 10_000
 
 _QUIET_RE = re.compile(r"^\s*(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})\s*$")
-
-
-@dataclass(frozen=True)
-class AccountConfig:
-    alias: str
-    expected_handle: str | None = None
-
-
-@dataclass(frozen=True)
-class PolicyConfig:
-    daily_budget_usd: float = DEFAULT_DAILY_BUDGET_USD
-    monthly_budget_usd: float = DEFAULT_MONTHLY_BUDGET_USD
-    max_posts_per_day: int = DEFAULT_MAX_POSTS_PER_DAY
-    quiet_hours: tuple[time, time] | None = None  # [start, end); may wrap midnight
-    timezone: str = "UTC"
-
-    @property
-    def tz(self) -> ZoneInfo:
-        return ZoneInfo(self.timezone)
 
 
 @dataclass(frozen=True)

@@ -1,7 +1,7 @@
 """Where the X token bundle lives, and what that storage does and does not protect.
 
-``CredentialStore`` is the interface the rest of pulsar codes against.
-``FernetFileStore`` is today's implementation: a Fernet ciphertext
+``CredentialStore`` (``channels.credentials``) is the interface the rest of
+pulsar codes against. ``FernetFileStore`` is today's implementation: a Fernet ciphertext
 (``tokens.enc``) beside a host-local key file (``key``), both 0600 in a 0700
 pulsar home. Orbit's host-held secrets (ORB-13009) are meant to drop in
 behind the same protocol, which is why ``save`` already takes an
@@ -54,17 +54,20 @@ import contextlib
 import dataclasses
 import json
 import shlex
-import time
 import uuid
 from collections.abc import AsyncGenerator, Callable, Generator
-from contextlib import AbstractAsyncContextManager
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 
 from cryptography.fernet import Fernet, InvalidToken
 
-from pulsar.internal.errors import CREDENTIALS_UNREADABLE, INSECURE_STORAGE, INTERNAL, PulsarError
+from pulsar.app.core.channels.credentials import (
+    REFRESH_LOCK_WAIT_SECONDS,
+    CredentialConflict,
+    TokenBundle,
+)
+from pulsar.internal.errors import CREDENTIALS_UNREADABLE, INSECURE_STORAGE, PulsarError
 from pulsar.internal.fs import (
     Paths,
     alias_from_slug,
@@ -72,55 +75,11 @@ from pulsar.internal.fs import (
     ensure_private_dir,
     hold_lock,
     hold_lock_async,
-    obj,
     publish_new_private,
     require_private,
     write_private_atomic,
 )
 from pulsar.internal.guard import register_live_secret
-
-# Longer than one token POST (the HTTP timeout) so a waiter outlasts a live refresher.
-REFRESH_LOCK_WAIT_SECONDS = 45.0
-
-
-@dataclass
-class TokenBundle:
-    access_token: str
-    refresh_token: str | None
-    expires_at: float  # epoch seconds
-    scope: str
-    client_id: str
-    token_type: str = "bearer"
-    # Minted per login, carried across refreshes; None for bundles saved before it existed.
-    binding_id: str | None = None
-
-    def expires_within(self, seconds: float) -> bool:
-        return time.time() + seconds >= self.expires_at
-
-    @classmethod
-    def from_token_response(
-        cls, data: object, *, client_id: str, now: float | None = None
-    ) -> TokenBundle:
-        """Raises ``KeyError``/``ValueError`` on a response without a usable access token."""
-        fields = obj(data)
-        now = time.time() if now is None else now
-        access = fields["access_token"]
-        if not isinstance(access, str) or not access:
-            raise ValueError("token response has no access_token")
-        refresh = fields.get("refresh_token")
-        # No ``expires_in`` means we do not know when the token dies. Rather
-        # than invent a lifetime, treat it as expiring now: the
-        # next call refreshes first, which costs one token POST at worst.
-        expires_in = fields.get("expires_in")
-        return cls(
-            access_token=access,
-            refresh_token=refresh if isinstance(refresh, str) and refresh else None,
-            expires_at=now + float(expires_in) if expires_in is not None else now,
-            scope=str(fields.get("scope", "")),
-            client_id=client_id,
-            token_type=str(fields.get("token_type", "bearer")),
-        )
-
 
 _BUNDLE_FIELDS = frozenset(f.name for f in dataclasses.fields(TokenBundle))
 
@@ -145,24 +104,6 @@ def _bundle_from_json(fields: dict[str, Any]) -> TokenBundle | None:
     return TokenBundle(**fields) if ok else None
 
 
-class CredentialConflict(PulsarError):
-    """A compare-and-swap save found a different bundle than the caller expected.
-
-    Every refresher in pulsar catches this and adopts the stored bundle, so it
-    reaches a caller only from a call site that forgot to; that is a bug
-    (``internal``). It is still retryable: another writer saved a newer bundle,
-    and a repeat call reloads the store and uses it.
-    """
-
-    def __init__(self) -> None:
-        super().__init__(
-            INTERNAL,
-            "CredentialConflict: the stored X credential changed during refresh (a writer "
-            "bypassed the refresh lock); retrying the call uses the newer bundle",
-            retryable=True,
-        )
-
-
 def home_command(home: Path, command: str) -> str:
     """``pulsar <command>`` pinned to ``home``, so a remedy shown by the Orbit
     plugin acts on the plugin's home, not the operator's default."""
@@ -178,55 +119,6 @@ def _register(bundle: TokenBundle) -> None:
 def login_command(home: Path, alias: str | None) -> str:
     """The command a human runs to (re)bind ``alias`` in ``home``."""
     return home_command(home, f"auth login --account {alias or 'x:<handle>'}")
-
-
-class CredentialStore(Protocol):
-    """What pulsar needs from wherever the token bundle is kept."""
-
-    def exists(self) -> bool: ...
-
-    def reauth_hint(self) -> str:
-        """What a human runs to bind this store's account again, for error messages."""
-        ...
-
-    def load(self) -> TokenBundle | None:
-        """The stored bundle, or None when this host is not authorized.
-
-        Raises ``insecure_storage`` instead of returning None when a bundle is
-        there but stored unsafely, and ``credentials_unreadable`` when it is
-        there but cannot be decrypted or parsed: None sends the operator to
-        re-login, which fixes neither.
-        """
-        ...
-
-    def save(self, bundle: TokenBundle, *, expected_previous: TokenBundle | None = None) -> None:
-        """Store ``bundle``; with ``expected_previous``, only if that is what is stored now.
-
-        A mismatch raises ``CredentialConflict`` and leaves the store untouched.
-        """
-        ...
-
-    def rebind(
-        self, bundle: TokenBundle, *, on_bound: Callable[[TokenBundle], object] | None = None
-    ) -> TokenBundle:
-        """Store a freshly issued bundle as a new binding, under the refresh lock.
-
-        Mints the ``binding_id`` and drops the cached identity; ``on_bound``
-        (say, the registry update) runs with the lock still held. Returns the
-        bundle as stored.
-        """
-        ...
-
-    def clear(self, *, on_cleared: Callable[[], object] | None = None) -> None:
-        """Forget the binding (tokens and cached identity), under the refresh lock.
-
-        ``on_cleared`` runs with the lock still held.
-        """
-        ...
-
-    def refresh_lock(self, timeout: float) -> AbstractAsyncContextManager[None]:
-        """Exclusive across processes; not getting it within ``timeout`` is ``lock_timeout``."""
-        ...
 
 
 class FernetFileStore:

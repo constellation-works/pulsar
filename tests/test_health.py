@@ -7,7 +7,8 @@ import time
 
 import pytest
 
-from pulsar.app.core.account import AccountRegistry, TokenBundle
+from pulsar.app.core.account import AccountRegistry
+from pulsar.app.core.channels.credentials import TokenBundle
 from pulsar.app.health import attention
 from pulsar.internal.errors import PulsarError
 

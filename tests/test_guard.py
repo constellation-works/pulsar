@@ -1,7 +1,8 @@
 import pytest
 
-from pulsar.app.core.account import FernetFileStore, TokenBundle
+from pulsar.app.core.account import FernetFileStore
 from pulsar.app.core.channels.contract import DEFAULT_PLAIN_POST_USD, DEFAULT_URL_POST_USD, Prices
+from pulsar.app.core.channels.credentials import TokenBundle
 from pulsar.app.core.channels.x import validate_text, weighted_length
 from pulsar.internal.errors import INVALID_TEXT, SECRET_DETECTED, PulsarError
 from pulsar.internal.guard import SECRET_PATTERNS, looks_generated, redact, scan_for_secrets

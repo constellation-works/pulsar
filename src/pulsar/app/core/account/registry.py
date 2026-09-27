@@ -44,9 +44,10 @@ from collections.abc import Callable, Generator
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from pulsar.app.core.channels.contract import Identity
+from pulsar.app.core.channels.credentials import REFRESH_LOCK_WAIT_SECONDS, TokenBundle
 from pulsar.internal.errors import (
     ACCOUNT_MISMATCH,
     INTERNAL,
@@ -68,9 +69,25 @@ from pulsar.internal.fs import (
     write_private_atomic,
 )
 
-from ...settings import Settings
 from .aliases import alias_provider, normalize_alias
-from .store import REFRESH_LOCK_WAIT_SECONDS, FernetFileStore, TokenBundle, login_command
+from .store import FernetFileStore, login_command
+
+
+@dataclass(frozen=True)
+class AccountConfig:
+    alias: str
+    expected_handle: str | None = None
+
+
+class AccountSettings(Protocol):
+    """What the registry reads from the operator's settings; ``app.settings.Settings``
+    is the one the app hands in."""
+
+    @property
+    def default_account(self) -> str | None: ...
+
+    def account_config(self, alias: str) -> AccountConfig | None: ...
+
 
 ACTIVE = "active"
 REAUTH_REQUIRED = "reauth_required"
@@ -205,7 +222,7 @@ def canonical_alias(value: str) -> str:
     return alias
 
 
-def expected_handles(alias: str, settings: Settings) -> tuple[str, ...]:
+def expected_handles(alias: str, settings: AccountSettings) -> tuple[str, ...]:
     """The handles an account bound as ``alias`` must have: the alias's own,
     and the configured ``expected_handle`` when it names another."""
     wanted = [alias.partition(":")[2]]
@@ -215,7 +232,7 @@ def expected_handles(alias: str, settings: Settings) -> tuple[str, ...]:
     return tuple(wanted)
 
 
-def check_handle(alias: str, bound_handle: str | None, settings: Settings) -> None:
+def check_handle(alias: str, bound_handle: str | None, settings: AccountSettings) -> None:
     """``account_mismatch`` unless ``bound_handle`` is what ``alias`` must be bound to."""
     for want in expected_handles(alias, settings):
         if bound_handle is None or bound_handle.lower() != want:
@@ -229,7 +246,7 @@ def check_handle(alias: str, bound_handle: str | None, settings: Settings) -> No
             )
 
 
-def require_expected(account: Account, settings: Settings) -> None:
+def require_expected(account: Account, settings: AccountSettings) -> None:
     """Refuse (``account_mismatch``) to act as ``account`` unless its bound handle is right.
 
     Call it with the identity just trusted for the stored binding (see
@@ -347,7 +364,7 @@ class AccountRegistry:
     def get(self, alias: str) -> Account | None:
         return self._read().get(canonical_alias(alias))
 
-    def resolve(self, alias: str | None, settings: Settings) -> Account:
+    def resolve(self, alias: str | None, settings: AccountSettings) -> Account:
         """The account a call acts as.
 
         A named ``alias`` must be registered (``unknown_account``). With none:
@@ -417,7 +434,7 @@ class AccountRegistry:
             self._write(rows)
 
     def bind(
-        self, alias: str, bundle: TokenBundle, identity: Identity, settings: Settings
+        self, alias: str, bundle: TokenBundle, identity: Identity, settings: AccountSettings
     ) -> Account:
         """Store a freshly issued ``bundle`` as ``alias``, whose owner is ``identity``.
 
@@ -541,7 +558,7 @@ class AccountRegistry:
         )
 
     def _migration_target(
-        self, settings: Settings, target: str | None, bundle: TokenBundle | None
+        self, settings: AccountSettings, target: str | None, bundle: TokenBundle | None
     ) -> tuple[str | None, Identity | None]:
         """The alias the legacy bundle moves to (None: needs one), checked; and its identity."""
         identity = self._legacy_identity(bundle)
@@ -560,7 +577,7 @@ class AccountRegistry:
             check_handle(alias, identity.handle, settings)
         return alias, identity
 
-    def legacy_status(self, settings: Settings, alias: str | None = None) -> MigrationResult:
+    def legacy_status(self, settings: AccountSettings, alias: str | None = None) -> MigrationResult:
         """What ``migrate_legacy(settings, alias)`` would do now, without doing any of it.
 
         For read-only commands: it takes no lock and creates, writes, renames
@@ -603,7 +620,9 @@ class AccountRegistry:
             adopted=adopted,
         )
 
-    def migrate_legacy(self, settings: Settings, alias: str | None = None) -> MigrationResult:
+    def migrate_legacy(
+        self, settings: AccountSettings, alias: str | None = None
+    ) -> MigrationResult:
         """Move the phase 1 root ``tokens.enc`` into the account layout.
 
         Without ``alias`` (automatic on first use, or ``pulsar auth migrate``
@@ -637,7 +656,7 @@ class AccountRegistry:
             return self._migrate_locked(settings, target, legacy)
 
     def _migrate_locked(
-        self, settings: Settings, target: str | None, legacy: FernetFileStore
+        self, settings: AccountSettings, target: str | None, legacy: FernetFileStore
     ) -> MigrationResult:
         with self._lock():
             rows = self._read()
@@ -681,7 +700,7 @@ class AccountRegistry:
 
     def _move_legacy(
         self,
-        settings: Settings,
+        settings: AccountSettings,
         target: str | None,
         legacy: FernetFileStore,
         adopted: tuple[str, ...],

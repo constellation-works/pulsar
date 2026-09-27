@@ -16,13 +16,14 @@ from typing import Any
 
 import httpx
 
-from pulsar.app.core.account import AccountRegistry
-from pulsar.app.core.channels.x import load_client_id, login
+from pulsar.app.core.account import AccountRegistry, load_client_id
+from pulsar.app.core.channels.x import PROVIDER
 from pulsar.internal.errors import PulsarError
 from pulsar.internal.fs import Paths
 
 from . import health, ops
 from .interfaces import Report
+from .login import login
 from .runtime import LocalRuntime
 from .settings import Settings, load_settings
 
@@ -77,7 +78,7 @@ class LocalApp:
 
     def remembered_client_id(self) -> str | None:
         """The X app client id remembered from the last login."""
-        return load_client_id(self.paths)
+        return load_client_id(self.paths, PROVIDER)
 
     def migrate_legacy_quietly(self) -> str | None:
         """First-use migration of a phase 1 home before an account write. A

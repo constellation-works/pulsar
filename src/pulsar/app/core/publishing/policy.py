@@ -37,6 +37,7 @@ in ``policy.timezone``, converted to UTC instants:
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import ROUND_HALF_EVEN, Decimal
 from typing import Any
@@ -45,7 +46,25 @@ from zoneinfo import ZoneInfo
 from pulsar.app.core.ledger import Usage
 from pulsar.internal.errors import BUDGET_EXCEEDED, DAILY_CAP, QUIET_HOURS, PulsarError
 
-from ...settings import PolicyConfig
+# Agreed with Daniel on 2026-09-26: about 1 post a day today, so these leave
+# room for a launch day while stopping a runaway loop within a day.
+DEFAULT_DAILY_BUDGET_USD = 1.0
+DEFAULT_MONTHLY_BUDGET_USD = 10.0
+DEFAULT_MAX_POSTS_PER_DAY = 5
+
+
+@dataclass(frozen=True)
+class PolicyConfig:
+    daily_budget_usd: float = DEFAULT_DAILY_BUDGET_USD
+    monthly_budget_usd: float = DEFAULT_MONTHLY_BUDGET_USD
+    max_posts_per_day: int = DEFAULT_MAX_POSTS_PER_DAY
+    quiet_hours: tuple[time, time] | None = None  # [start, end); may wrap midnight
+    timezone: str = "UTC"
+
+    @property
+    def tz(self) -> ZoneInfo:
+        return ZoneInfo(self.timezone)
+
 
 _MICRO = Decimal("0.000001")
 

@@ -11,8 +11,9 @@ import pytest
 from mcp.client._memory import InMemoryTransport
 from mcp.client.session import ClientSession
 
-from pulsar.app.core.account import AccountRegistry, TokenBundle
+from pulsar.app.core.account import AccountRegistry
 from pulsar.app.core.channels.contract import MAX_IMAGE_BYTES, MAX_VIDEO_BYTES, Identity
+from pulsar.app.core.channels.credentials import TokenBundle
 from pulsar.app.settings import Settings
 from pulsar.mcp import TOOL_NAMES, build_server, loopback_security
 

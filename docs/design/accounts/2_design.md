@@ -9,7 +9,7 @@ doc_role: design
 type: design
 summary: Login with identity check, the registry, encrypted per-account bundles, locked refresh, legacy migration and the storage boundary.
 tags: [accounts, auth, oauth, credentials, storage]
-paths: ["src/pulsar/app/core/account/registry.py", "src/pulsar/app/core/account/store.py", "src/pulsar/internal/fs/paths.py", "src/pulsar/internal/fs/files.py", "src/pulsar/app/core/channels/x/auth.py", "src/pulsar/app/core/channels/x/client.py", "src/pulsar/cli/commands/auth.py"]
+paths: ["src/pulsar/app/core/account/registry.py", "src/pulsar/app/core/account/store.py", "src/pulsar/app/core/account/clients.py", "src/pulsar/app/core/channels/credentials.py", "src/pulsar/app/login.py", "src/pulsar/internal/fs/paths.py", "src/pulsar/internal/fs/files.py", "src/pulsar/app/core/channels/x/auth.py", "src/pulsar/app/core/channels/x/client.py", "src/pulsar/cli/commands/auth.py"]
 related_features: [publishing, surfaces]
 related_artifacts: [ORB-13008, ORB-13009, ORB-13027, ORB-13028, ORB-13039, ORB-13138]
 ---
@@ -46,7 +46,9 @@ itself must not be a symlink ([decision](./4_decisions.md#refuse-a-symlinked-hom
 ## 2. Login
 
 `pulsar auth login --account x:<handle> [--client-id ID] [--no-browser]` is human-only and runs
-outside every tool surface ([app/core/channels/x/auth.py](../../../src/pulsar/app/core/channels/x/auth.py)).
+outside every tool surface. The OAuth steps are X's
+([app/core/channels/x/auth.py](../../../src/pulsar/app/core/channels/x/auth.py)) and store nothing;
+the identity check and the binding are the app's ([app/login.py](../../../src/pulsar/app/login.py)).
 
 1. OAuth 2.0 authorization code with PKCE, public client, scopes `tweet.read tweet.write
    users.read offline.access`, loopback callback `http://127.0.0.1:8976/callback`. On a remote
@@ -59,7 +61,8 @@ outside every tool surface ([app/core/channels/x/auth.py](../../../src/pulsar/ap
    cannot write the previous login's rotated tokens over the new one.
 
 `--account` defaults to `default_account`. The client id is remembered per provider in
-`client.json` (it is not a secret), rewritten under `accounts.lock`.
+`client.json` (it is not a secret), rewritten under `accounts.lock`
+([account/clients.py](../../../src/pulsar/app/core/account/clients.py)).
 
 The consent URL is shown through `login(notify=...)`, stderr by default, never stdout. The
 loopback listener is not trusted for being loopback: it answers only a `Host` of exactly
@@ -135,7 +138,8 @@ refreshes rather than trusting an invented lifetime. A failure inside pulsar aft
 ## 6. Storage at Rest
 
 [store.py](../../../src/pulsar/app/core/account/store.py) `FernetFileStore` implements the
-`CredentialStore` interface; the rest of pulsar codes against the interface.
+`CredentialStore` interface ([channels/credentials.py](../../../src/pulsar/app/core/channels/credentials.py));
+the rest of pulsar codes against the interface.
 
 - Fernet encryption with one `key` at the home root for all accounts.
 - Saves are atomic (temp file, `fsync`, rename, directory `fsync`), so a crash mid-refresh never

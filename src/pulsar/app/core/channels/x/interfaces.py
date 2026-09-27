@@ -7,7 +7,7 @@ from typing import Any, Protocol
 
 import httpx
 
-from pulsar.app.core.account import CredentialStore, TokenBundle
+from ..credentials import CredentialStore, TokenBundle
 
 
 class XApi(Protocol):

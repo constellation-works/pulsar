@@ -33,7 +33,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from pulsar.app.core.channels.contract import (
     Channel,
@@ -41,6 +41,7 @@ from pulsar.app.core.channels.contract import (
     MediaRef,
     PostCheck,
     PostSpec,
+    Prices,
     Published,
 )
 from pulsar.app.core.ledger import (
@@ -68,10 +69,9 @@ from pulsar.internal.errors import (
 )
 from pulsar.internal.guard import scan_for_secrets
 
-from ...settings import Settings
 from .media import load_ref
 from .plan import Plan
-from .policy import Policy, day_window, month_window
+from .policy import Policy, PolicyConfig, day_window, month_window
 
 log = logging.getLogger(__name__)
 
@@ -82,6 +82,19 @@ RECONCILE_GRACE = timedelta(minutes=5)
 STALE_SUBMITTING = timedelta(minutes=10)
 # Look this far before the first submit when listing the account's posts.
 CLOCK_SKEW = timedelta(minutes=2)
+
+
+class PublishSettings(Protocol):
+    """What the publisher reads from the operator's settings;
+    ``app.settings.Settings`` is the one the app hands in."""
+
+    @property
+    def policy(self) -> PolicyConfig: ...
+
+    @property
+    def media_roots(self) -> tuple[Path, ...]: ...
+
+    def prices_for(self, provider: str) -> Prices: ...
 
 
 @dataclass(frozen=True)
@@ -182,7 +195,7 @@ class Publisher:
         self,
         *,
         ledger: Ledger,
-        settings: Settings,
+        settings: PublishSettings,
         deny: Sequence[Path] = (),
         media_base: Path | None = None,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),

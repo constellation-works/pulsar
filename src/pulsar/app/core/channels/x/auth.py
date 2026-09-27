@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import json
 import os
 import secrets
 import sys
@@ -34,19 +33,11 @@ from urllib.parse import parse_qs, urlencode, urlparse
 
 import httpx
 
-from pulsar.app.core.account import (
-    Account,
-    AccountRegistry,
-    TokenBundle,
-    alias_provider,
-    canonical_alias,
-    check_handle,
-)
-from pulsar.internal.errors import API_ERROR, INVALID_ARGUMENT, PulsarError
-from pulsar.internal.fs import Paths, as_object, obj, require_private, write_private_atomic
+from pulsar.internal.errors import API_ERROR, PulsarError
+from pulsar.internal.fs import obj
 
-from ....settings import Settings
 from ..contract import Identity
+from ..credentials import TokenBundle
 from .client import bounded_text
 from .config import (
     CALLBACK_HOST,
@@ -202,48 +193,6 @@ def notify_stderr(message: str) -> None:
     sys.stderr.flush()
 
 
-def _client_records(paths: Paths) -> dict[str, dict[str, str]]:
-    """``client.json`` by provider. The phase 1 file was X's record at the top level.
-
-    A symlinked, foreign or group/world-writable file is ``insecure_storage``:
-    the client id decides which app the human authorizes.
-    """
-    require_private(
-        paths.client_file,
-        readable=True,
-        consequence="pulsar will not use an OAuth client id others could have changed",
-    )
-    try:
-        data = obj(json.loads(paths.client_file.read_text()))
-    except (FileNotFoundError, ValueError):
-        return {}
-    if "client_id" in data:  # phase 1: {"client_id", "redirect_uri"}
-        return {PROVIDER: {k: str(v) for k, v in data.items()}}
-    out: dict[str, dict[str, str]] = {}
-    for provider, record in data.items():
-        fields = as_object(record)
-        if fields is not None:
-            out[provider] = {k: str(v) for k, v in fields.items()}
-    return out
-
-
-def save_client_id(paths: Paths, client_id: str) -> None:
-    """Remember X's OAuth client id: one per provider, shared by every account.
-
-    The read-modify-write holds ``accounts.lock`` so two logins for different
-    providers cannot drop each other's record.
-    """
-    with AccountRegistry(paths).locked_update("client.json update"):
-        records = _client_records(paths)
-        records[PROVIDER] = {"client_id": client_id, "redirect_uri": callback_url()}
-        doc = json.dumps(records, indent=2, sort_keys=True) + "\n"
-        write_private_atomic(paths.client_file, doc.encode())
-
-
-def load_client_id(paths: Paths) -> str | None:
-    return _client_records(paths).get(PROVIDER, {}).get("client_id") or None
-
-
 def authorize(
     client_id: str,
     *,
@@ -305,42 +254,6 @@ def fetch_identity(
     return Identity(provider_user_id=str(user_id), handle=username.lower())
 
 
-def complete_login(
-    paths: Paths,
-    settings: Settings,
-    alias: str,
-    client_id: str,
-    bundle: TokenBundle,
-    *,
-    transport: httpx.BaseTransport | None = None,
-) -> Account:
-    """Bind a freshly exchanged ``bundle`` as ``alias``, if it really is that account.
-
-    ``account_mismatch`` (naming both handles) when X says the token belongs
-    to another handle than the alias's or the configured ``expected_handle``:
-    nothing is stored, not even the client id. Otherwise the bundle becomes a
-    new binding of ``alias`` under its refresh lock, with a verified row.
-    """
-    alias = require_x_alias(alias)
-    identity = fetch_identity(bundle, transport=transport)
-    check_handle(alias, identity.handle, settings)
-    account = AccountRegistry(paths).bind(alias, bundle, identity, settings)
-    save_client_id(paths, client_id)
-    return account
-
-
-def require_x_alias(alias: str) -> str:
-    """``alias`` in canonical form, refused unless it names an X account."""
-    canonical = canonical_alias(alias)
-    if alias_provider(canonical) != PROVIDER:
-        raise PulsarError(
-            INVALID_ARGUMENT,
-            f"{canonical} is not an X account; X logins bind x:<handle>",
-            detail={"account": canonical},
-        )
-    return canonical
-
-
 def open_quietly(url: str) -> None:
     """``webbrowser.open`` with file descriptor 1 on ``/dev/null``.
 
@@ -359,22 +272,3 @@ def open_quietly(url: str) -> None:
         os.dup2(saved, 1)
         os.close(saved)
         os.close(devnull)
-
-
-def login(
-    paths: Paths,
-    settings: Settings,
-    alias: str,
-    client_id: str,
-    *,
-    open_browser: bool = True,
-    transport: httpx.BaseTransport | None = None,
-    notify: Callable[[str], None] = notify_stderr,
-) -> Account:
-    """``pulsar auth login --account x:<handle>``: consent in a browser, verify, bind.
-
-    ``notify`` shows the human the consent URL (default: stderr).
-    """
-    require_x_alias(alias)  # refuse a bad alias before sending the human to X
-    bundle = authorize(client_id, open_browser=open_browser, transport=transport, notify=notify)
-    return complete_login(paths, settings, alias, client_id, bundle, transport=transport)

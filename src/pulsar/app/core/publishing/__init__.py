@@ -8,7 +8,16 @@ from __future__ import annotations
 
 from .media import load_media, open_beneath, sniff_mime
 from .plan import Plan
-from .policy import Policy, day_window, month_window, quiet_until
+from .policy import (
+    DEFAULT_DAILY_BUDGET_USD,
+    DEFAULT_MAX_POSTS_PER_DAY,
+    DEFAULT_MONTHLY_BUDGET_USD,
+    Policy,
+    PolicyConfig,
+    day_window,
+    month_window,
+    quiet_until,
+)
 from .publisher import RECONCILE_GRACE, STALE_SUBMITTING, Bound, Outcome, Prepared, Publisher
 
 __all__ = [
@@ -19,9 +28,13 @@ __all__ = [
     # plan
     "Plan",
     # policy
+    "DEFAULT_DAILY_BUDGET_USD",
+    "DEFAULT_MAX_POSTS_PER_DAY",
+    "DEFAULT_MONTHLY_BUDGET_USD",
     "day_window",
     "month_window",
     "Policy",
+    "PolicyConfig",
     "quiet_until",
     # publisher
     "RECONCILE_GRACE",

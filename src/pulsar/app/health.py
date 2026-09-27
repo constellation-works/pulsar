@@ -31,9 +31,10 @@ from pulsar.app.core.account import (
     check_handle,
     expected_handles,
     home_command,
+    load_client_id,
     login_command,
 )
-from pulsar.app.core.channels.x import REFRESH_AHEAD_SECONDS, load_client_id
+from pulsar.app.core.channels.x import PROVIDER, REFRESH_AHEAD_SECONDS
 from pulsar.internal.errors import AUTH_EXPIRED, PulsarError
 
 from .interfaces import Report, Runtime
@@ -82,7 +83,7 @@ async def auth_report(rt: Runtime, *, account: str | None = None, live: bool = F
         "legacy": None,
         "accounts": [],
     }
-    out["client_id"] = load_client_id(paths)
+    out["client_id"] = load_client_id(paths, PROVIDER)
     legacy = registry.legacy_status(settings)
     if legacy.state != "none":
         out["legacy"] = {"state": legacy.state, "alias": legacy.alias, "message": legacy.message}

@@ -26,13 +26,13 @@ src/pulsar/
 │   ├── interfaces.py    the App and Runtime protocols
 │   ├── facade.py        LocalApp: the verbs over one home
 │   ├── runtime.py       LocalRuntime: builds and joins the core for one call
-│   ├── ops.py, health.py, settings.py, writelog.py, importer.py
+│   ├── ops.py, health.py, login.py, settings.py, writelog.py, importer.py
 │   ├── exports.py       the names of core a front end may use
 │   └── core/            the domain; only app uses it
 │       ├── publishing/  plan, publisher, policy, media        ─▶ ledger, account, channels
-│       ├── account/     aliases, registry, store             ─▶ channels
+│       ├── account/     aliases, registry, store, clients    ─▶ channels
 │       ├── ledger/      the write ledger and its usage
-│       └── channels/    contract (Channel, posts, prices, media limits), x/
+│       └── channels/    contract (Channel, posts, prices, media limits), credentials, x/
 └── internal/            leaf utilities anyone may use; they use nothing above them
     ├── errors/          codes, exceptions
     ├── fs/              files, paths, jsonx

@@ -44,7 +44,7 @@ New tools and schemas are checked for credential-shaped parameters in tests
 ## Verify the token's owner before storing a login
 
 **Recorded:** 2026-09-26 · [ORB-13028]
-**Code anchors:** `src/pulsar/app/core/channels/x/auth.py::complete_login`
+**Code anchors:** `src/pulsar/app/login.py::complete_login`
 
 ### Context
 

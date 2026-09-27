@@ -8,8 +8,8 @@ import threading
 import pytest
 from cryptography.fernet import Fernet
 
-from pulsar.app.core.account import CredentialConflict, FernetFileStore, TokenBundle
-from pulsar.app.core.channels.x import load_client_id, save_client_id
+from pulsar.app.core.account import FernetFileStore, load_client_id, save_client_id
+from pulsar.app.core.channels.credentials import CredentialConflict, TokenBundle
 from pulsar.app.writelog import WriteLog
 from pulsar.internal.errors import PulsarError
 from pulsar.internal.fs import Paths, hold_lock, write_private_atomic
@@ -17,6 +17,8 @@ from pulsar.internal.fs import files as fsutil
 
 from .conftest import make_runtime, register
 from .lock_probe import blocked_on_lock
+
+REDIRECT = "http://127.0.0.1:8765/callback"
 
 
 def test_round_trip_and_private_modes(store, bundle, paths):
@@ -94,31 +96,33 @@ def test_rebinding_drops_the_cached_identity(legacy_store, bundle, paths):
 
 
 def test_client_id_is_saved_under_the_accounts_lock(paths, monkeypatch):
-    save_client_id(paths, "client-a")
+    save_client_id(paths, "x", "client-a", redirect_uri=REDIRECT)
     blocked = blocked_on_lock(monkeypatch)
     thread, release = _hold_in_thread(paths.accounts_lock, "another login")
-    saver = threading.Thread(target=save_client_id, args=(paths, "client-b"))
+    saver = threading.Thread(
+        target=save_client_id, args=(paths, "x", "client-b"), kwargs={"redirect_uri": REDIRECT}
+    )
     saver.start()
     assert blocked.wait(5), "the save waits for the accounts lock"
-    assert load_client_id(paths) == "client-a"
+    assert load_client_id(paths, "x") == "client-a"
     release.set()
     thread.join(5)
     saver.join(5)
-    assert load_client_id(paths) == "client-b"
+    assert load_client_id(paths, "x") == "client-b"
 
 
 def test_a_group_writable_or_symlinked_client_json_is_refused(paths, tmp_path):
-    save_client_id(paths, "client-a")
+    save_client_id(paths, "x", "client-a", redirect_uri=REDIRECT)
     os.chmod(paths.client_file, 0o664)
     with pytest.raises(PulsarError) as exc:
-        load_client_id(paths)
+        load_client_id(paths, "x")
     assert exc.value.code == "insecure_storage"
     os.chmod(paths.client_file, 0o600)
     real = tmp_path / "client.json"
     os.replace(paths.client_file, real)
     paths.client_file.symlink_to(real)
     with pytest.raises(PulsarError) as exc:
-        load_client_id(paths)
+        load_client_id(paths, "x")
     assert "is a symlink" in exc.value.message
 
 
@@ -126,9 +130,9 @@ def test_client_id_is_one_per_provider_and_reads_the_legacy_format(paths):
     paths.ensure()
     paths.client_file.write_text('{"client_id": "legacy-id", "redirect_uri": "x"}\n')
     os.chmod(paths.client_file, 0o600)  # as phase 1 wrote it
-    assert load_client_id(paths) == "legacy-id"
-    save_client_id(paths, "client-new")
-    assert load_client_id(paths) == "client-new"
+    assert load_client_id(paths, "x") == "legacy-id"
+    save_client_id(paths, "x", "client-new", redirect_uri=REDIRECT)
+    assert load_client_id(paths, "x") == "client-new"
     assert json.loads(paths.client_file.read_text())["x"]["client_id"] == "client-new"
     assert stat.S_IMODE(os.stat(paths.client_file).st_mode) == 0o600
 
@@ -243,7 +247,7 @@ async def test_every_file_pulsar_creates_is_0600_under_a_loose_umask(
     private_umask, paths, bundle, fake_x
 ):
     register(paths, bundle)  # key, accounts/x--constworks/tokens.enc, accounts.json/.lock
-    save_client_id(paths, "client-xyz")  # client.json
+    save_client_id(paths, "x", "client-xyz", redirect_uri=REDIRECT)  # client.json
     rt = make_runtime(paths, transport=fake_x.transport())
     try:
         await rt.whoami()  # the identity lands in accounts.json

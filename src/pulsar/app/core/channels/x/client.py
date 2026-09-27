@@ -18,12 +18,6 @@ from typing import Any
 
 import httpx
 
-from pulsar.app.core.account import (
-    REFRESH_LOCK_WAIT_SECONDS,
-    CredentialConflict,
-    CredentialStore,
-    TokenBundle,
-)
 from pulsar.internal.errors import (
     API_ERROR,
     DUPLICATE,
@@ -39,6 +33,12 @@ from pulsar.internal.errors import (
 )
 from pulsar.internal.fs import as_list, as_object, obj
 
+from ..credentials import (
+    REFRESH_LOCK_WAIT_SECONDS,
+    CredentialConflict,
+    CredentialStore,
+    TokenBundle,
+)
 from .config import X_API_BASE, X_TOKEN_URL
 
 # Raised before any request byte reaches X: no connection, no pool slot, or a

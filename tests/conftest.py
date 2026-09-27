@@ -17,7 +17,8 @@ from urllib.parse import parse_qs
 import httpx
 import pytest
 
-from pulsar.app.core.account import Account, AccountRegistry, FernetFileStore, TokenBundle
+from pulsar.app.core.account import Account, AccountRegistry, FernetFileStore
+from pulsar.app.core.channels.credentials import TokenBundle
 from pulsar.app.facade import LocalApp
 from pulsar.app.runtime import LocalRuntime
 from pulsar.app.settings import Settings, load_settings
