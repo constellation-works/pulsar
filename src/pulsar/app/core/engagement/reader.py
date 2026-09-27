@@ -65,6 +65,10 @@ class Reader:
         self.policy = Policy(settings.policy)
         self._now = now
 
+    def now(self) -> datetime:
+        """The reader's clock: where a window of the last N hours ends."""
+        return self._now()
+
     async def mentions(
         self, bound: Bound, *, since: datetime, max_posts: int, caller: str
     ) -> Read[Mention]:

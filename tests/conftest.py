@@ -181,6 +181,10 @@ class FakeX:
     )
     media_status_info: list[dict[str, Any]] = field(default_factory=list)
     requests: list[httpx.Request] = field(default_factory=list)
+    # Reads answer only when set: X's tweet objects (one page) and the users they expand.
+    mentioned: list[dict[str, Any]] | None = None
+    own_tweets: list[dict[str, Any]] | None = None
+    users: list[dict[str, Any]] = field(default_factory=list)
 
     def transport(self) -> httpx.MockTransport:
         return httpx.MockTransport(self.handle)
@@ -230,6 +234,12 @@ class FakeX:
                     }
                 },
             )
+        if path.endswith(f"/users/{self.user_id}/mentions") and self.mentioned is not None:
+            data = self.mentioned[: int(request.url.params["max_results"])]
+            return httpx.Response(200, json={"data": data, "includes": {"users": self.users}})
+        if path.endswith(f"/users/{self.user_id}/tweets") and self.own_tweets is not None:
+            data = self.own_tweets[: int(request.url.params["max_results"])]
+            return httpx.Response(200, json={"data": data, "meta": {}})
         if path.endswith("/tweets") and request.method == "POST":
             if self.tweet_status:
                 return httpx.Response(self.tweet_status, json=self.tweet_body or {"detail": "nope"})
@@ -240,6 +250,8 @@ class FakeX:
             )
         if "/tweets/" in path and request.method == "DELETE":
             return httpx.Response(200, json={"data": {"deleted": True}})
+        if path.endswith("/media/metadata"):
+            return httpx.Response(200, json={"data": {"associated_metadata": True}})
         if path.endswith("/media/upload/initialize"):
             return httpx.Response(200, json={"data": {"id": "710000", "media_key": "3_710000"}})
         if path.endswith("/append"):

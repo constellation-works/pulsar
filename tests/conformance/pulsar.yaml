@@ -158,3 +158,25 @@ tests:
   expect:
     error:
       code: unknown_account
+- name: engagements_needs_a_bound_account
+  tool: engagements
+  input:
+    hours: 24
+  expect:
+    error:
+      code: auth_expired
+- name: metrics_needs_a_bound_account
+  tool: metrics
+  input:
+    days: 7
+  expect:
+    error:
+      code: auth_expired
+- name: publish_refuses_a_missing_source
+  tool: publish
+  input:
+    source: missing.yaml
+    dry_run: true
+  expect:
+    error:
+      code: invalid_argument

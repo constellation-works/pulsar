@@ -33,9 +33,11 @@ GOLDENS = yaml.safe_load((ROOT / "tests" / "conformance" / "pulsar.yaml").read_t
 assert GOLDENS, "tests/conformance/pulsar.yaml has no cases"
 
 
-def plugin_app(environ: dict[str, str]) -> LocalApp:
+def plugin_app(environ: dict[str, str], transport: Any = None) -> LocalApp:
     """The app ``pulsar.main`` builds for ``pulsar orbit-tool`` under ``environ``."""
-    return LocalApp(default_paths(environ, Path.home()), environ=environ, cwd=Path.cwd())
+    return LocalApp(
+        default_paths(environ, Path.home()), environ=environ, cwd=Path.cwd(), transport=transport
+    )
 
 
 @pytest.fixture
@@ -58,7 +60,13 @@ def workspace(tmp_path) -> Path:
 
 
 def run(
-    state: Path, workspace: Path | None, tool: str, input_: Any = None, **envelope: Any
+    state: Path,
+    workspace: Path | None,
+    tool: str,
+    input_: Any = None,
+    *,
+    transport: Any = None,
+    **envelope: Any,
 ) -> dict[str, Any]:
     request: dict[str, Any] = {
         "schema_version": 1,
@@ -73,9 +81,8 @@ def run(
     }
     request.update(envelope)
     out = io.StringIO()
-    code = orbit_tool.main(
-        plugin_app({"ORBIT_PLUGIN_STATE": str(state)}), io.StringIO(json.dumps(request)), out
-    )
+    app = plugin_app({"ORBIT_PLUGIN_STATE": str(state)}, transport)
+    code = orbit_tool.main(app, io.StringIO(json.dumps(request)), out)
     assert code == 0
     lines = out.getvalue().splitlines()
     assert len(lines) == 1, "exactly one response line"
@@ -114,8 +121,10 @@ def test_conformance_golden(case, state, workspace):
 
 def test_manifest_declares_exactly_the_backend_tools():
     assert {t["name"] for t in MANIFEST["spec"]["tools"]} == set(orbit_tool.TOOLS)
+    paid = {"engagements", "metrics", "publish"}  # spend money: callable only when required
     for tool in MANIFEST["spec"]["tools"]:
-        assert tool["execution_kind"] == "read_only", "phase 3 ships no write tool"
+        kind = "mutating" if tool["name"] in paid else "read_only"
+        assert tool["execution_kind"] == kind, tool["name"]
         assert tool["input_schema"] == {"$ref": f"schemas/{tool['name']}.request.json"}
         assert tool["output_schema"] == {"$ref": f"schemas/{tool['name']}.response.json"}
 

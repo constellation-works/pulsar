@@ -24,6 +24,7 @@ from pulsar.app.core.channels.x import post_url
 from pulsar.app.core.ledger import PUBLISHED, SKIPPED, AccountRef, State, check_key, is_settled
 from pulsar.app.core.publishing import (
     STALE_SUBMITTING,
+    Outcome,
     Plan,
     Policy,
     Prepared,
@@ -147,28 +148,39 @@ async def publish_report(
             async with rt.watch_expiry(alias):
                 outcome = await rt.publisher.publish(ready, idempotency_key=key, caller=who)
         except PulsarError as exc:
-            # The same keys as a receipt, so every entry has one shape.
-            results.append(
-                {
-                    "ok": False,
-                    "idempotency_key": key,
-                    "state": None,
-                    "account": alias,
-                    "digest": ready.digest,
-                    "replayed": False,
-                    "items": [],
-                    "note": None,
-                    "error": exc.to_result(),
-                }
-            )
+            results.append(refused_entry(ready, key, exc))
             code = 1
             continue
-        entry: dict[str, Any] = {"ok": outcome.error is None, **outcome.receipt()}
-        entry["error"] = outcome.error.to_result() if outcome.error is not None else None
-        if outcome.error is not None or outcome.record.state not in (PUBLISHED, SKIPPED):
+        results.append(receipt_entry(outcome))
+        if not settled(outcome):
             code = 1
-        results.append(entry)
     return {"published": True, "home": str(rt.paths.home), "results": results}, code
+
+
+def receipt_entry(outcome: Outcome) -> dict[str, Any]:
+    """One account's result of a publish: its receipt, ``ok`` and ``error``."""
+    entry: dict[str, Any] = {"ok": outcome.error is None, **outcome.receipt()}
+    entry["error"] = outcome.error.to_result() if outcome.error is not None else None
+    return entry
+
+
+def refused_entry(ready: Prepared, key: str | None, exc: PulsarError) -> dict[str, Any]:
+    """A publish refused before anything was claimed, in a receipt's shape."""
+    return {
+        "ok": False,
+        "idempotency_key": key,
+        "state": None,
+        "account": ready.bound.alias,
+        "digest": ready.digest,
+        "replayed": False,
+        "items": [],
+        "note": None,
+        "error": exc.to_result(),
+    }
+
+
+def settled(outcome: Outcome) -> bool:
+    return outcome.error is None and outcome.record.state in (PUBLISHED, SKIPPED)
 
 
 def _publish_preview(

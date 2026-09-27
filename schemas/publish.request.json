@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "source"
+  ],
+  "properties": {
+    "source": {
+      "type": "string",
+      "minLength": 1,
+      "description": "A plan YAML file, relative to the workspace root and inside it. Its media resolve against the workspace."
+    },
+    "account": {
+      "type": "string",
+      "minLength": 1,
+      "description": "One of the plan's accounts, or the one to bind a plan that names none. Default: every account the plan names, else the configured default."
+    },
+    "dry_run": {
+      "type": "boolean",
+      "default": false,
+      "description": "Make every check the live call makes (approval, schedule, budget) and send nothing."
+    }
+  },
+  "additionalProperties": false
+}

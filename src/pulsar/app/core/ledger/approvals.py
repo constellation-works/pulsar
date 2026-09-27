@@ -135,7 +135,12 @@ def consume(
     return get(conn, chosen.id)
 
 
-def missing(account_alias: str, digest: str, last_state: str | None) -> PulsarError:
+def missing(
+    account_alias: str, digest: str, last_state: str | None, *, command: str | None = None
+) -> PulsarError:
+    """``approval_required``, naming why and the command a human runs
+    (``command``, else a generic ``pulsar approve``)."""
+    command = command or f"pulsar approve <plan> --account {account_alias}"
     why = {
         None: "none was recorded",
         "revoked": "the last one was revoked",
@@ -145,9 +150,13 @@ def missing(account_alias: str, digest: str, last_state: str | None) -> PulsarEr
     return PulsarError(
         APPROVAL_REQUIRED,
         f"{account_alias}: publishing this plan needs a human approval of its digest "
-        f"{digest[:12]}, and {why}; a human runs `pulsar approve <plan> --account "
-        f"{account_alias}` at a terminal",
-        detail={"account": account_alias, "digest": digest, "last_approval": last_state},
+        f"{digest[:12]}, and {why}; a human reads the plan and runs `{command}` at a terminal",
+        detail={
+            "account": account_alias,
+            "digest": digest,
+            "last_approval": last_state,
+            "command": command,
+        },
         retryable=False,
     )
 

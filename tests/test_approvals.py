@@ -62,8 +62,14 @@ def test_a_claim_without_an_approval_is_refused_and_writes_nothing(paths):
     with pytest.raises(PulsarError) as exc:
         claim(ledger)
     assert exc.value.code == "approval_required" and not exc.value.retryable
-    assert exc.value.detail == {"account": ACCT.alias, "digest": DIGEST, "last_approval": None}
-    assert "pulsar approve" in exc.value.message
+    command = f"pulsar approve <plan> --account {ACCT.alias}"
+    assert exc.value.detail == {
+        "account": ACCT.alias,
+        "digest": DIGEST,
+        "last_approval": None,
+        "command": command,
+    }
+    assert command in exc.value.message
     assert ledger.get_plan("reply-1") is None
 
 

@@ -28,13 +28,14 @@ src/pulsar/
 │   ├── runtime.py       LocalRuntime: builds and joins the core for one call
 │   ├── ops.py           the CLI's operator verbs (status, publish, reconcile, ...)
 │   ├── tools.py         the MCP tools (create_post, upload_media, delete_post, ...)
-│   ├── plugin.py        the Orbit plugin's tools (status, validate, history)
+│   ├── plugin.py        the Orbit plugin's tools (status, validate, history, engagements, metrics, publish)
+│   ├── approvals.py     the human verbs behind `pulsar approve | approvals | revoke`
 │   ├── health.py, login.py, settings.py, writelog.py, importer.py
 │   └── core/            the domain; only app uses it
 │       ├── engagement/  reader: budgeted, recorded reads      ─▶ publishing, ledger, channels
 │       ├── publishing/  plan, publisher, policy, media        ─▶ ledger, account, channels
 │       ├── account/     aliases, registry, store, clients    ─▶ channels
-│       ├── ledger/      the write ledger and its usage
+│       ├── ledger/      the ledger: writes, reads, approvals and their usage
 │       └── channels/    contract (Channel, posts, prices, media limits), credentials, x/
 └── internal/            leaf utilities anyone may use; they use nothing above them
     ├── errors/          codes, exceptions

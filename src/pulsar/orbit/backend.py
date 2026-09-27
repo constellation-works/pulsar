@@ -57,6 +57,9 @@ INPUTS: dict[str, frozenset[str]] = {
     "status": frozenset({"account"}),
     "validate": frozenset({"plan", "source", "account"}),
     "history": frozenset({"account", "limit"}),
+    "engagements": frozenset({"account", "hours", "limit"}),
+    "metrics": frozenset({"account", "days", "limit"}),
+    "publish": frozenset({"source", "account", "dry_run"}),
 }
 
 Output = dict[str, Any]
@@ -79,6 +82,30 @@ class Call:
         if not isinstance(value, str) or not value.strip():
             raise PulsarError(INVALID_ARGUMENT, f"`{name}` must be a non-empty string")
         return value.strip()
+
+    def integer(self, name: str, limits: tuple[int, int, int]) -> int:
+        """An integer input within ``limits`` (min, default, max); the default when absent."""
+        low, default, high = limits
+        value = self.input.get(name, default)
+        if not isinstance(value, int) or isinstance(value, bool):
+            raise PulsarError(INVALID_ARGUMENT, f"`{name}` must be an integer {low}..{high}")
+        return plugin.bounded(name, value, limits)
+
+    def flag(self, name: str) -> bool:
+        value = self.input.get(name, False)
+        if not isinstance(value, bool):
+            raise PulsarError(INVALID_ARGUMENT, f"`{name}` must be true or false")
+        return value
+
+    @property
+    def caller(self) -> str:
+        """The audit label for what this call writes: the Orbit task it serves,
+        else the agent. Self-asserted by the host, recorded, never authority."""
+        task = self.context.get("task_id")
+        agent = self.context.get("agent")
+        if isinstance(task, str) and task:
+            return f"orbit:{task}"
+        return f"orbit:{agent}" if isinstance(agent, str) and agent else "orbit"
 
 
 def check_plugin_home(app: App) -> None:
@@ -153,9 +180,57 @@ async def history(app: App, call: Call) -> Output:
         return plugin.history(rt, account=account, limit=limit)
 
 
+async def engagements(app: App, call: Call) -> Output:
+    """Others' posts mentioning the account. A paid read, budgeted and recorded."""
+    account = call.string("account")
+    hours = call.integer("hours", plugin.MENTION_HOURS)
+    limit = call.integer("limit", plugin.READ_POSTS)
+    async with app.runtime() as rt:
+        return await plugin.engagements(
+            rt, account=account, hours=hours, limit=limit, caller=call.caller
+        )
+
+
+async def metrics(app: App, call: Call) -> Output:
+    """The account's own recent posts with their metrics. A paid read."""
+    account = call.string("account")
+    days = call.integer("days", plugin.METRIC_DAYS)
+    limit = call.integer("limit", plugin.READ_POSTS)
+    async with app.runtime() as rt:
+        return await plugin.metrics(rt, account=account, days=days, limit=limit, caller=call.caller)
+
+
+async def publish(app: App, call: Call) -> Output:
+    """Publish a workspace plan under a human approval of its digest."""
+    source = call.string("source")
+    if source is None:
+        raise PulsarError(INVALID_ARGUMENT, "`source` names the plan file to publish")
+    if call.workspace is None:
+        raise PulsarError(INVALID_ARGUMENT, "`source` needs a workspace")
+    account = call.string("account")
+    dry_run = call.flag("dry_run")
+    rt = app.runtime(read_only=dry_run, settings=_settings(app, call), media_base=call.workspace)
+    async with rt:
+        return await plugin.publish(
+            rt,
+            workspace=call.workspace,
+            source=source,
+            account=account,
+            dry_run=dry_run,
+            caller=call.caller,
+        )
+
+
 Handler = Callable[[App, Call], Coroutine[Any, Any, Output]]
 
-TOOLS: dict[str, Handler] = {"status": status, "validate": validate, "history": history}
+TOOLS: dict[str, Handler] = {
+    "status": status,
+    "validate": validate,
+    "history": history,
+    "engagements": engagements,
+    "metrics": metrics,
+    "publish": publish,
+}
 
 
 # -- protocol ---------------------------------------------------------------------------

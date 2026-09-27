@@ -124,7 +124,7 @@ beneath them, `surfaces/cli/toolkit/` holds what they are written against: `cont
 | `pulsar history [--account A] [--limit N]` | none | newest ledger rows with items; `total` and `truncated` (`--limit` 1–100, refused outside) |
 | `pulsar validate PLAN.yaml [--account A]` | none | the publisher's report; needs no credentials |
 | `pulsar publish PLAN.yaml [--account A] [--idempotency-key K] [--caller C] --confirm` | posts | prepares every account's plan, then publishes; without `--confirm` it makes every offline check the live run makes (key, caller, schedule, budget, cap) and sends nothing (`--yes` is a deprecated alias) |
-| `pulsar approve PLAN.yaml [--account A] [--ttl 72h]` | none | prints every post in full, the cost and each account's digest to stderr, then records an approval once the human types the digest's first 8 characters; a stdin that is not a terminal is `interactive_only` and records nothing; refuses a plan changed since it was shown ([Engagement §2](../engagement/2_design.md#2-approvals)) |
+| `pulsar approve PLAN.yaml [--account A] [--workspace DIR] [--ttl 72h]` | none | prints every post in full, the cost and each account's digest to stderr, then records an approval once the human types the digest's first 8 characters; a stdin that is not a terminal is `interactive_only` and records nothing; refuses a plan changed since it was shown ([Engagement §2](../engagement/2_design.md#2-approvals)) |
 | `pulsar approvals [--account A] [--limit N]` | none | approvals newest first, each with its state |
 | `pulsar revoke ID` | none | revokes an approval; what was published under it stays |
 | `pulsar reconcile [--account A]` | timeline reads only when something is unresolved | settles unknown and stale posts; one failing row is reported and the rest still run |
@@ -136,19 +136,27 @@ beneath them, `surfaces/cli/toolkit/` holds what they are written against: `cont
 ## 3. Orbit Plugin
 
 `plugin.yaml` (schemaVersion 2, namespace `pulsar`, exec backend, requires Orbit `>=0.24.0
-<1.0.0`, platforms linux and macos, program `uv`). Phase 3 ships read-only tools:
+<1.0.0`, platforms linux and macos, program `uv`). Three offline tools and three that spend
+money:
 
 | Tool | CLI | Output |
 |---|---|---|
 | `pulsar.status` | `orbit pulsar status` | per account: `health` (`healthy`, `unverified`, `unhealthy`, offline), budget and cap use, unresolved writes, last publication; `healthy` and `attention` |
 | `pulsar.validate` | `orbit pulsar validate PLAN.yaml` | inline `plan` or workspace `source`; `{valid: true, accounts}` or `{valid: false, error}` |
 | `pulsar.history` | `orbit pulsar history` | newest ledger rows flattened for a table (`limit` 1–100), with `total` and `truncated` |
+| `pulsar.engagements` | — | others' posts mentioning the account (`hours` 1–168, `limit` 1–100), each with `replied`; a paid read |
+| `pulsar.metrics` | — | the account's own posts (`days` 1–30, `limit` 1–100) with their metrics and `totals`; a paid read |
+| `pulsar.publish` | — | publishes a workspace plan `source` under a human approval of each account's digest; `dry_run` checks only |
 
-All are `execution_kind: read_only`, `mcp_scope: workspace`, with request and response
-schemas under [schemas/](../../../schemas/). An input key the request schema does not list is
-refused (`invalid_argument` naming it). The tools read the home without writing to it. Panels: *Pulsar accounts* (kv, `status`) and
+The first three are `execution_kind: read_only` and read the home without writing to it. The
+last three are `mutating`, so Orbit lets an agent call them only from a task whose
+`required_tools` names them ([Engagement — Design §3](../engagement/2_design.md#3-plugin-tools)).
+All are `mcp_scope: workspace`, with request and response schemas under
+[schemas/](../../../schemas/). An input key the request schema does not list is
+refused (`invalid_argument` naming it). Panels: *Pulsar accounts* (kv, `status`) and
 *Recent publications* (table, `history`). The skill [skills/publish](../../../skills/publish/SKILL.md) is linked as `pulsar-publish`:
-checking accounts, drafting and validating a plan, and, in
+checking accounts, reading engagement, drafting and validating a plan, the approve-then-publish
+handoff, and, in
 [references/setup.md](../../../skills/publish/references/setup.md), walking a human through
 installing pulsar and binding an account.
 

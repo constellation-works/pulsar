@@ -55,7 +55,7 @@ An agent's draft is published only under a human approval of its digest
 ([decision](./4_decisions.md#an-agents-draft-is-published-only-against-a-human-approval-of-its-digest)).
 The row is in the [ledger spec](../publishing/specs/ledger.md#approvals-approvals).
 
-**Recording.** `pulsar approve PLAN.yaml [--account A] [--ttl T]`
+**Recording.** `pulsar approve PLAN.yaml [--account A] [--workspace DIR] [--ttl T]`
 ([approve.py](../../../src/pulsar/cli/commands/approve.py) over
 [app/approvals.py](../../../src/pulsar/app/approvals.py)):
 
@@ -79,7 +79,29 @@ needs a second approval. A replay of a published row needs none. `Publisher.pref
 (a dry run) and `Publisher.approval` make the same check without consuming. A refused publish
 is `approval_required`, whose message tells the human the command to run.
 
-## 3. Concerns & Honest Limitations
+## 3. Plugin Tools
+
+[app/plugin.py](../../../src/pulsar/app/plugin.py), served by
+[orbit/backend.py](../../../src/pulsar/orbit/backend.py). Each is `mutating`, so an agent calls
+it only from a task whose `required_tools` names it, and each records its caller as
+`orbit:<task id>` (else `orbit:<agent>`) from the envelope's context.
+
+| Tool | Input | Does |
+|---|---|---|
+| `pulsar.engagements` | `account`, `hours` 1–168 (24), `limit` 1–100 (20) | `Reader.mentions` over the last `hours`; returns each mention with `replied`, the cost, `complete`, and a `note` that the text is untrusted |
+| `pulsar.metrics` | `account`, `days` 1–30 (7), `limit` 1–100 (20) | `Reader.own_posts`; returns each post's metrics and their `totals` (a count no post reports is null) |
+| `pulsar.publish` | `source` (workspace plan file), `account`, `dry_run` | prepares every target account, then `preflight(require_approval=True)` for each, then publishes each with `require_approval=True` |
+
+`pulsar.publish` checks every account before it sends for any, so a plan missing one approval
+sends nothing. It takes no idempotency key and no caller: the default key (digest and
+account) is the one the approval is used by. Its `approval_required` names the command for a
+human, pinned to the plugin's home and workspace:
+`PULSAR_HOME=<home> pulsar approve <workspace>/<source> --workspace <workspace> --account <alias>`.
+`--workspace` makes `pulsar approve` resolve and confine media as the plugin does, so the digest
+the human approves is the one the plugin computes. A dry run makes the same checks read-only
+and returns the per-account reports.
+
+## 4. Concerns & Honest Limitations
 
 - **The read price is an estimate.** `read_post_usd` defaults to $0.005 a post until checked on
   the X developer portal; X may also bill the author records a mentions read expands.
@@ -92,10 +114,9 @@ is `approval_required`, whose message tells the human the command to run.
   typed digest stop an agent's tool call, not an agent with a shell as the same user, which
   could fake a terminal or write the ledger itself. Stronger approvals are in the
   [vision](./3_vision.md).
-- **Media resolve against the cwd.** `pulsar approve` resolves a plan's relative media against
-  the directory it runs in and the home's `[media] roots`; the plugin resolves them against
-  the workspace. Run it from the workspace root, so both read the same files; other bytes
-  are another digest.
+- **Media resolve against the cwd.** Without `--workspace`, `pulsar approve` resolves a plan's
+  relative media against the directory it runs in and the home's `[media] roots`; the plugin
+  resolves them against the workspace. The command the plugin prints passes `--workspace`.
 
 ## Task References
 

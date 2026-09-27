@@ -11,6 +11,7 @@ verb was invoked (a missing flag, a missing ``--confirm``) are the front end's.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -188,9 +189,15 @@ class LocalApp:
             )
 
     def approve_preview(
-        self, plan: Path, *, account: str | None = None, ttl: timedelta | None = None
+        self,
+        plan: Path,
+        *,
+        account: str | None = None,
+        ttl: timedelta | None = None,
+        workspace: Path | None = None,
     ) -> Report:
-        return approvals.preview(self.runtime(read_only=True), plan, account=account, ttl=ttl)
+        rt = self._for_plans_in(workspace, read_only=True)
+        return approvals.preview(rt, plan, account=account, ttl=ttl)
 
     def approve(
         self,
@@ -199,17 +206,28 @@ class LocalApp:
         expect: Mapping[str, str],
         account: str | None = None,
         ttl: timedelta | None = None,
+        workspace: Path | None = None,
     ) -> Report:
         """Record the approval a human confirmed at a terminal (the CLI checks that)."""
         who = self.environ.get("USER") or self.environ.get("LOGNAME") or "unknown"
         return approvals.approve(
-            self.runtime(),
+            self._for_plans_in(workspace, read_only=False),
             plan,
             account=account,
             ttl=ttl,
             approved_by=f"human:{who}",
             expect=expect,
         )
+
+    def _for_plans_in(self, workspace: Path | None, *, read_only: bool) -> LocalRuntime:
+        """A runtime whose plan media resolve against, and stay inside,
+        ``workspace``, as the Orbit plugin's do; else the cwd and the
+        configured roots."""
+        if workspace is None:
+            return self.runtime(read_only=read_only)
+        root = workspace.resolve()
+        settings = replace(load_settings(self.paths), media_roots=(root,))
+        return self.runtime(read_only=read_only, settings=settings, media_base=root)
 
     def approvals(self, *, account: str | None = None, limit: int = 20) -> Report:
         return approvals.listing(self.runtime(read_only=True), account=account, limit=limit)

@@ -43,6 +43,14 @@ def register(commands: toolkit.Commands) -> None:
     p.add_argument("plan", type=Path, help="plan file (YAML)")
     p.add_argument("--account", help=PLAN_ACCOUNT_HELP)
     p.add_argument(
+        "--workspace",
+        type=Path,
+        metavar="DIR",
+        help="resolve the plan's media against DIR and keep them inside it, as the Orbit "
+        "plugin does (the command the plugin prints passes it); default: the current "
+        "directory and the configured media roots",
+    )
+    p.add_argument(
         "--ttl",
         help=f"how long the approval lasts: 90m, 72h, 7d (at most {MAX_TTL.days}d); default: "
         f"{int(DEFAULT_REPLY_TTL.total_seconds() // 3600)}h for a reply, "
@@ -72,7 +80,9 @@ def register(commands: toolkit.Commands) -> None:
 
 def _approve(args: argparse.Namespace, ctx: toolkit.Context) -> int:
     ttl = parse_ttl(args.ttl) if args.ttl else None
-    preview, _ = ctx.app.approve_preview(args.plan, account=args.account, ttl=ttl)
+    preview, _ = ctx.app.approve_preview(
+        args.plan, account=args.account, ttl=ttl, workspace=args.workspace
+    )
     sys.stderr.write(describe(preview))
     if not sys.stdin.isatty():
         raise PulsarError(
@@ -94,7 +104,9 @@ def _approve(args: argparse.Namespace, ctx: toolkit.Context) -> int:
             toolkit.notice("not approved; nothing was recorded")
             return toolkit.EXIT_FAILED
     return toolkit.emit(
-        ctx.app.approve(args.plan, expect=digests, account=args.account, ttl=ttl),
+        ctx.app.approve(
+            args.plan, expect=digests, account=args.account, ttl=ttl, workspace=args.workspace
+        ),
         ctx,
         toolkit.views.approvals,
     )

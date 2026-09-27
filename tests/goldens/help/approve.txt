@@ -1,4 +1,6 @@
-usage: pulsar approve [-h] [--format MODE] [--json] [--account ACCOUNT] [--ttl TTL] plan
+usage: pulsar approve [-h] [--format MODE] [--json] [--account ACCOUNT] [--workspace DIR]
+                      [--ttl TTL]
+                      plan
 
 approve a plan's exact content so an agent may publish it (a human, at a terminal)
 
@@ -12,6 +14,9 @@ options:
   --json             shorthand for --format json
   --account ACCOUNT  one of the plan's accounts, or the one to bind a plan that names none;
                      default: default_account in config.toml, else the only bound account
+  --workspace DIR    resolve the plan's media against DIR and keep them inside it, as the Orbit
+                     plugin does (the command the plugin prints passes it); default: the current
+                     directory and the configured media roots
   --ttl TTL          how long the approval lasts: 90m, 72h, 7d (at most 30d); default: 72h for a
                      reply, 7d otherwise
 

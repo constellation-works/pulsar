@@ -1,0 +1,183 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "account",
+    "since",
+    "complete",
+    "cost_usd",
+    "posts",
+    "totals"
+  ],
+  "properties": {
+    "account": {
+      "type": "string"
+    },
+    "since": {
+      "type": "string",
+      "description": "Start of the window read (ISO 8601)."
+    },
+    "complete": {
+      "type": "boolean",
+      "description": "False when the provider had more than `limit` posts in the window, or the read stopped at its page cap."
+    },
+    "cost_usd": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Estimated cost of this read, counted toward the day's and month's budgets."
+    },
+    "posts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "post_id",
+          "url",
+          "text",
+          "created_at",
+          "metrics"
+        ],
+        "properties": {
+          "post_id": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "reply_to": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "metrics": {
+            "type": "object",
+            "required": [
+              "likes",
+              "replies",
+              "reposts",
+              "quotes"
+            ],
+            "properties": {
+              "likes": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "replies": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "reposts": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "quotes": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "bookmarks": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0
+              },
+              "impressions": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0
+              },
+              "url_clicks": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0
+              },
+              "profile_clicks": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "totals": {
+      "type": "object",
+      "required": [
+        "posts",
+        "likes",
+        "replies",
+        "reposts",
+        "quotes"
+      ],
+      "properties": {
+        "posts": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "likes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "replies": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "reposts": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "quotes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "bookmarks": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "impressions": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "url_clicks": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "profile_clicks": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "description": "Each count summed over `posts`; null where no post reports it."
+    }
+  },
+  "additionalProperties": false
+}

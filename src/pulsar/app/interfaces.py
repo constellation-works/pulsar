@@ -127,7 +127,12 @@ class App(Protocol):
     ) -> Report: ...
 
     def approve_preview(
-        self, plan: Path, *, account: str | None = None, ttl: timedelta | None = None
+        self,
+        plan: Path,
+        *,
+        account: str | None = None,
+        ttl: timedelta | None = None,
+        workspace: Path | None = None,
     ) -> Report: ...
 
     def approve(
@@ -137,6 +142,7 @@ class App(Protocol):
         expect: Mapping[str, str],
         account: str | None = None,
         ttl: timedelta | None = None,
+        workspace: Path | None = None,
     ) -> Report: ...
 
     def approvals(self, *, account: str | None = None, limit: int = ...) -> Report: ...

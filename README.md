@@ -62,8 +62,9 @@ posts:
   - text: "Notes: https://example.com/notes"
 ```
 
-As an Orbit plugin (read-only tools today: `pulsar.status`, `pulsar.validate`,
-`pulsar.history`), install from a commit export:
+As an Orbit plugin (`pulsar.status`, `validate`, `history`; and, from tasks that require
+them, `engagements`, `metrics` and `publish`, which publishes only what a human approved with
+`pulsar approve`), install from a commit export:
 
 ```sh
 mkdir /tmp/pulsar-plugin && git archive agent-main | tar -x -C /tmp/pulsar-plugin
