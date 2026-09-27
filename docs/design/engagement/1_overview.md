@@ -56,7 +56,8 @@ claims the write.
 | Read calls on the provider contract | [channels/contract.py](../../../src/pulsar/app/core/channels/contract.py) | — |
 | The approvals and reads tables | [ledger/schema.py](../../../src/pulsar/app/core/ledger/schema.py) | [ORB-13030] |
 | The plugin's engagement tools | [app/plugin.py](../../../src/pulsar/app/plugin.py) | — |
-| The shipped auto-tasks | [plugin.yaml](../../../plugin.yaml) | — |
+| The shipped auto-tasks | [definitions/auto_tasks/](../../../definitions/auto_tasks/) | — |
+| The human approval verbs | [cli/commands/approve.py](../../../src/pulsar/cli/commands/approve.py) | — |
 
 ## Task References
 

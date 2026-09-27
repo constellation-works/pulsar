@@ -142,7 +142,7 @@ money:
 | Tool | CLI | Output |
 |---|---|---|
 | `pulsar.status` | `orbit pulsar status` | per account: `health` (`healthy`, `unverified`, `unhealthy`, offline), budget and cap use, unresolved writes, last publication; `healthy` and `attention` |
-| `pulsar.validate` | `orbit pulsar validate PLAN.yaml` | inline `plan` or workspace `source`; `{valid: true, accounts}` or `{valid: false, error}` |
+| `pulsar.validate` | `orbit pulsar validate PLAN.yaml` | inline `plan` or workspace `source`; `{valid: true, accounts}` (for a `source`, each with its `approve_command`) or `{valid: false, error}` |
 | `pulsar.history` | `orbit pulsar history` | newest ledger rows flattened for a table (`limit` 1–100), with `total` and `truncated` |
 | `pulsar.engagements` | — | others' posts mentioning the account (`hours` 1–168, `limit` 1–100), each with `replied`; a paid read |
 | `pulsar.metrics` | — | the account's own posts (`days` 1–30, `limit` 1–100) with their metrics and `totals`; a paid read |
@@ -154,7 +154,8 @@ last three are `mutating`, so Orbit lets an agent call them only from a task who
 All are `mcp_scope: workspace`, with request and response schemas under
 [schemas/](../../../schemas/). An input key the request schema does not list is
 refused (`invalid_argument` naming it). Panels: *Pulsar accounts* (kv, `status`) and
-*Recent publications* (table, `history`). The skill [skills/publish](../../../skills/publish/SKILL.md) is linked as `pulsar-publish`:
+*Recent publications* (table, `history`). Auto-tasks: `engager`, `post-proposer` and
+`weekly-report`, seeded disabled ([Engagement — Design §4](../engagement/2_design.md#4-auto-tasks)). The skill [skills/publish](../../../skills/publish/SKILL.md) is linked as `pulsar-publish`:
 checking accounts, reading engagement, drafting and validating a plan, the approve-then-publish
 handoff, and, in
 [references/setup.md](../../../skills/publish/references/setup.md), walking a human through

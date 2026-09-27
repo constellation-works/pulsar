@@ -59,6 +59,10 @@
             "items": {
               "type": "object"
             }
+          },
+          "approve_command": {
+            "type": "string",
+            "description": "For a `source` plan: the `pulsar approve` command a human runs at a terminal to approve this account's digest."
           }
         }
       }

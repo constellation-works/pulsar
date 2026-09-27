@@ -167,7 +167,10 @@ async def validate(app: App, call: Call) -> Output:
     # Relative media paths start at the workspace, never at this process's cwd.
     rt = app.runtime(read_only=True, settings=_settings(app, call), media_base=call.workspace)
     async with rt:
-        return plugin.validate(rt, plan=plan_input, source_text=text, account=account)
+        approvable = (call.workspace, source) if source is not None and call.workspace else None
+        return plugin.validate(
+            rt, plan=plan_input, source_text=text, account=account, approvable=approvable
+        )
 
 
 async def history(app: App, call: Call) -> Output:

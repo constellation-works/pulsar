@@ -70,9 +70,11 @@ plan file, so each is approved on its own.
 
 ## Approve, then publish
 
-1. Call `pulsar.publish` with `source` and `dry_run: true`. Without an approval it
-   fails `approval_required`; `detail.command` is the exact `pulsar approve ...`
-   command. Put that command in the task for the human, with the digest.
+1. Get the approval command: `pulsar.validate` with the plan's `source` returns it
+   per account as `approve_command` (and `pulsar.publish` without an approval fails
+   `approval_required` with the same command in `detail.command`). Put it in the
+   task for the human, with the digest. The plan must be committed on the main
+   branch: pulsar reads `source` from the workspace root.
 2. The human runs it at a terminal: it shows the full posts and asks them to type
    the digest's first characters. You cannot run it for them, and must not try.
 3. When the task that publishes runs, call `pulsar.publish` with `source`. It

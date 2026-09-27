@@ -99,9 +99,30 @@ human, pinned to the plugin's home and workspace:
 `PULSAR_HOME=<home> pulsar approve <workspace>/<source> --workspace <workspace> --account <alias>`.
 `--workspace` makes `pulsar approve` resolve and confine media as the plugin does, so the digest
 the human approves is the one the plugin computes. A dry run makes the same checks read-only
-and returns the per-account reports.
+and returns the per-account reports. `pulsar.validate` on a `source` returns the same command
+per account as `approve_command`, so a drafting task, which may not call `pulsar.publish`,
+can hand it to the human.
 
-## 4. Concerns & Honest Limitations
+## 4. Auto-Tasks
+
+[definitions/auto_tasks/](../../../definitions/auto_tasks/), declared under
+`spec.definitions.auto_tasks`. Orbit seeds them into a workspace's `.orbit/auto_tasks/` as
+`pulsar-<name>`, `enabled: false`, when the plugin is enabled there; a human reviews and
+switches each on. Each is `dedupe: skip_if_open`, and each minted task is tagged `pulsar`.
+
+| Auto-task | Schedule (host-local) | Requires | Does |
+|---|---|---|---|
+| `engager` | daily 09:00 | `pulsar.engagements` | reads 24 hours of mentions (at most 20), summarises them, writes one reply plan per mention worth answering under `engagement/YYYY-MM-DD/`, validates and commits them, and creates one `proposed` task requiring `pulsar.publish` that lists each draft, its digest and its approve command |
+| `post-proposer` | Fridays 16:00 | `pulsar.metrics` | reads 7 days of the account's posts, drafts up to three posts as `plan.yaml` beside their content records (no `not_before`), and creates the same kind of proposal task; drafts nothing while three already wait |
+| `weekly-report` | Mondays 16:00 | `pulsar.metrics` | reports the week from `status`, `history` and one metrics read, every figure with its source and read time |
+
+No auto-task requires `pulsar.publish` (a test holds this): drafting and publishing are separate
+tasks with a human between them. Plans must be committed on the workspace's main branch,
+because the plugin reads `source` from the workspace root. The workspace's own guides (voice,
+strategy, content-record template) decide the details; the definitions defer to them where
+they exist.
+
+## 5. Concerns & Honest Limitations
 
 - **The read price is an estimate.** `read_post_usd` defaults to $0.005 a post until checked on
   the X developer portal; X may also bill the author records a mentions read expands.
@@ -114,6 +135,9 @@ and returns the per-account reports.
   typed digest stop an agent's tool call, not an agent with a shell as the same user, which
   could fake a terminal or write the ledger itself. Stronger approvals are in the
   [vision](./3_vision.md).
+- **Instructions are the only guard on the drafting task's own reads.** A mention can try to
+  steer the engager; the definition tells it to treat mention text as data, and nothing it
+  drafts is sent without a human reading it, but a manipulated summary is still possible.
 - **Media resolve against the cwd.** Without `--workspace`, `pulsar approve` resolves a plan's
   relative media against the directory it runs in and the home's `[media] roots`; the plugin
   resolves them against the workspace. The command the plugin prints passes `--workspace`.

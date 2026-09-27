@@ -255,3 +255,16 @@ def test_approve_without_the_workspace_cannot_read_workspace_media(
 def test_the_read_schemas_advertise_the_limits_the_code_enforces(tool, name, limits):
     prop = _schema(tool, "request").schema["properties"][name]
     assert (prop["minimum"], prop["default"], prop["maximum"]) == limits
+
+
+def test_validate_names_the_approve_command_for_a_source(
+    state, home, workspace, fake_x, reply, monkeypatch, capsys
+):
+    out = call(state, workspace, fake_x, "validate", {"source": reply})["output"]
+    [account] = out["accounts"]
+    refused = call(state, workspace, fake_x, "publish", {"source": reply, "dry_run": True})
+    assert account["approve_command"] == refused["error"]["detail"]["command"]
+    assert approve_as_printed(account["approve_command"], monkeypatch, capsys) == 0
+    inline = call(state, workspace, fake_x, "validate", {"plan": {"text": "hi"}})["output"]
+    assert "approve_command" not in inline["accounts"][0], "an inline plan has no file to approve"
+    assert fake_x.requests == []

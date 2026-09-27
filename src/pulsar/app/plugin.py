@@ -130,12 +130,15 @@ def validate(
     plan: Mapping[str, Any] | None = None,
     source_text: str | None = None,
     account: str | None,
+    approvable: tuple[Path, str] | None = None,
 ) -> Output:
     """What publishing a plan (a mapping, or a source's YAML) would send, per
     account. Claims and sends nothing.
 
     A plan that fails validation is a result (``valid: false``), not a tool
-    error: an agent drafting a post needs the code and detail to fix it.
+    error: an agent drafting a post needs the code and detail to fix it. For
+    a plan read from a workspace file (``approvable``: the workspace and the
+    source), each account also gets the ``approve_command`` a human runs.
     """
     try:
         if source_text is not None:
@@ -148,7 +151,21 @@ def validate(
         if exc.code not in PLAN_VERDICTS:
             raise  # the account, the home or the storage: a tool error, not a verdict
         return {"valid": False, "error": exc.to_envelope()["error"]}
+    if approvable is not None:
+        workspace, source = approvable
+        for report in reports:
+            report["approve_command"] = approve_command(rt, workspace, source, report["account"])
     return {"valid": True, "accounts": reports}
+
+
+def approve_command(rt: Runtime, workspace: Path, source: str, alias: str) -> str:
+    """The ``pulsar approve`` a human runs for ``source``: pinned to this home,
+    and resolving media against the workspace as the plugin does."""
+    return home_command(
+        rt.paths.home,
+        f"approve {shlex.quote(str(workspace / source))} --workspace "
+        f"{shlex.quote(str(workspace))} --account {alias}",
+    )
 
 
 def read_source(workspace: Path, source: str) -> str:
@@ -371,10 +388,6 @@ def _needs_approval(
     """``approval_required`` naming the exact command a human runs: the plugin's
     home, the plan's path, and the workspace its media resolve against."""
     alias = ready.bound.alias
-    command = home_command(
-        rt.paths.home,
-        f"approve {shlex.quote(str(workspace / source))} --workspace "
-        f"{shlex.quote(str(workspace))} --account {alias}",
-    )
+    command = approve_command(rt, workspace, source, alias)
     last = (as_object(exc.detail) or {}).get("last_approval")
     return approval_missing(alias, ready.digest, str(last) if last else None, command=command)

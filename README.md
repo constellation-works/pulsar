@@ -73,7 +73,9 @@ orbit pulsar status
 ```
 
 The plugin's home is `~/.orbit/state/plugins/pulsar/home`; point the CLI at it with
-`PULSAR_HOME`.
+`PULSAR_HOME`. Enabling it in a workspace seeds three auto-tasks, switched off: `engager`
+(daily mention summary and reply drafts), `post-proposer` (weekly post drafts from metrics)
+and `weekly-report`.
 
 ## Documentation
 

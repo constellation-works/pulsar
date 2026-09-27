@@ -45,8 +45,9 @@ spec:
       description: >-
         Check a plan offline and report, per account, the exact posts, weighted lengths,
         media, estimated cost and the plan digest that approval binds. Pass an inline
-        `plan` or a workspace-relative YAML `source`. Sends and records nothing; an
-        invalid plan is `valid: false` with the error code and detail.
+        `plan` or a workspace-relative YAML `source`; for a `source`, each account also
+        has the `approve_command` a human runs. Sends and records nothing; an invalid
+        plan is `valid: false` with the error code and detail.
       execution_kind: read_only
       mcp_scope: workspace
       input_schema: { $ref: schemas/validate.request.json }
@@ -92,6 +93,10 @@ spec:
       output_schema: { $ref: schemas/publish.response.json }
 
   skills: [skills/publish]
+
+  definitions:
+    # Seeded disabled into the workspace's .orbit/auto_tasks as pulsar-<name>.
+    auto_tasks: [definitions/auto_tasks/*.yaml]
 
   config:
     # pulsar's settings live in config.toml in its home, the one source every

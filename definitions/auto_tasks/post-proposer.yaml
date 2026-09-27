@@ -1,0 +1,49 @@
+schemaVersion: 1
+name: post-proposer
+description: 'Weekly: read how recent posts performed and propose new posts as plans for a human to approve; never publishes'
+enabled: false
+schedule:
+  cron: 0 16 * * 5
+template:
+  title: Propose next week's X posts from recent performance
+  description: |-
+    Read how the account's posts of the last seven days performed, then draft next week's posts as plans a human approves before anything is published. Follow the workspace's strategy, voice and content conventions (for example `strategy.md`, `brand.md`, `channels/x.md`, `workflow.md` and its content-record template) where they exist; they decide where records live and how many posts a week there are.
+
+    ## Boundary (non-negotiable)
+
+    - Call `pulsar.metrics` once: `days: 7`, `limit: 20`. Each post it returns is billed.
+    - Never publish, and never run or simulate `pulsar approve`.
+    - Do not invent usage, adoption, customers, metrics or testimonials. Every factual claim in a draft cites a public source (a release-tagged doc or a commit permalink); remove any claim you cannot source.
+    - Queue cap: if three or more drafts already await approval (open `proposed` tasks tagged `pulsar-posts`, or the workspace's own queue), draft nothing new; list the waiting queue in the summary and stop.
+
+    ## Steps
+
+    1. Call `pulsar.status`; if `healthy` is false, write `attention` into the summary and stop.
+    2. Call `pulsar.metrics`. Note what did well and what did not (impressions, likes, replies, reposts, link clicks), and say which differences are too small to mean anything.
+    3. Draft up to three posts. For each, write the content record the workspace's conventions call for and, beside it, a `plan.yaml`:
+       ```yaml
+       account: <the account>
+       posts:
+         - text: "<post, ≤ 280 weighted characters; a URL counts 23>"
+           media: [{path: <workspace-relative>, alt: "<alt text>"}]   # only approved media
+       ```
+       Leave `not_before` out: the human's promotion of the publishing task is the timing.
+    4. Call `pulsar.validate` with each `source`; fix until `valid: true`. Keep each `digest`, `estimated_cost_usd` and `approve_command`.
+    5. Commit on `agent-main` so the plans are in the workspace root, where pulsar reads them.
+    6. Create one follow-up task with `orbit.task.add`: title `Publish approved X posts (week of YYYY-MM-DD)`, status `proposed`, task_type `chore`, tags `[pulsar, pulsar-posts]`, required_tools `[pulsar.publish]`. Its description lists each draft's exact text, alt text, sources, cost, plan path, digest and `approve_command`, the performance evidence behind it, and these instructions for the publishing agent: "For each plan listed, call `pulsar.publish` with its `source`, one at a time in the order listed. Publish nothing else. `approval_required` means that one was not approved: record it as skipped and continue. Record each receipt's URL, or its error, in the execution summary and in the plan's content record. Never edit a plan." Acceptance criteria: every listed plan was published under an approval or recorded as not approved, with receipts recorded, and nothing else was published.
+    7. Write the execution summary: the metrics read (cost, completeness), what you concluded, the drafts, and the follow-up task id.
+  acceptance_criteria:
+  - pulsar.metrics was called once for at most 7 days and 20 posts, and the execution summary states what the numbers show and what they do not.
+  - Unless the queue cap applied, up to three drafts exist as plan files beside their content records, each validated with pulsar.validate, sourced, and committed on agent-main.
+  - One proposed follow-up task requiring pulsar.publish lists each draft with its text, sources, cost, plan path, digest and approve command.
+  - Nothing was published or approved.
+  task_type: chore
+  tags:
+  - pulsar
+  - pulsar-post-proposer
+  required_tools:
+  - pulsar.metrics
+  priority: medium
+  complexity: medium
+  status: backlog
+dedupe: skip_if_open

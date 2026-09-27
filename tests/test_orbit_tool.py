@@ -429,3 +429,32 @@ def test_the_history_schema_advertises_the_limits_the_code_enforces():
         ops.HISTORY_LIMIT_MAX,
         ops.HISTORY_LIMIT_DEFAULT,
     )
+
+
+# -- auto-tasks -----------------------------------------------------------------------
+
+AUTO_TASKS = sorted((ROOT / "definitions" / "auto_tasks").glob("*.yaml"))
+
+
+def test_the_manifest_ships_the_auto_task_definitions():
+    assert MANIFEST["spec"]["definitions"] == {"auto_tasks": ["definitions/auto_tasks/*.yaml"]}
+    assert [p.stem for p in AUTO_TASKS] == ["engager", "post-proposer", "weekly-report"]
+
+
+@pytest.mark.parametrize("path", AUTO_TASKS, ids=[p.stem for p in AUTO_TASKS])
+def test_an_auto_task_may_call_only_what_it_requires(path):
+    definition = yaml.safe_load(path.read_text())
+    assert definition["schemaVersion"] == 1 and definition["name"] == path.stem
+    assert definition["enabled"] is False, "Orbit seeds them disabled; a human enables one"
+    assert definition["dedupe"] == "skip_if_open"
+    assert list(definition["schedule"]) == ["cron"]
+    template = definition["template"]
+    kinds = {t["name"]: t["execution_kind"] for t in MANIFEST["spec"]["tools"]}
+    required = {name.removeprefix("pulsar.") for name in template["required_tools"]}
+    assert required <= {n for n, k in kinds.items() if k == "mutating"}
+    # Every paid tool the instructions call is one the task requires, and none publishes.
+    called = set(re.findall(r"`pulsar\.(\w+)`", template["description"]))
+    paid = {n for n in called if kinds.get(n) == "mutating"}
+    assert "publish" not in required, "an auto-task only drafts; a human-promoted task publishes"
+    assert paid - {"publish"} <= required
+    assert "never publish" in template["description"].lower()

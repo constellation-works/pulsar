@@ -1,0 +1,38 @@
+schemaVersion: 1
+name: weekly-report
+description: 'Weekly: report what the account published and how it performed over the last seven days, from pulsar''s ledger and one metrics read'
+enabled: false
+schedule:
+  cron: 0 16 * * 1
+template:
+  title: Write the weekly X report
+  description: |-
+    Report the last seven days of the account's X activity: what was published, how it performed, what engagement came in, and what it cost. Write it where the workspace keeps reviews (for example `reviews/YYYY-MM.md`, as a new dated section, following the review section of `workflow.md`); otherwise `reports/pulsar/YYYY-MM-DD.md`.
+
+    ## Boundary (non-negotiable)
+
+    - Call `pulsar.metrics` once: `days: 7`, `limit: 50`. Each post it returns is billed. Read no mentions.
+    - Never publish, approve, reply or contact anyone.
+    - Every figure carries its source (`pulsar.metrics`, `pulsar.history`, `pulsar.status`) and the time it was read. A count X did not report is unavailable, not zero.
+
+    ## Steps
+
+    1. `pulsar.status`: budget and daily-cap use, unresolved writes, account health. Unresolved writes and unhealthy accounts go at the top, for a human.
+    2. `pulsar.history` with `limit: 100`: the week's rows, published, failed, skipped or unknown, and their estimated cost.
+    3. `pulsar.metrics`: per post, impressions, likes, replies, reposts, quotes, link and profile clicks; and the week's totals. Compare with the previous report if there is one, and say when a change is too small to mean anything.
+    4. The approval queue: proposed `pulsar-posts` and `pulsar-replies` tasks, and how long each has waited. Approvals themselves are in pulsar's ledger, which no tool lists; report the tasks.
+    5. Observations separate from hypotheses; recommend a change only with evidence. Commit on `agent-main`.
+  acceptance_criteria:
+  - A dated report covers the last seven days with a source and read time for every figure, and unreported counts are marked unavailable rather than zero.
+  - It lists every post published in the window with its metrics and totals, failed or unresolved writes, spend against the budget, and the waiting approval queue.
+  - pulsar.metrics was called once, no mentions were read, nothing was published or approved, and the report is committed on agent-main.
+  task_type: chore
+  tags:
+  - pulsar
+  - pulsar-weekly-report
+  required_tools:
+  - pulsar.metrics
+  priority: low
+  complexity: low
+  status: backlog
+dedupe: skip_if_open
