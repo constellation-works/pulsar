@@ -27,6 +27,7 @@ from pulsar.internal.errors import (
     INVALID_MEDIA,
     NOT_FOUND,
     RATE_LIMITED,
+    UPLOAD_TIMEOUT,
     AuthExpired,
     OutcomeUnknown,
     PulsarError,
@@ -57,6 +58,8 @@ REFRESH_AHEAD_SECONDS = 120
 IMAGE_CHUNK_BYTES = 1024 * 1024
 VIDEO_CHUNK_BYTES = 4 * 1024 * 1024
 PROCESSING_TIMEOUT_SECONDS = 300
+UPLOAD_DEADLINE_FLOOR_SECONDS = 5
+UPLOAD_MIN_BYTES_PER_SECOND = 5 * 1024 * 1024
 # The most provider-supplied text an error message embeds.
 PROVIDER_TEXT_LIMIT = 500
 
@@ -389,7 +392,27 @@ class XClient:
         is_video = mime == "video/mp4"
         category = "tweet_video" if is_video else "tweet_image"
         chunk_size = chunk_size or (VIDEO_CHUNK_BYTES if is_video else IMAGE_CHUNK_BYTES)
-        init = await self.request(
+        deadline = (
+            self._monotonic()
+            + UPLOAD_DEADLINE_FLOOR_SECONDS
+            + len(data) / UPLOAD_MIN_BYTES_PER_SECOND
+        )
+
+        async def upload_request(method: str, path: str, **kwargs: Any) -> httpx.Response:
+            remaining = deadline - self._monotonic()
+            if remaining <= 0:
+                raise PulsarError(UPLOAD_TIMEOUT, "X media upload timed out")
+            try:
+                response = await asyncio.wait_for(
+                    self.request(method, path, **kwargs), timeout=remaining
+                )
+            except TimeoutError as exc:
+                raise PulsarError(UPLOAD_TIMEOUT, "X media upload timed out") from exc
+            if self._monotonic() >= deadline:
+                raise PulsarError(UPLOAD_TIMEOUT, "X media upload timed out")
+            return response
+
+        init = await upload_request(
             "POST",
             "/media/upload/initialize",
             json={"media_type": mime, "total_bytes": len(data), "media_category": category},
@@ -400,13 +423,13 @@ class XClient:
             raise PulsarError(API_ERROR, "X media init returned no usable media id") from exc
         for index, start in enumerate(range(0, len(data), chunk_size)):
             chunk = data[start : start + chunk_size]
-            await self.request(
+            await upload_request(
                 "POST",
                 f"/media/upload/{media_id}/append",
                 data={"segment_index": str(index)},
                 files={"media": (f"segment-{index}", chunk, mime)},
             )
-        fin = obj((await self.request("POST", f"/media/upload/{media_id}/finalize")).json())
+        fin = obj((await upload_request("POST", f"/media/upload/{media_id}/finalize")).json())
         info = as_object(obj(fin.get("data")).get("processing_info"))
         if is_video and info is not None:
             state = await self._wait_for_processing(media_id, info)

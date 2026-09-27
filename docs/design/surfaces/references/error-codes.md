@@ -34,6 +34,7 @@ when repeating the identical call later can succeed. Codes are defined in
 | `outcome_unknown` | the write may have reached the provider | do not retry; reconcile or check the timeline |
 | `duplicate` / `forbidden` / `rate_limited` / `not_found` | the provider's reason, in `detail` | duplicate: change the text; rate_limited: wait |
 | `api_error` | anything else from the provider, a network failure before sending, an unreadable refresh response | retry later; report if it persists |
+| `upload_timeout` | X media `initialize` through `finalize` exceeded 5 seconds plus media size / 5 MiB/s (maximum 25 seconds at the 100 MiB cap); no post was sent and the publisher records the item failed | retry later (`retryable: true`); the prior upload may leave an unused media id |
 | `lock_timeout` | another pulsar process held a lock past the deadline (`detail.holder`: `pid`, `label`, `acquired_at`) | retry later; if it persists, check that process |
 | `credentials_unreadable` | stored credentials exist but cannot be read: wrong or replaced `key`, a corrupt bundle, or one written by a newer pulsar | stop; a human restores the `key` or re-runs `pulsar auth login` |
 | `internal` | a bug or unexpected failure inside pulsar (`message` names the exception type) | report it; do not retry blindly |

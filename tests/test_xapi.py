@@ -197,6 +197,48 @@ class FakeClock:
         self.elapsed += seconds
 
 
+async def test_upload_deadline_expires_between_chunks_before_finalize(store, authed, fake_x):
+    clock = FakeClock()
+
+    def handle(request):
+        response = fake_x.handle(request)
+        if request.url.path.endswith("/append"):
+            clock.elapsed += 3
+        return response
+
+    client = XClient(store, transport=httpx.MockTransport(handle), monotonic=clock.monotonic)
+    try:
+        with pytest.raises(PulsarError) as exc:
+            await client.upload_media(b"abc", "image/png", chunk_size=1)
+    finally:
+        await client.aclose()
+    assert exc.value.code == "upload_timeout" and exc.value.retryable
+    assert len(fake_x.calls("POST", "/media/upload/initialize")) == 1
+    assert len(fake_x.calls("POST", "/append")) == 2
+    assert fake_x.calls("POST", "/finalize") == []
+
+
+async def test_upload_deadline_grows_with_media_size(store, authed, fake_x):
+    clock = FakeClock()
+
+    def handle(request):
+        response = fake_x.handle(request)
+        if request.url.path.endswith("/append"):
+            clock.elapsed += 5.5
+        return response
+
+    client = XClient(store, transport=httpx.MockTransport(handle), monotonic=clock.monotonic)
+    try:
+        data = b"x" * (5 * 1024 * 1024)
+        assert await client.upload_media(data, "image/png", chunk_size=len(data)) == (
+            "710000",
+            "succeeded",
+        )
+    finally:
+        await client.aclose()
+    assert len(fake_x.calls("POST", "/finalize")) == 1
+
+
 async def test_upload_video_chunks_and_waits_for_success(store, authed, fake_x):
     fake_x.media_finalize_info = {"state": "pending", "check_after_secs": 2}
     fake_x.media_status_info = [

@@ -32,6 +32,7 @@ from .codes import (
     SECRET_DETECTED,
     UNKNOWN_ACCOUNT,
     UNSUPPORTED,
+    UPLOAD_TIMEOUT,
 )
 from .exceptions import AuthExpired, OutcomeUnknown, PulsarError
 
@@ -64,6 +65,7 @@ __all__ = [
     "SECRET_DETECTED",
     "UNKNOWN_ACCOUNT",
     "UNSUPPORTED",
+    "UPLOAD_TIMEOUT",
     # exceptions
     "AuthExpired",
     "OutcomeUnknown",

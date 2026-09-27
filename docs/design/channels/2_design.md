@@ -1,8 +1,8 @@
 ---
 title: Channels — Design
 owner: claude
-last_updated: 2026-09-26
-last_validated: 2026-09-26
+last_updated: 2026-09-27
+last_validated: 2026-09-27
 status: Accepted
 feature: channels
 doc_role: design
@@ -11,7 +11,7 @@ summary: The Channel protocol's failure semantics, and how the X adapter measure
 tags: [channels, providers, x, adapter, fingerprint]
 paths: ["src/pulsar/app/core/channels/contract.py", "src/pulsar/app/core/channels/x/**"]
 related_features: [publishing, accounts]
-related_artifacts: [ORB-13006, ORB-13028]
+related_artifacts: [ORB-13006, ORB-13028, ORB-13207]
 ---
 
 # Channels — Design
@@ -65,7 +65,13 @@ contains a URL, else `plain_post_usd`.
 - Types: PNG, JPEG, GIF, WebP images up to 5 MiB; MP4 video up to 100 MiB (a local cap; X also
   checks the account's entitlement). At most 4 items per post; video and GIF must be alone.
 - Upload uses the v2 chunked endpoints (`initialize`, `append`, `finalize`): 1 MiB chunks for
-  images, 4 MiB for video. Video waits up to five minutes for processing state `succeeded`;
+  images, 4 MiB for video. From before `initialize` through the `finalize` response, the
+  monotonic deadline is 5 seconds plus media bytes divided by 5 MiB/s (at most 25 seconds for
+  the 100 MiB local cap). Each request is bounded by the remaining time, and the client checks
+  the deadline after each response. On expiry, no further chunk or `finalize` is sent and the
+  client raises retryable `upload_timeout`. The publisher records the item failed, so a retry
+  can upload again.
+  Video then waits up to five minutes for processing state `succeeded`;
   `failed` or a timeout is `invalid_media` with the last processing detail and no media id.
 - Alt text goes to `POST /2/media/metadata` after the upload and before the post, for images
   and GIFs. For video it is kept in the plan and ledger but not sent.
@@ -119,10 +125,14 @@ replies, reposts, quotes, bookmarks) come with both. A post without an id or a r
 - **Prices are X's, by hand.** X changes its price list without notice; the configured table
   is only as right as its last manual check. The read price is an estimate, and X may also
   bill the author records a mentions read expands.
+- **Video processing has a separate deadline.** The five-minute status poll can exceed the
+  Orbit plugin's 60-second call timeout; the upload deadline only covers `initialize` through
+  `finalize`.
 
 ## Task References
 
 - [ORB-13006] — added MP4 upload with processing poll.
 - [ORB-13028] — introduced the contract, the X channel and the fingerprint.
+- [ORB-13207] — bounded chunked media upload before finalize.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

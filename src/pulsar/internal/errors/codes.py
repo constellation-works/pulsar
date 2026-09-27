@@ -15,6 +15,7 @@ FORBIDDEN = "forbidden"
 RATE_LIMITED = "rate_limited"
 NOT_FOUND = "not_found"
 API_ERROR = "api_error"
+UPLOAD_TIMEOUT = "upload_timeout"
 INVALID_CONFIG = "invalid_config"
 INSECURE_STORAGE = "insecure_storage"
 IDEMPOTENCY_CONFLICT = "idempotency_conflict"
@@ -42,5 +43,14 @@ INTERNAL = "internal"
 # codes are retryable because the window moves: the day or month rolls over,
 # quiet hours end (``detail.retry_after`` says when).
 RETRYABLE_CODES = frozenset(
-    {RATE_LIMITED, API_ERROR, BUDGET_EXCEEDED, DAILY_CAP, QUIET_HOURS, NOT_DUE, LOCK_TIMEOUT}
+    {
+        RATE_LIMITED,
+        API_ERROR,
+        UPLOAD_TIMEOUT,
+        BUDGET_EXCEEDED,
+        DAILY_CAP,
+        QUIET_HOURS,
+        NOT_DUE,
+        LOCK_TIMEOUT,
+    }
 )

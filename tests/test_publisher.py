@@ -35,7 +35,7 @@ from pulsar.app.core.publishing import (
     Publisher,
 )
 from pulsar.app.settings import Settings
-from pulsar.internal.errors import AuthExpired, OutcomeUnknown, PulsarError
+from pulsar.internal.errors import UPLOAD_TIMEOUT, AuthExpired, OutcomeUnknown, PulsarError
 
 from .media_samples import PNG
 from .test_ledger import build_v1_ledger
@@ -254,6 +254,28 @@ async def test_media_uploaded_per_item_with_alt(publisher, bound, channel, media
     out = await publisher.publish(publisher.prepare(plan, bound), caller="t")
     assert out.record.state == "published"
     assert channel.uploads[0].alt == "A" and channel.creates[0]["media_ids"] == ("m1",)
+
+
+async def test_upload_timeout_records_item_failed(publisher, clock, media_root):
+    class TimedOutUpload(FakeChannel):
+        async def upload(self, media: LoadedMedia) -> str:
+            self.uploads.append(media)
+            raise PulsarError(UPLOAD_TIMEOUT, "X media upload timed out")
+
+    channel = TimedOutUpload(clock=clock)
+    plan = Plan.from_mapping(
+        {"posts": [{"text": "pic", "media": [{"path": str(media_root / "a.png"), "alt": "A"}]}]}
+    )
+    out = await publisher.publish(
+        publisher.prepare(plan, bound_to(channel)), caller="t", idempotency_key="upload-timeout"
+    )
+    assert out.error is not None and out.error.code == UPLOAD_TIMEOUT and out.error.retryable
+    assert out.record.state == "failed" and out.record.items[0].state == "failed"
+    stored = publisher.ledger.get_plan("upload-timeout")
+    assert stored is not None
+    assert stored.items[0].state == "failed" and stored.items[0].error_code == UPLOAD_TIMEOUT
+    assert stored.items[0].retryable is True
+    assert channel.creates == []
 
 
 async def test_unknown_blocks_retry_until_reconcile_finds_the_post(
