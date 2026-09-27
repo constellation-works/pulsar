@@ -139,8 +139,8 @@ A bad key or value fails with `invalid_config`, which names the file and the key
 
 ## 7. Connect the front ends
 
-**Orbit plugin**: install from a clean export; the working tree's `.venv` makes a
-direct install fail.
+**Orbit plugin**: install from a clean export. Orbit installs its
+`.orbit-plugin/` directory, which contains the committed runtime package.
 
 ```bash
 rm -rf /tmp/pulsar-plugin && mkdir /tmp/pulsar-plugin

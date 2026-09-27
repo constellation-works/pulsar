@@ -105,7 +105,7 @@ can hand it to the human.
 
 ## 4. Auto-Tasks
 
-[definitions/auto_tasks/](../../../definitions/auto_tasks/), declared under
+[definitions/auto_tasks/](../../../.orbit-plugin/definitions/auto_tasks/), declared under
 `spec.definitions.auto_tasks`. Orbit seeds them into a workspace's `.orbit/auto_tasks/` as
 `pulsar-<name>`, `enabled: false`, when the plugin is enabled there; a human reviews and
 switches each on. Each is `dedupe: skip_if_open`, and each minted task is tagged `pulsar`.

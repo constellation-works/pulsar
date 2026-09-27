@@ -17,10 +17,12 @@
   the network — use the fake transport in `tests/`.
 - `agent-main` is the landing branch; commit directly, no PR gate. Daniel owns
   releases and any change to the X app registration.
-- The Orbit plugin is defined by its manifest plus `bin/pulsar` + `schemas/` +
-  `skills/` + `tests/conformance/`. A tool change updates its schema
-  and goldens; `orbit plugin test <clean export> --grant fs,network` runs them
-  under the sandbox. No symlinks in the tree: the installer refuses them.
+- The installable Orbit plugin is `.orbit-plugin/`: its manifest, launcher,
+  schemas, skills, definitions and conformance goldens live there. Root `src/`,
+  `pyproject.toml` and `uv.lock` are canonical; `make plugin` refreshes their
+  generated copies in the plugin root. A tool change updates its schema and
+  goldens; `orbit plugin test .` runs them under the sandbox on an Orbit build
+  with the dedicated plugin-root layout. No symlinks in the plugin tree.
 - Design docs live in `docs/design/<feature>/` and follow
   `docs/design/CONVENTIONS.md`. A behaviour change updates its design doc (and
   the README only if the front door changed) in the same commit; keep the README

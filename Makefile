@@ -1,4 +1,7 @@
-.PHONY: audit check lint test sync
+.PHONY: audit check lint plugin test sync
+
+plugin:
+	python3 scripts/build_plugin.py
 
 sync:
 	uv sync

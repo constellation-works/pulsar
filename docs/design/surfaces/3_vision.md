@@ -9,7 +9,7 @@ doc_role: vision
 type: design
 summary: The phase 4 plugin tools (submit, publish, approve, dispatch), operator-only approval, and what Orbit must provide for them.
 tags: [surfaces, orbit-plugin, approvals, routines]
-paths: ["orbit_*.yaml", "src/pulsar/orbit/backend.py"]
+paths: [".orbit-plugin/plugin.yaml", "src/pulsar/orbit/backend.py"]
 related_features: [publishing]
 related_artifacts: [ORB-13030, ORB-13114, ORB-13115]
 ---

@@ -28,11 +28,10 @@ from .media_samples import PNG
 from .test_server import SECRET_PARAM
 
 ROOT = Path(__file__).resolve().parent.parent
-MANIFESTS = tuple(ROOT.glob("orbit_*.yaml"))
-assert len(MANIFESTS) == 1, "expected exactly one root Orbit manifest"
-MANIFEST = yaml.safe_load(MANIFESTS[0].read_text())
-GOLDENS = yaml.safe_load((ROOT / "tests" / "conformance" / "pulsar.yaml").read_text())["tests"]
-assert GOLDENS, "tests/conformance/pulsar.yaml has no cases"
+PLUGIN = ROOT / ".orbit-plugin"
+MANIFEST = yaml.safe_load((PLUGIN / "plugin.yaml").read_text())
+GOLDENS = yaml.safe_load((PLUGIN / "tests" / "conformance" / "pulsar.yaml").read_text())["tests"]
+assert GOLDENS, ".orbit-plugin/tests/conformance/pulsar.yaml has no cases"
 
 
 def plugin_app(environ: dict[str, str], transport: Any = None) -> LocalApp:
@@ -98,7 +97,7 @@ def run(
 
 
 def _schema(tool: str, kind: str) -> jsonschema.protocols.Validator:
-    schema = json.loads((ROOT / "schemas" / f"{tool}.{kind}.json").read_text())
+    schema = json.loads((PLUGIN / "schemas" / f"{tool}.{kind}.json").read_text())
     cls = jsonschema.validators.validator_for(schema)
     cls.check_schema(schema)
     return cls(schema)
@@ -148,30 +147,30 @@ def test_publish_passes_upload_cap_below_backend_timeout(state, workspace, monke
 
 
 def test_no_request_schema_takes_a_credential():
-    for path in (ROOT / "schemas").glob("*.request.json"):
+    for path in (PLUGIN / "schemas").glob("*.request.json"):
         schema = json.loads(path.read_text())
         assert schema.get("additionalProperties") is False, path.name
         for prop in schema["properties"]:
             assert not SECRET_PARAM.search(prop), f"{path.name}: {prop}"
-    config = json.loads((ROOT / "schemas" / "config.json").read_text())
+    config = json.loads((PLUGIN / "schemas" / "config.json").read_text())
     assert config["additionalProperties"] is False and not config.get("properties")
 
 
 def test_launcher_and_skill_ship_in_the_tree():
-    launcher = ROOT / MANIFEST["spec"]["backend"]["command"]
+    launcher = PLUGIN / MANIFEST["spec"]["backend"]["command"]
     assert launcher.is_file() and os.access(launcher, os.X_OK)
     assert "-m pulsar orbit-tool" in launcher.read_text(), (
         "the manifest's backend command must exec the Orbit backend through the entry point"
     )
     for skill in MANIFEST["spec"]["skills"]:
-        text = (ROOT / skill / "SKILL.md").read_text()
+        text = (PLUGIN / skill / "SKILL.md").read_text()
         # Orbit links skills/<dir> as <namespace>-<dir>; the skill must answer to that name.
         linked = f"{MANIFEST['metadata']['name']}-{Path(skill).name}"
         assert re.search(rf"(?m)^name: {re.escape(linked)}$", text), (
             f"{skill} links as {linked}; its SKILL.md must be named that"
         )
     # The plugin installer refuses symlinks anywhere in the tree.
-    assert not (ROOT / "CLAUDE.md").is_symlink()
+    assert not any(path.is_symlink() for path in PLUGIN.rglob("*"))
 
 
 # -- envelope -------------------------------------------------------------------------
@@ -264,7 +263,7 @@ def test_pulsar_home_naming_the_plugin_home_is_accepted(state):
 
 @pytest.mark.parametrize("tool", sorted(orbit_tool.TOOLS))
 def test_each_tool_accepts_exactly_its_schema_properties(tool):
-    schema = json.loads((ROOT / "schemas" / f"{tool}.request.json").read_text())
+    schema = json.loads((PLUGIN / "schemas" / f"{tool}.request.json").read_text())
     assert orbit_tool.INPUTS[tool] == set(schema["properties"])
 
 
@@ -451,7 +450,7 @@ def test_the_history_schema_advertises_the_limits_the_code_enforces():
 
 # -- auto-tasks -----------------------------------------------------------------------
 
-AUTO_TASKS = sorted((ROOT / "definitions" / "auto_tasks").glob("*.yaml"))
+AUTO_TASKS = sorted((PLUGIN / "definitions" / "auto_tasks").glob("*.yaml"))
 
 
 def test_the_manifest_ships_the_auto_task_definitions():

@@ -9,7 +9,7 @@ doc_role: design
 type: design
 summary: The MCP tools and the caller boundary, the operator CLI, and how the Orbit plugin runs (home, settings, paths, grants, launcher, envelope).
 tags: [surfaces, mcp, cli, orbit-plugin]
-paths: ["src/pulsar/**", "orbit_*.yaml", "bin/pulsar", "schemas/**"]
+paths: ["src/pulsar/**", ".orbit-plugin/**"]
 related_features: [publishing, accounts]
 related_artifacts: [ORB-13029, ORB-13032, ORB-13114, ORB-13115, ORB-13138]
 ---
@@ -152,13 +152,13 @@ The first three are `execution_kind: read_only` and read the home without writin
 last three are `mutating`, so Orbit lets an agent call them only from a task whose
 `required_tools` names them ([Engagement — Design §3](../engagement/2_design.md#3-plugin-tools)).
 All are `mcp_scope: workspace`, with request and response schemas under
-[schemas/](../../../schemas/). An input key the request schema does not list is
+[schemas/](../../../.orbit-plugin/schemas/). An input key the request schema does not list is
 refused (`invalid_argument` naming it). Panels: *Pulsar accounts* (kv, `status`) and
 *Recent publications* (table, `history`). Auto-tasks: `engager`, `post-proposer` and
-`weekly-report`, seeded disabled ([Engagement — Design §4](../engagement/2_design.md#4-auto-tasks)). The skill [skills/publish](../../../skills/publish/SKILL.md) is linked as `pulsar-publish`:
+`weekly-report`, seeded disabled ([Engagement — Design §4](../engagement/2_design.md#4-auto-tasks)). The skill [skills/publish](../../../.orbit-plugin/skills/publish/SKILL.md) is linked as `pulsar-publish`:
 checking accounts, reading engagement, drafting and validating a plan, the approve-then-publish
 handoff, and, in
-[references/setup.md](../../../skills/publish/references/setup.md), walking a human through
+[references/setup.md](../../../.orbit-plugin/skills/publish/references/setup.md), walking a human through
 installing pulsar and binding an account.
 
 ### How it runs
@@ -179,24 +179,28 @@ installing pulsar and binding an account.
 - **Grants.** `fs` (read `{{workspace}}`, write `{{plugin_state}}`) and `network: any` (X, and
   the first call's dependency sync). Install with path-scoped grants:
   `orbit plugin add <export> --enable --grant 'fs={{workspace}},{{plugin_state}}' --grant network`.
-- **Launcher.** [bin/pulsar](../../../bin/pulsar) keeps the venv, uv cache, uv-managed Python,
+- **Launcher.** [bin/pulsar](../../../.orbit-plugin/bin/pulsar) keeps the venv, uv cache, uv-managed Python,
   bytecode and temp files under the plugin state. It runs `uv sync --frozen --no-dev
   --no-install-project` once per `uv.lock` checksum, then execs the venv's Python with
-  `PYTHONPATH` at the plugin's `src/`. `requires.programs: [uv]` lets Orbit resolve uv at
+  `PYTHONPATH` at the plugin's generated `src/`. Root `src/`, `pyproject.toml` and `uv.lock`
+  are canonical; `make plugin` refreshes their committed copies inside `.orbit-plugin/`, and
+  `tests/test_plugin_package.py` detects drift. `requires.programs: [uv]` lets Orbit resolve uv at
   enable ([ORB-13032]); older hosts need uv on the caller's `PATH`.
 - **Envelope.** [orbit/backend.py](../../../src/pulsar/orbit/backend.py) reads
   `{schema_version: 1, tool, input, context}` and writes exactly one JSON line,
   `{ok: true, output}` or `{ok: false, error: {code, message, retryable, detail?}}`, exit 0
   ([decision](./4_decisions.md#pulsar-orbit-tool-exits-0-when-it-answered)). It never raises; an unexpected exception is
   `internal`. Diagnostics go to stderr.
-- **Install tree.** The installer refuses symlinks anywhere in the tree (so `CLAUDE.md` is a
-  file containing `@AGENTS.md`), and a working tree carries a `.venv`; install from `git
-  archive` of a commit.
+- **Install tree.** Orbit selects `.orbit-plugin/` from a source checkout or export and
+  installs only that directory. It contains the manifest, launcher, schemas, skill,
+  definitions, conformance cases and generated runtime package. The installer refuses
+  symlinks in that directory. Export a commit containing the refreshed generated copy.
 
 ### Conformance
 
-`tests/conformance/pulsar.yaml` holds goldens for `orbit plugin test <export> --grant
-fs,network`, which runs them through Orbit's sandbox. `tests/test_orbit_tool.py` runs the same
+`.orbit-plugin/tests/conformance/pulsar.yaml` holds goldens for `orbit plugin test .`, which
+runs them through Orbit's sandbox on a build with the dedicated plugin-root layout.
+`tests/test_orbit_tool.py` runs the same
 goldens in-process in `make check`, validates every output against its schema, and checks that
 no request schema has a credential-shaped property.
 
@@ -222,5 +226,6 @@ no request schema has a credential-shaped property.
 - [ORB-13114] — Orbit: keep `retryable` and `detail` in plugin errors (ws_orbit).
 - [ORB-13115] — Orbit: task and run id in the plugin context (ws_orbit).
 - [ORB-13138] — aligned the surfaces with the constellation standards.
+- [ORB-13630] — moved the plugin to `.orbit-plugin/` with a checked generated runtime copy.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

@@ -76,6 +76,10 @@ orbit plugin add /tmp/pulsar-plugin-v0.1.0 --enable --grant 'fs={{workspace}},{{
 orbit pulsar status
 ```
 
+Orbit installs only `.orbit-plugin/` from that export. In a checkout, run
+`make plugin` after changing the Python package and commit the generated copy
+before tagging a release.
+
 The plugin's home is `~/.orbit/state/plugins/pulsar/home`; point the CLI at it with
 `PULSAR_HOME`. Enabling it in a workspace seeds three auto-tasks, switched off: `engager`
 (daily mention summary and reply drafts), `post-proposer` (weekly post drafts from metrics)
@@ -97,6 +101,7 @@ Design docs live in [docs/design](docs/design/) ([conventions](docs/design/CONVE
 
 ```sh
 make check    # uv lock --check, ruff, basedpyright strict, pytest (offline)
+make plugin   # refresh the committed runtime copy in .orbit-plugin/
 ```
 
 The tree under `src/pulsar` is the architecture ([ARCHITECTURE.md](docs/design/ARCHITECTURE.md)):

@@ -9,7 +9,7 @@ doc_role: vision
 type: design
 summary: Direct messages, scheduled publishing of approved drafts, host-attested approvals, and what else the engagement loop may grow into.
 tags: [engagement, dms, dispatch, approvals]
-paths: ["src/pulsar/app/plugin.py", "definitions/auto_tasks/*.yaml"]
+paths: ["src/pulsar/app/plugin.py", ".orbit-plugin/definitions/auto_tasks/*.yaml"]
 related_features: [publishing, surfaces]
 related_artifacts: [ORB-13030, ORB-13115]
 ---

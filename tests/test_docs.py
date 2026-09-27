@@ -3,7 +3,6 @@ frontmatter, and every documented ``pulsar`` command parses against the real CLI
 
 import re
 import shlex
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -17,7 +16,7 @@ DOCS = sorted(
         ROOT / "README.md",
         ROOT / "AGENTS.md",
         *(ROOT / "docs" / "design").rglob("*.md"),
-        *(ROOT / "skills").rglob("*.md"),
+        *(ROOT / ".orbit-plugin" / "skills").rglob("*.md"),
     ]
 )
 # Templates hold placeholders (`<feature>`), not links to check.
@@ -152,10 +151,7 @@ def test_documented_commands_parse(where, span):
         pytest.fail(f"{where}: `{span}` does not parse (exit {exc.code})")
 
 
-def test_no_symlink_is_tracked():
-    """The plugin installer refuses symlinks anywhere in the tree."""
-    listing = subprocess.run(
-        ["git", "ls-files", "-s"], cwd=ROOT, capture_output=True, text=True, check=True
-    ).stdout
-    links = [line.split("\t", 1)[1] for line in listing.splitlines() if line.startswith("120000")]
-    assert links == [], f"tracked symlinks (the installer refuses them): {links}"
+def test_no_symlink_is_in_the_plugin():
+    """The plugin installer refuses symlinks in the installable directory."""
+    links = [p for p in (ROOT / ".orbit-plugin").rglob("*") if p.is_symlink()]
+    assert links == [], f"plugin symlinks: {links}"

@@ -9,7 +9,7 @@ doc_role: overview
 type: design
 summary: pulsar's three front ends over one core and one ledger — the standalone MCP server, the operator CLI and the Orbit plugin.
 tags: [surfaces, mcp, cli, orbit-plugin]
-paths: ["src/pulsar/**", "orbit_*.yaml", "bin/pulsar", "schemas/**", "skills/**", "tests/conformance/**"]
+paths: ["src/pulsar/**", ".orbit-plugin/**"]
 related_features: [publishing, accounts]
 related_artifacts: [ORB-12124, ORB-13028, ORB-13029, ORB-13030]
 ---
@@ -53,8 +53,8 @@ translates requests and errors; it never decides policy and never touches a cred
 | Operator verbs | [app/ops.py](../../../src/pulsar/app/ops.py) | [ORB-13028] |
 | Orbit exec backend: envelopes, inputs, sandbox | [orbit/backend.py](../../../src/pulsar/orbit/backend.py) | [ORB-13029] |
 | Plugin tools behind it | [app/plugin.py](../../../src/pulsar/app/plugin.py) | [ORB-13029] |
-| Orbit plugin manifest and launcher | root `orbit_*.yaml`, [bin/pulsar](../../../bin/pulsar) | [ORB-13029] |
-| Tool schemas, skill, goldens | [schemas/](../../../schemas/), [skills/](../../../skills/), [tests/conformance/](../../../tests/conformance/pulsar.yaml) | [ORB-13029] |
+| Orbit plugin manifest and launcher | [.orbit-plugin/plugin.yaml](../../../.orbit-plugin/plugin.yaml), [bin/pulsar](../../../.orbit-plugin/bin/pulsar) | [ORB-13029], [ORB-13630] |
+| Tool schemas, skill, goldens | [schemas/](../../../.orbit-plugin/schemas/), [skills/](../../../.orbit-plugin/skills/), [tests/conformance/](../../../.orbit-plugin/tests/conformance/pulsar.yaml) | [ORB-13029], [ORB-13630] |
 
 Error codes shared by all surfaces: [references/error-codes.md](./references/error-codes.md).
 
@@ -65,5 +65,6 @@ Error codes shared by all surfaces: [references/error-codes.md](./references/err
 - [ORB-13028] — moved every write onto the publisher; added `validate_plan` and the operator verbs.
 - [ORB-13029] — added the Orbit plugin: backend, manifest, schemas, panels, skill, goldens.
 - [ORB-13030] — phase 4: the lifecycle tools (submit, publish, approve, dispatch).
+- [ORB-13630] — moved the installable plugin and its runtime package into `.orbit-plugin/`.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

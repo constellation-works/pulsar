@@ -1,0 +1,56 @@
+[project]
+name = "pulsar"
+version = "0.1.0"
+description = "X (Twitter) write connector — MCP server that posts as a human-authorized X account"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+dependencies = [
+    "mcp>=1.2",
+    "httpx>=0.27",
+    "cryptography>=43",
+    "pydantic>=2",
+    "pyyaml>=6.0.3",
+]
+
+[project.scripts]
+pulsar = "pulsar.main:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "anyio>=4",
+    "ruff>=0.16.8",
+    "basedpyright>=1.40.1",
+    "types-pyyaml>=6.0.12.20260906",
+    "jsonschema>=4.26.0",
+    "pytest-timeout>=2.4.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pulsar"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Bound the runtime of each test while leaving the full suite unbounded.
+timeout = 60
+# A parametrized test with no cases is an error, not a silent skip.
+empty_parameter_set_mark = "fail_at_collect"
+# Print why each skipped test skipped.
+addopts = "-rs"
+
+[tool.basedpyright]
+include = ["src"]
+pythonVersion = "3.12"
+typeCheckingMode = "strict"

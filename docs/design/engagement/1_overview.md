@@ -9,7 +9,7 @@ doc_role: overview
 type: design
 summary: Reads for engagement (mentions, post metrics) and the plugin's auto-tasks that turn them into drafts a human approves before anything is published.
 tags: [engagement, reads, mentions, metrics, approvals, auto-tasks, orbit-plugin]
-paths: ["src/pulsar/app/core/channels/**", "src/pulsar/app/core/ledger/**", "src/pulsar/app/plugin.py", "definitions/auto_tasks/*.yaml"]
+paths: ["src/pulsar/app/core/channels/**", "src/pulsar/app/core/ledger/**", "src/pulsar/app/plugin.py", ".orbit-plugin/definitions/auto_tasks/*.yaml"]
 related_features: [publishing, channels, surfaces]
 related_artifacts: [ORB-13030]
 ---
@@ -56,7 +56,7 @@ claims the write.
 | Read calls on the provider contract | [channels/contract.py](../../../src/pulsar/app/core/channels/contract.py) | — |
 | The approvals and reads tables | [ledger/schema.py](../../../src/pulsar/app/core/ledger/schema.py) | [ORB-13030] |
 | The plugin's engagement tools | [app/plugin.py](../../../src/pulsar/app/plugin.py) | — |
-| The shipped auto-tasks | [definitions/auto_tasks/](../../../definitions/auto_tasks/) | — |
+| The shipped auto-tasks | [definitions/auto_tasks/](../../../.orbit-plugin/definitions/auto_tasks/) | — |
 | The human approval verbs | [cli/commands/approve.py](../../../src/pulsar/cli/commands/approve.py) | — |
 
 ## Task References

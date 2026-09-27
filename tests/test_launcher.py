@@ -1,4 +1,4 @@
-"""bin/pulsar, the entry point Orbit runs, driven as a subprocess.
+""".orbit-plugin/bin/pulsar, the entry point Orbit runs, driven as a subprocess.
 
 A stub ``uv`` stands in for the dependency sync: it records each call and
 makes ``$UV_PROJECT_ENVIRONMENT/bin/python`` a wrapper around the interpreter
@@ -102,9 +102,9 @@ class Plugin:
 def plugin(tmp_path: Path) -> Plugin:
     root = tmp_path / "plugin"
     (root / "bin").mkdir(parents=True)
-    shutil.copy2(REPO / "bin" / "pulsar", root / "bin" / "pulsar")
-    shutil.copy2(REPO / "uv.lock", root / "uv.lock")
-    shutil.copytree(REPO / "src", root / "src", ignore=shutil.ignore_patterns("__pycache__"))
+    shutil.copy2(REPO / ".orbit-plugin" / "bin" / "pulsar", root / "bin" / "pulsar")
+    shutil.copy2(REPO / ".orbit-plugin" / "uv.lock", root / "uv.lock")
+    shutil.copytree(REPO / ".orbit-plugin" / "src", root / "src")
     stub_dir = tmp_path / "stub-bin"
     stub_dir.mkdir()
     log = tmp_path / "uv.log"
