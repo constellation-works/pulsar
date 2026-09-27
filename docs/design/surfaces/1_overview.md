@@ -54,7 +54,7 @@ translates requests and errors; it never decides policy and never touches a cred
 | Orbit exec backend: envelopes, inputs, sandbox | [orbit/backend.py](../../../src/pulsar/orbit/backend.py) | [ORB-13029] |
 | Plugin tools behind it | [app/plugin.py](../../../src/pulsar/app/plugin.py) | [ORB-13029] |
 | Plugin manifest, launcher | [plugin.yaml](../../../plugin.yaml), [bin/pulsar](../../../bin/pulsar) | [ORB-13029] |
-| Tool schemas, skill, goldens | [schemas/](../../../schemas/), [skills/publish/](../../../skills/publish/SKILL.md), [tests/conformance/](../../../tests/conformance/pulsar.yaml) | [ORB-13029] |
+| Tool schemas, skill, goldens | [schemas/](../../../schemas/), [skills/](../../../skills/), [tests/conformance/](../../../tests/conformance/pulsar.yaml) | [ORB-13029] |
 
 Error codes shared by all surfaces: [references/error-codes.md](./references/error-codes.md).
 

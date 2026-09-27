@@ -14,7 +14,7 @@
 - `agent-main` is the landing branch; commit directly, no PR gate. Daniel owns
   releases and any change to the X app registration.
 - The Orbit plugin is `plugin.yaml` + `bin/pulsar` + `schemas/` +
-  `skills/publish/` + `tests/conformance/`. A tool change updates its schema
+  `skills/` + `tests/conformance/`. A tool change updates its schema
   and goldens; `orbit plugin test <clean export> --grant fs,network` runs them
   under the sandbox. No symlinks in the tree: the installer refuses them.
 - Design docs live in `docs/design/<feature>/` and follow
