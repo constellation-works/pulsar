@@ -9,17 +9,12 @@ neither do rows imported from an older log.
 
 from __future__ import annotations
 
-import hashlib
 import json
 from datetime import UTC, datetime
 from typing import Any
 
-from pulsar.home import Paths, append_private
+from pulsar.home import Paths, append_private, text_sha256
 from pulsar.ledger import PlanRecord, WriteRecord, redact_strings
-
-
-def text_sha256(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 class WriteLog:

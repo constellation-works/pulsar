@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any
 
 from pulsar.errors import INTERNAL, PulsarError
+from pulsar.home import text_sha256
 from pulsar.jsonx import JSONObject, as_object
 from pulsar.ledger import (
     IMPORT_TOOL,
@@ -43,8 +44,6 @@ from pulsar.ledger import (
     check_note,
     request_digest,
 )
-
-from .writelog import text_sha256
 
 IMPORT_CALLER = "pulsar-import"
 _META_KEYS = ("superseded_post_id", "superseded_note")

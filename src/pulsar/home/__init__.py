@@ -13,6 +13,7 @@ from .files import (
     hold_lock_async,
     publish_new_private,
     require_private,
+    text_sha256,
     write_private_atomic,
 )
 from .paths import Paths, account_slug, alias_from_slug, resolve_home
@@ -35,6 +36,7 @@ __all__ = [
     "hold_lock_async",
     "publish_new_private",
     "require_private",
+    "text_sha256",
     "write_private_atomic",
     # paths
     "account_slug",

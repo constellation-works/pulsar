@@ -25,6 +25,7 @@ import asyncio
 import contextlib
 import errno
 import fcntl
+import hashlib
 import json
 import os
 import shlex
@@ -56,6 +57,10 @@ def _insecure(
         f"{path} {problem}; {consequence}. Fix: {fix}",
         detail={"path": str(path), "fix": fix},
     )
+
+
+def text_sha256(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def require_private(
