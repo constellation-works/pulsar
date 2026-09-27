@@ -226,8 +226,10 @@ class LocalRuntime:
 
         Read from the registry row while that row describes the stored
         bundle's binding; otherwise (or when ``live``) asked of X and
-        recorded. A lookup that raced a re-login records the old binding, so
-        it is never trusted afterwards.
+        recorded. The lookup is pinned to the bundle read here, so a re-login
+        that lands during it fails the lookup rather than recording the new
+        login's identity under the old binding. The returned ``binding_id``
+        is the binding the identity was checked for: ``writer`` sends with it.
         """
         # Registry and credential files are read under file locks: in a
         # thread, so a lock held by another process stalls this call only.
@@ -247,12 +249,20 @@ class LocalRuntime:
                 )
             if not live and (trusted := self.registry.trusted_identity(account, bundle)):
                 return replace(
-                    account, handle=trusted.handle, provider_user_id=trusted.provider_user_id
+                    account,
+                    handle=trusted.handle,
+                    provider_user_id=trusted.provider_user_id,
+                    binding_id=bundle.binding_id,
                 )
-            me = await client.me()
+            me = await client.pinned(bundle.binding_id).me()
         found = Identity(provider_user_id=me["user_id"], handle=me["username"].lower())
         await asyncio.to_thread(self.registry.mark_verified, name, found, bundle.binding_id)
-        return replace(account, handle=found.handle, provider_user_id=found.provider_user_id)
+        return replace(
+            account,
+            handle=found.handle,
+            provider_user_id=found.provider_user_id,
+            binding_id=bundle.binding_id,
+        )
 
     async def whoami(self, alias: str | None = None, *, live: bool = False) -> dict[str, str]:
         """``{user_id, username}`` of the account: cached after the first call."""
@@ -262,19 +272,24 @@ class LocalRuntime:
         """The account to write as, its client and ledger identity.
 
         ``account_mismatch`` when the bound handle is not the alias's or the
-        configured ``expected_handle``: checked before every write.
+        configured ``expected_handle``: checked before every write. The client
+        is pinned to the binding that check was for, so a re-login between the
+        check and the request sends nothing (``XClient.pinned``).
         """
         account = await self.identity(alias)
         require_expected(account, self.settings)
-        return account, self.client_for(account.alias), me(account)
+        return account, self.client_for(account.alias).pinned(account.binding_id), me(account)
 
     # -- channels -------------------------------------------------------------
 
-    def channel(self, alias: str, *, user_id: str, handle: str) -> XChannel:
+    def channel(
+        self, alias: str, *, user_id: str, handle: str, client: XClient | None = None
+    ) -> XChannel:
+        """``alias``'s channel, over ``client`` (a pinned one, for writes) when given."""
         provider = alias_provider(alias)
         if provider != "x":
             raise PulsarError(UNSUPPORTED, f"no channel for provider {provider!r} yet")
-        return XChannel(self.client_for(alias), user_id=user_id, handle=handle)
+        return XChannel(client or self.client_for(alias), user_id=user_id, handle=handle)
 
     def offline_bound(self, alias: str) -> Bound:
         """``alias`` bound for offline validation: no credentials needed, no network."""
@@ -290,14 +305,17 @@ class LocalRuntime:
         )
 
     async def bound(self, alias: str | None) -> Bound:
-        """The account to publish as, identity checked (``writer``), with its channel."""
-        account, _client, me = await self.writer(alias)
+        """The account to publish as, identity checked (``writer``), with its channel
+        pinned to the checked binding."""
+        account, client, me = await self.writer(alias)
         return Bound(
             alias=account.alias,
             provider=account.provider,
             user_id=me["user_id"],
             handle=me["username"],
-            channel=self.channel(account.alias, user_id=me["user_id"], handle=me["username"]),
+            channel=self.channel(
+                account.alias, user_id=me["user_id"], handle=me["username"], client=client
+            ),
         )
 
     def plan_targets(self, plan: Plan, account: str | None) -> tuple[Plan, list[str]]:

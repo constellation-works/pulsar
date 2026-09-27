@@ -19,7 +19,7 @@ from pulsar.app.core.channels.credentials import TokenBundle
 from pulsar.app.settings import Settings
 from pulsar.mcp import TOOL_NAMES, build_server, loopback_security
 
-from .conftest import ALIAS, SECRETS, make_runtime, register
+from .conftest import ALIAS, ROTATED_ACCESS, SECRETS, make_runtime, register
 from .media_samples import JPEG, MP4, PEM_KEY
 from .media_samples import PNG as PNG_1PX
 
@@ -659,6 +659,53 @@ async def test_identity_looked_up_before_a_relogin_is_not_trusted_after_it(
     assert (await rt.whoami())["username"] == "constworks"
     assert len(fake_x.calls("GET", "/users/me")) == 1
     await rt.aclose()
+
+
+async def _post_after(paths, fake_x, monkeypatch, swap):
+    """``create_post`` with ``swap`` run on the store between the identity check and the POST."""
+    rt = make_runtime(paths, settings=Settings(), transport=fake_x.transport())
+    checked = rt.bound
+
+    async def bound_then_swap(alias):
+        bound = await checked(alias)
+        swap(rt.registry.store(bound.alias))
+        return bound
+
+    monkeypatch.setattr(rt, "bound", bound_then_swap)
+    async with InMemoryTransport(build_server(rt)) as (read, write):
+        async with ClientSession(read, write) as s:
+            await s.initialize()
+            out = _payload(
+                await s.call_tool("create_post", {"text": "hello", "idempotency_key": "k1"})
+            )
+    await rt.aclose()
+    return rt, out
+
+
+async def test_a_relogin_after_the_identity_check_posts_nothing(paths, bundle, fake_x, monkeypatch):
+    """The stored login changes to another account after its handle was checked."""
+    register(paths, bundle, handle="constworks", provider_user_id="1234567890")
+    other = TokenBundle(**{**bundle.__dict__, "access_token": ROTATED_ACCESS})
+
+    rt, out = await _post_after(paths, fake_x, monkeypatch, lambda store: store.rebind(other))
+    assert out["ok"] is False and out["code"] == "account_mismatch"
+    assert "nothing was sent" in out["message"]
+    assert fake_x.calls("POST", "/tweets") == []
+    assert rt.ledger.get("k1").state == "failed"
+    _no_secret_leak(out)
+
+
+async def test_a_refresh_after_the_identity_check_still_posts(paths, bundle, fake_x, monkeypatch):
+    """Another process refreshed the same login: its token is the checked account's."""
+    register(paths, bundle, handle="constworks", provider_user_id="1234567890")
+    refreshed = TokenBundle(**{**bundle.__dict__, "access_token": ROTATED_ACCESS})
+
+    rt, out = await _post_after(paths, fake_x, monkeypatch, lambda store: store.save(refreshed))
+    assert out["ok"] is True and out["post_id"] == "101"
+    (post,) = fake_x.calls("POST", "/tweets")
+    assert post.headers["Authorization"] == f"Bearer {ROTATED_ACCESS}"
+    assert rt.ledger.get("k1").state == "published"
+    _no_secret_leak(out)
 
 
 async def test_create_post_on_a_skipped_key_is_a_conflict_not_a_receipt(

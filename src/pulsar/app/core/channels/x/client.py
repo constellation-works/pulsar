@@ -6,11 +6,20 @@ worker thread so a refresh never blocks the event loop; the per-client
 ``asyncio.Lock`` and the store's cross-process lock keep one refresh in
 flight per account. Text X sends back is embedded in error messages only
 through ``bounded_text``.
+
+A write is sent with the token of the login whose identity was checked.
+``pinned(binding_id)`` is this client (same connection pool, same refresh
+lock) refusing to send under any other login: every request re-reads the
+stored bundle, and a bundle a re-login replaced after the check is
+``account_mismatch`` before a byte of the request leaves (after a logout,
+``auth_expired``). A refresh keeps the binding, so a refreshed token still
+sends.
 """
 
 from __future__ import annotations
 
 import asyncio
+import copy
 import re
 import time
 from collections.abc import Awaitable, Callable
@@ -19,6 +28,7 @@ from typing import Any
 import httpx
 
 from pulsar.internal.errors import (
+    ACCOUNT_MISMATCH,
     API_ERROR,
     DUPLICATE,
     FORBIDDEN,
@@ -156,6 +166,18 @@ class XClient:
         self._sleep = sleep
         self._http = httpx.AsyncClient(transport=transport, timeout=timeout)
         self._refresh_lock = asyncio.Lock()
+        self._pinned = False
+        self._binding: str | None = None
+
+    def pinned(self, binding_id: str | None) -> XClient:
+        """This client, sending only with a bundle of the login ``binding_id`` names.
+
+        Shares this client's connection pool and refresh lock; the unpinned
+        client owns them, and closing it closes the view too.
+        """
+        view = copy.copy(self)
+        view._pinned, view._binding = True, binding_id
+        return view
 
     async def aclose(self) -> None:
         await self._http.aclose()
@@ -179,10 +201,22 @@ class XClient:
     def _expiring(self, bundle: TokenBundle) -> bool:
         return self._now() + REFRESH_AHEAD_SECONDS >= bundle.expires_at
 
+    def _held(self, bundle: TokenBundle) -> TokenBundle:
+        """``bundle``, if a pinned client may send with it."""
+        if self._pinned and bundle.binding_id != self._binding:
+            raise PulsarError(
+                ACCOUNT_MISMATCH,
+                "the stored X authorization changed (a re-login) after this "
+                "account's identity was checked; nothing was sent. Retry to check the new "
+                "binding",
+                retryable=True,
+            )
+        return bundle
+
     async def access_token(self) -> str:
-        bundle = await self._bundle()
+        bundle = self._held(await self._bundle())
         if self._expiring(bundle):
-            bundle = await self.refresh(bundle)
+            bundle = self._held(await self.refresh(bundle))
         return bundle.access_token
 
     async def refresh(self, bundle: TokenBundle) -> TokenBundle:
@@ -324,7 +358,7 @@ class XClient:
                 raise OutcomeUnknown(f"{name} after the request may have reached X") from exc
             raise PulsarError(API_ERROR, f"X request failed: {name}", retryable=True) from exc
         if resp.status_code == 401 and _retry:
-            current = await self._bundle()
+            current = self._held(await self._bundle())
             if current.access_token == token:
                 await self.refresh(current)
             # Otherwise another process rotated since we read the token: retry with

@@ -1,8 +1,8 @@
 ---
 title: Accounts — Design
 owner: claude
-last_updated: 2026-09-26
-last_validated: 2026-09-26
+last_updated: 2026-09-27
+last_validated: 2026-09-27
 status: Accepted
 feature: accounts
 doc_role: design
@@ -11,7 +11,7 @@ summary: Login with identity check, the registry, encrypted per-account bundles,
 tags: [accounts, auth, oauth, credentials, storage]
 paths: ["src/pulsar/app/core/account/registry.py", "src/pulsar/app/core/account/store.py", "src/pulsar/app/core/account/clients.py", "src/pulsar/app/core/channels/credentials.py", "src/pulsar/app/login.py", "src/pulsar/internal/fs/paths.py", "src/pulsar/internal/fs/files.py", "src/pulsar/app/core/channels/x/auth.py", "src/pulsar/app/core/channels/x/client.py", "src/pulsar/cli/commands/auth.py"]
 related_features: [publishing, surfaces]
-related_artifacts: [ORB-13008, ORB-13009, ORB-13027, ORB-13028, ORB-13039, ORB-13138]
+related_artifacts: [ORB-13008, ORB-13009, ORB-13027, ORB-13028, ORB-13039, ORB-13138, ORB-13279]
 ---
 
 # Accounts — Design
@@ -82,6 +82,17 @@ Before every write the bound handle must equal the alias's handle and, when set,
 `require_expected`); otherwise `account_mismatch` with `detail: {alias, expected_handle,
 bound_handle}` and nothing is sent. The ledger row records the account's alias, user id and
 handle.
+
+The write is sent with a token of the binding that check was for. The identity comes with the
+stored bundle's `binding_id`, and the write's client is pinned to it
+([x/client.py](../../../src/pulsar/app/core/channels/x/client.py) `XClient.pinned`): every
+request (uploads, the POST, a 401 retry) re-reads the stored bundle and refuses one of another
+binding with `account_mismatch` (retryable) before anything is sent (a logout is
+`auth_expired`), so a re-login or logout between the check and the POST leaves the ledger row
+`failed`, not a post under an unchecked identity. A refresh carries the binding forward, so a
+token refreshed in between, by this process or another, still posts. A `/users/me` lookup is
+pinned the same way, so a re-login during it fails the lookup instead of recording the new
+login's identity for the old binding.
 
 ## 4. Status
 
@@ -197,10 +208,9 @@ commands.
   local user; it does not protect against any process running as the same uid, including an
   agent sandbox that can read the home. Until the home is in Orbit plugin state carved out by
   [ORB-13008], the boundary is: the agent never holds secrets, the connector process does.
-- **The post token is not yet bound to the looked-up identity.** The handle check reads the
-  registry's identity for the current binding; [ORB-13039] proposes binding the token used for
-  a post to the identity fetched with it, closing the window where a re-login lands between
-  the check and the send.
+- **Bundles from before `binding_id` cannot be told apart.** A bundle saved before bindings
+  existed has none, so a swap between two such bundles passes the pin. Every login since mints
+  one, so a re-login is always seen.
 - **Login needs a human with a browser and a loopback port.** Re-authorization on a headless
   host goes through SSH port forwarding; there is no device-code fallback.
 - **Refresh lock wait is bounded but blocking.** A process holding the lock for 45 s (a hung
@@ -214,7 +224,8 @@ commands.
 - [ORB-13009] — Orbit: host-held secrets with compare-and-swap rotation (ws_orbit).
 - [ORB-13027] — added atomic owner-only storage, the refresh lock and `auth status --live`.
 - [ORB-13028] — added the registry, aliases, verified login, `expected_handle` and migration.
-- [ORB-13039] — proposed: bind the post token to the looked-up identity.
+- [ORB-13039] — the phase-1 review that found the unpinned post token.
 - [ORB-13138] — aligned storage, locks, errors and the login listener with the constellation standards.
+- [ORB-13279] — pinned a write's token to the binding whose identity was checked.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

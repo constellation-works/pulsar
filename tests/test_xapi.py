@@ -634,6 +634,57 @@ async def test_refresh_carries_the_binding_forward(paths, bundle, fake_x):
     assert stored.access_token == ROTATED_ACCESS and stored.binding_id == bound.binding_id
 
 
+async def test_a_pinned_client_sends_nothing_under_another_login(paths, bundle, fake_x):
+    store = FernetFileStore.for_account(paths, ALIAS)
+    checked = store.rebind(bundle)
+    client = XClient(store, transport=fake_x.transport())
+    pinned = client.pinned(checked.binding_id)
+    store.rebind(TokenBundle(**{**bundle.__dict__, "binding_id": None}))  # a re-login
+    try:
+        with pytest.raises(PulsarError) as exc:
+            await pinned.create_post("hi")
+        # the unpinned client follows the store, as before
+        assert (await client.me())["username"] == "constworks"
+    finally:
+        await client.aclose()
+    assert exc.value.code == "account_mismatch" and exc.value.retryable
+    assert "nothing was sent" in exc.value.message
+    assert fake_x.calls("POST", "/tweets") == []
+
+
+async def test_a_pinned_client_posts_with_a_refreshed_token_of_its_login(paths, bundle, fake_x):
+    store = FernetFileStore.for_account(paths, ALIAS)
+    checked = store.rebind(_expired(bundle))
+    client = XClient(store, transport=fake_x.transport())
+    try:
+        assert (await client.pinned(checked.binding_id).create_post("hi"))["post_id"] == "101"
+    finally:
+        await client.aclose()
+    (post,) = fake_x.calls("POST", "/tweets")
+    assert post.headers["Authorization"] == f"Bearer {ROTATED_ACCESS}"
+
+
+async def test_a_pinned_client_does_not_refresh_another_login_on_401(paths, bundle, fake_x):
+    store = FernetFileStore.for_account(paths, ALIAS)
+    checked = store.rebind(bundle)
+    other = TokenBundle(**{**bundle.__dict__, "access_token": ROTATED_ACCESS, "binding_id": None})
+
+    def handler(request):
+        if request.headers.get("Authorization") == f"Bearer {ACCESS}":
+            store.rebind(other)  # a re-login while the request was in flight
+            return httpx.Response(401, json={"title": "Unauthorized"})
+        return fake_x.handle(request)
+
+    client = XClient(store, transport=httpx.MockTransport(handler))
+    try:
+        with pytest.raises(PulsarError) as exc:
+            await client.pinned(checked.binding_id).create_post("hi")
+    finally:
+        await client.aclose()
+    assert exc.value.code == "account_mismatch"
+    assert fake_x.calls("POST", "/oauth2/token") == [] and fake_x.calls("POST", "/tweets") == []
+
+
 async def test_client_delete_refuses_a_path_as_an_id(client, authed, fake_x):
     with pytest.raises(PulsarError) as exc:
         await client.delete_post("../users/1/retweets/555")
