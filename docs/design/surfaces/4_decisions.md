@@ -9,7 +9,7 @@ doc_role: decisions
 type: design
 summary: Exec backend over mcp, one settings source, plan errors as results, workspace-confined plugin media, the launcher's shape, and CLI output modes.
 tags: [surfaces, orbit-plugin, mcp]
-paths: ["plugin.yaml", "bin/pulsar", "src/pulsar/orbit/backend.py", "src/pulsar/mcp/server.py"]
+paths: ["plugin.yaml", "bin/pulsar", "src/pulsar/orbit/backend.py", "src/pulsar/mcp/server.py", "src/pulsar/app/tools.py"]
 related_features: [publishing, accounts]
 related_artifacts: [ORB-12124, ORB-13029]
 ---

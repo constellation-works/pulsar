@@ -1,7 +1,7 @@
 ---
 title: Surfaces — Overview
 owner: claude
-last_updated: 2026-09-26
+last_updated: 2026-09-27
 last_validated: 2026-09-26
 status: Accepted
 feature: surfaces
@@ -47,8 +47,9 @@ translates requests and errors; it never decides policy and never touches a cred
 
 | Concern | File | Task |
 |---------|------|------|
-| MCP server, tools, annotations | [mcp/server.py](../../../src/pulsar/mcp/server.py) | [ORB-12124], [ORB-13028] |
-| CLI: auth, operator verbs, `serve`, `orbit-tool` | [surfaces/cli/](../../../src/pulsar/cli/) | [ORB-13027], [ORB-13028], [ORB-13029] |
+| MCP server: schemas, annotations, errors as results | [mcp/server.py](../../../src/pulsar/mcp/server.py) | [ORB-12124], [ORB-13028] |
+| Agent tools behind it (claim, send, settle) | [app/tools.py](../../../src/pulsar/app/tools.py) | [ORB-12124], [ORB-13028] |
+| CLI: auth, operator verbs, `serve`, `orbit-tool` | [cli/](../../../src/pulsar/cli/) | [ORB-13027], [ORB-13028], [ORB-13029] |
 | Operator verbs | [app/ops.py](../../../src/pulsar/app/ops.py) | [ORB-13028] |
 | Orbit exec backend | [orbit/backend.py](../../../src/pulsar/orbit/backend.py) | [ORB-13029] |
 | Plugin manifest, launcher | [plugin.yaml](../../../plugin.yaml), [bin/pulsar](../../../bin/pulsar) | [ORB-13029] |

@@ -1,7 +1,7 @@
 ---
 title: Publishing — Decisions
 owner: claude
-last_updated: 2026-09-26
+last_updated: 2026-09-27
 last_validated: 2026-09-26
 status: Accepted
 feature: publishing
@@ -107,7 +107,7 @@ claimed) as well as sent, published and unknown ones.
 ## `create_post` keeps its original request digest
 
 **Recorded:** 2026-09-26 · [ORB-13028]
-**Code anchors:** `src/pulsar/app/core/ledger/keys.py::request_digest`, `src/pulsar/mcp/server.py::_legacy_post`
+**Code anchors:** `src/pulsar/app/core/ledger/keys.py::request_digest`, `src/pulsar/app/tools.py::_legacy_post`
 
 ### Context
 
@@ -150,7 +150,7 @@ substring; everything else is classified from status codes and fields.
 ## Publisher ledger writes run on the event loop
 
 **Recorded:** 2026-09-26 · [ORB-13138]
-**Code anchors:** `src/pulsar/app/core/publishing/publisher.py::Publisher.publish`, `src/pulsar/app/core/publishing/publisher.py::Publisher.reconcile`, `src/pulsar/mcp/server.py::_settle_on_error`, `src/pulsar/mcp/server.py::_record_success`
+**Code anchors:** `src/pulsar/app/core/publishing/publisher.py::Publisher.publish`, `src/pulsar/app/core/publishing/publisher.py::Publisher.reconcile`, `src/pulsar/app/tools.py::_settle_on_error`, `src/pulsar/app/tools.py::_record_success`
 
 ### Context
 
@@ -198,7 +198,7 @@ write already happened, and reporting it as failed would invite a duplicate.
 ## A stale delete is re-armed and a lost delete is retryable
 
 **Recorded:** 2026-09-26 · [ORB-13138]
-**Code anchors:** `src/pulsar/app/core/ledger/records.py::REARMABLE_TOOLS`, `src/pulsar/app/core/ledger/facade.py::SqliteLedger.claim`, `src/pulsar/mcp/server.py::delete_post`, `src/pulsar/app/core/channels/x/client.py::XClient._post_refresh`
+**Code anchors:** `src/pulsar/app/core/ledger/records.py::REARMABLE_TOOLS`, `src/pulsar/app/core/ledger/facade.py::SqliteLedger.claim`, `src/pulsar/app/tools.py::delete_post`, `src/pulsar/app/core/channels/x/client.py::XClient._post_refresh`
 
 ### Context
 
@@ -216,7 +216,7 @@ also take a fresh key per call). The takeover bumps `attempts` and writes a `not
 recorded. `create_post` and plan rows are never re-armed; they go through `pulsar reconcile`.
 
 For the same two requests a reply lost after sending is reported as a retryable `api_error`,
-not `outcome_unknown` (`ambiguous=False` in `mcp/server.py`): repeating either is harmless, so the
+not `outcome_unknown` (`ambiguous=False` in `app/tools.py`): repeating either is harmless, so the
 caller is told to retry rather than to reconcile. A lost token-refresh reply is a retryable
 `api_error` whose message says X may have rotated the pair (`detail.outcome: "unknown"`).
 

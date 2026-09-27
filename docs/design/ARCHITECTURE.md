@@ -20,13 +20,15 @@ The tree is the architecture: a package sits beneath what uses it, and imports p
 src/pulsar/
 ├── main.py              the entry point: reads the process once, builds LocalApp, runs the CLI
 ├── cli/                 the command line (main, commands/, toolkit/); starts mcp and orbit
-├── mcp/                 the MCP server
+├── mcp/                 the MCP server: schemas and annotations over app/tools.py
 ├── orbit/               the Orbit plugin backend
 ├── app/                 the application: what every front end calls
 │   ├── interfaces.py    the App and Runtime protocols
 │   ├── facade.py        LocalApp: the verbs over one home
 │   ├── runtime.py       LocalRuntime: builds and joins the core for one call
-│   ├── ops.py, health.py, login.py, settings.py, writelog.py, importer.py
+│   ├── ops.py           the operator verbs (status, publish, reconcile, ...)
+│   ├── tools.py         the agent tools (create_post, upload_media, delete_post, ...)
+│   ├── health.py, login.py, settings.py, writelog.py, importer.py
 │   ├── exports.py       the names of core a front end may use
 │   └── core/            the domain; only app uses it
 │       ├── publishing/  plan, publisher, policy, media        ─▶ ledger, account, channels

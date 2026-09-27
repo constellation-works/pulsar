@@ -1,7 +1,7 @@
 ---
 title: Surfaces — Design
 owner: claude
-last_updated: 2026-09-26
+last_updated: 2026-09-27
 last_validated: 2026-09-26
 status: Accepted
 feature: surfaces
@@ -20,7 +20,8 @@ The three front ends as built. The phase 4 plugin tools are in [3_vision.md](./3
 
 ## 1. MCP Server
 
-`pulsar serve` ([mcp/server.py](../../../src/pulsar/mcp/server.py)) runs over stdio, or
+`pulsar serve` ([mcp/server.py](../../../src/pulsar/mcp/server.py), over the tools in
+[app/tools.py](../../../src/pulsar/app/tools.py)) runs over stdio, or
 streamable HTTP on a loopback address (`--transport http --host 127.0.0.1 --port 8977`;
 `--host` accepts only `127.0.0.1`, `localhost` or `::1`; both flags are refused without
 `--transport http`). Over HTTP a request whose `Host` is not one of the bound loopback
