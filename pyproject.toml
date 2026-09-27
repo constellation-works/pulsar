@@ -24,6 +24,7 @@ dev = [
     "basedpyright>=1.40.1",
     "types-pyyaml>=6.0.12.20260906",
     "jsonschema>=4.26.0",
+    "pytest-timeout>=2.4.0",
 ]
 
 [build-system]
@@ -42,6 +43,8 @@ select = ["E", "F", "I", "B", "UP"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Bound the runtime of each test while leaving the full suite unbounded.
+timeout = 60
 # A parametrized test with no cases is an error, not a silent skip.
 empty_parameter_set_mark = "fail_at_collect"
 # Print why each skipped test skipped.
