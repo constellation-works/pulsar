@@ -11,6 +11,8 @@
 - Every live write goes through the ledger (SQLite `ledger.sqlite3`, recorded
   before the network call; `writes.jsonl` is its export) and the secret
   scanner. Do not add a bypass flag for either.
+- Approving is a human act. No tool on any surface records or revokes an
+  approval, and a publish of an agent's draft never skips the approval check.
 - Live X calls need a human-authorized token on the host; tests must never hit
   the network — use the fake transport in `tests/`.
 - `agent-main` is the landing branch; commit directly, no PR gate. Daniel owns

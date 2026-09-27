@@ -5,13 +5,14 @@ they are written against is ``cli.toolkit``, beneath them. ``REGISTER`` is the
 order argparse lists them in.
 """
 
-from . import auth, history, maintenance, publish, reconcile, services, status
+from . import approve, auth, history, maintenance, publish, reconcile, services, status
 
 REGISTER = (
     auth.register,
     status.register,
     history.register,
     publish.register,
+    approve.register,
     reconcile.register,
     maintenance.register,
     services.register,

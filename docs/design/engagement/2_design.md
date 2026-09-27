@@ -7,16 +7,16 @@ status: Draft
 feature: engagement
 doc_role: design
 type: design
-summary: How a read is budgeted, made and recorded, and how a mention is known to be answered.
-tags: [engagement, reads, mentions, metrics, budget, ledger]
-paths: ["src/pulsar/app/core/engagement/**", "src/pulsar/app/core/channels/contract.py", "src/pulsar/app/core/ledger/reads.py", "src/pulsar/app/core/ledger/queries.py"]
+summary: How a read is budgeted, made and recorded, how a mention is known to be answered, and how a human approves a draft.
+tags: [engagement, reads, mentions, metrics, budget, ledger, approvals]
+paths: ["src/pulsar/app/core/engagement/**", "src/pulsar/app/approvals.py", "src/pulsar/app/core/ledger/approvals.py", "src/pulsar/cli/commands/approve.py", "src/pulsar/app/core/channels/contract.py", "src/pulsar/app/core/ledger/reads.py", "src/pulsar/app/core/ledger/queries.py"]
 related_features: [publishing, channels, surfaces]
 related_artifacts: [ORB-13030]
 ---
 
 # Engagement — Design
 
-The engagement loop as built: reads through the `Reader`. The provider side of each read is in
+The engagement loop as built: reads through the `Reader`, and approvals of what an agent drafted. The provider side of each read is in
 [Channels — Design §7](../channels/2_design.md#7-reads); the ledger rows are in the
 [ledger spec](../publishing/specs/ledger.md#reads-reads).
 
@@ -49,7 +49,37 @@ mention it (its side of a conversation) are dropped from `mentions`, though they
 reply to it that went out or may have (`submitting`, `published`, `unknown`); a failed reply
 answers nothing, and neither does a reply made outside pulsar.
 
-## 2. Concerns & Honest Limitations
+## 2. Approvals
+
+An agent's draft is published only under a human approval of its digest
+([decision](./4_decisions.md#an-agents-draft-is-published-only-against-a-human-approval-of-its-digest)).
+The row is in the [ledger spec](../publishing/specs/ledger.md#approvals-approvals).
+
+**Recording.** `pulsar approve PLAN.yaml [--account A] [--ttl T]`
+([approve.py](../../../src/pulsar/cli/commands/approve.py) over
+[app/approvals.py](../../../src/pulsar/app/approvals.py)):
+
+1. Prepare the plan offline for each account, as `validate` does, and print to stderr every
+   post in full, its media, the reply or quote target, the cost, each account's digest and any
+   earlier approval of the same digest.
+2. Refuse (`interactive_only`) unless stdin is a terminal. No flag skips the question.
+3. Ask for the first 8 characters of each distinct digest after `sha256:`. A wrong answer
+   records nothing.
+4. Prepare the plan again and record one approval per account only if every digest is still
+   the one shown; a plan edited in between is refused.
+
+`approved_by` is `human:$USER`. The TTL defaults to 72 hours for a reply and 7 days
+otherwise, and may be 1 minute to 30 days. `pulsar approvals` lists them with their state and
+`pulsar revoke ID` revokes one. No MCP or Orbit tool records or revokes an approval.
+
+**Using.** `Publisher.publish(..., require_approval=True)` passes `approved` to the ledger
+claim, which consumes an approval in the same transaction as the policy check. An approval is
+single-use: the key that used it may retry or resume, and a second key for the same content
+needs a second approval. A replay of a published row needs none. `Publisher.preflight`
+(a dry run) and `Publisher.approval` make the same check without consuming. A refused publish
+is `approval_required`, whose message tells the human the command to run.
+
+## 3. Concerns & Honest Limitations
 
 - **The read price is an estimate.** `read_post_usd` defaults to $0.005 a post until checked on
   the X developer portal; X may also bill the author records a mentions read expands.
@@ -58,6 +88,14 @@ answers nothing, and neither does a reply made outside pulsar.
 - **Re-reading costs.** Overlapping windows re-read, and pay for, the same mentions, because
   pulsar keeps no inbox.
 - **A read killed mid-call is unrecorded.** Pages already fetched were billed but have no row.
+- **An approval is a speed bump against the same Unix user.** The terminal check and the
+  typed digest stop an agent's tool call, not an agent with a shell as the same user, which
+  could fake a terminal or write the ledger itself. Stronger approvals are in the
+  [vision](./3_vision.md).
+- **Media resolve against the cwd.** `pulsar approve` resolves a plan's relative media against
+  the directory it runs in and the home's `[media] roots`; the plugin resolves them against
+  the workspace. Run it from the workspace root, so both read the same files; other bytes
+  are another digest.
 
 ## Task References
 

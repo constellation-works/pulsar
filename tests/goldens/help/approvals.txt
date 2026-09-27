@@ -1,0 +1,12 @@
+usage: pulsar approvals [-h] [--format MODE] [--json] [--account ACCOUNT] [--limit LIMIT]
+
+approvals, newest first, with their state (offline)
+
+options:
+  -h, --help         show this help message and exit
+  --format MODE      output: auto (a table on a terminal, tab-separated lines when piped), table
+                     or json; default: $PULSAR_FORMAT, else auto
+  --json             shorthand for --format json
+  --account ACCOUNT  only this account's (an alias, provider:handle such as x:<handle>); default:
+                     all
+  --limit LIMIT      rows to show; default: 20

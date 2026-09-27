@@ -9,12 +9,16 @@ Accounts:
 Publish:
   validate       check a plan offline: per account, what would post, its digest and cost
   publish        publish a plan through the ledger and policy; validates only without --confirm
+  approve        approve a plan's exact content so an agent may publish it (a human, at a
+                 terminal)
+  revoke         revoke an approval by id; a post already published under it stays
   reconcile      settle writes whose outcome is unknown from the account's timeline (reads X only
                  when something is unresolved)
 
 Observe:
   status         budgets, today's posts, quiet hours and unresolved writes (offline)
   history        the newest ledger rows (offline)
+  approvals      approvals, newest first, with their state (offline)
 
 Maintenance:
   import-posted  import a retired routine's posted.jsonl into the ledger (idempotent); reports

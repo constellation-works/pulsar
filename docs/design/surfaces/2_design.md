@@ -124,6 +124,9 @@ beneath them, `surfaces/cli/toolkit/` holds what they are written against: `cont
 | `pulsar history [--account A] [--limit N]` | none | newest ledger rows with items; `total` and `truncated` (`--limit` 1–100, refused outside) |
 | `pulsar validate PLAN.yaml [--account A]` | none | the publisher's report; needs no credentials |
 | `pulsar publish PLAN.yaml [--account A] [--idempotency-key K] [--caller C] --confirm` | posts | prepares every account's plan, then publishes; without `--confirm` it makes every offline check the live run makes (key, caller, schedule, budget, cap) and sends nothing (`--yes` is a deprecated alias) |
+| `pulsar approve PLAN.yaml [--account A] [--ttl 72h]` | none | prints every post in full, the cost and each account's digest to stderr, then records an approval once the human types the digest's first 8 characters; a stdin that is not a terminal is `interactive_only` and records nothing; refuses a plan changed since it was shown ([Engagement §2](../engagement/2_design.md#2-approvals)) |
+| `pulsar approvals [--account A] [--limit N]` | none | approvals newest first, each with its state |
+| `pulsar revoke ID` | none | revokes an approval; what was published under it stays |
 | `pulsar reconcile [--account A]` | timeline reads only when something is unresolved | settles unknown and stale posts; one failing row is reported and the rest still run |
 | `pulsar import-posted FILE [--account A] --confirm` | `/users/me` only if identity is not cached | imports `posted.jsonl`; without `--confirm` reports only |
 | `pulsar migrate [--confirm]` | none | reports, or with `--confirm` applies, the ledger schema upgrade and the phase 1 credential move |

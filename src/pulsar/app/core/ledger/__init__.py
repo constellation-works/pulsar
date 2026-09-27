@@ -47,7 +47,8 @@ the file.
 Layout: ``records`` (``State`` and row values), ``keys`` (idempotency keys
 and digests), ``text`` (the redaction hook for free text), ``schema`` (DDL,
 migrations, transactions), ``connection`` (read-write and read-only opens),
-``queries`` (reads), ``reads`` (paid provider reads), ``single`` (the legacy
+``queries`` (reads), ``reads`` (paid provider reads), ``approvals`` (human
+approvals of plan digests), ``single`` (the legacy
 single-request API), ``plans`` (the plan API), ``imports`` (historic rows),
 ``interfaces`` (``Ledger``, the protocol callers type against) and ``facade``
 (``SqliteLedger``, its implementation).
@@ -56,6 +57,8 @@ Import from this package, not from the modules.
 
 from __future__ import annotations
 
+from .approvals import ApprovalRecord
+from .approvals import missing as approval_missing
 from .facade import SqliteLedger
 from .interfaces import Ledger
 from .keys import check_key, check_note, default_key, request_digest
@@ -88,6 +91,9 @@ from .text import REDACTED_COLUMNS, redact_strings
 from .usage import Usage
 
 __all__ = [
+    # approvals
+    "ApprovalRecord",
+    "approval_missing",
     # facade
     "SqliteLedger",
     # interfaces

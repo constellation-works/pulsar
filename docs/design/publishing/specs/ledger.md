@@ -74,10 +74,21 @@ One per paid read, written after the read returned: `kind` (`mentions`, `own_pos
 billed), `est_cost_usd`, `complete`, `created_at`. Never what the read returned. A read that
 failed has no row.
 
+## Approvals (`approvals`)
+
+One per `pulsar approve` of a plan for an account: `account_alias`, `plan_digest`,
+`approved_by` (`human:<user>`), `source` (the plan file), `posts`, `est_cost_usd`,
+`created_at`, `expires_at`, `revoked_at`, `used_key`. State, derived in this order:
+`revoked`, `used`, `expired`, else `active`. A claim with `approved` set consumes one inside
+its transaction, after the policy admits it: an approval already used by the same key first
+(a retry or a resumed thread), else any active one, whose `used_key` it then sets. With none
+it raises `approval_required` and writes nothing. A `published` or `skipped` row replays
+without consuming one. Revoking keeps the first `revoked_at`.
+
 ## Free Text
 
 `writes.caller`, `writes.error_message`, `writes.note`, the strings in `writes.meta_json` and
-`items.error_message` and `reads.caller` are written only through one redaction hook (`text.persisted_text`);
+`items.error_message`, `reads.caller`, `approvals.approved_by` and `approvals.source` are written only through one redaction hook (`text.persisted_text`);
 `text.REDACTED_COLUMNS` is the inventory and a test checks it against the schema and every
 writer. Every other TEXT column is structured (keys, digests, ids, codes, states, times).
 

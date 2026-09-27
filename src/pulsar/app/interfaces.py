@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from contextlib import AbstractAsyncContextManager
+from datetime import timedelta
 from pathlib import Path
 from typing import Any, Protocol, Self
 
@@ -124,6 +125,23 @@ class App(Protocol):
         caller: str | None = None,
         confirm: bool = False,
     ) -> Report: ...
+
+    def approve_preview(
+        self, plan: Path, *, account: str | None = None, ttl: timedelta | None = None
+    ) -> Report: ...
+
+    def approve(
+        self,
+        plan: Path,
+        *,
+        expect: Mapping[str, str],
+        account: str | None = None,
+        ttl: timedelta | None = None,
+    ) -> Report: ...
+
+    def approvals(self, *, account: str | None = None, limit: int = ...) -> Report: ...
+
+    def revoke(self, approval_id: int) -> Report: ...
 
     async def reconcile(self, *, account: str | None = None) -> Report: ...
 

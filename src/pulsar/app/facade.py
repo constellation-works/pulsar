@@ -11,6 +11,7 @@ verb was invoked (a missing flag, a missing ``--confirm``) are the front end's.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -21,7 +22,7 @@ from pulsar.app.core.channels.x import PROVIDER
 from pulsar.internal.errors import PulsarError
 from pulsar.internal.fs import Paths
 
-from . import health, ops
+from . import approvals, health, ops
 from .interfaces import Report
 from .login import login
 from .runtime import LocalRuntime
@@ -185,6 +186,36 @@ class LocalApp:
                 caller=caller,
                 confirm=confirm,
             )
+
+    def approve_preview(
+        self, plan: Path, *, account: str | None = None, ttl: timedelta | None = None
+    ) -> Report:
+        return approvals.preview(self.runtime(read_only=True), plan, account=account, ttl=ttl)
+
+    def approve(
+        self,
+        plan: Path,
+        *,
+        expect: Mapping[str, str],
+        account: str | None = None,
+        ttl: timedelta | None = None,
+    ) -> Report:
+        """Record the approval a human confirmed at a terminal (the CLI checks that)."""
+        who = self.environ.get("USER") or self.environ.get("LOGNAME") or "unknown"
+        return approvals.approve(
+            self.runtime(),
+            plan,
+            account=account,
+            ttl=ttl,
+            approved_by=f"human:{who}",
+            expect=expect,
+        )
+
+    def approvals(self, *, account: str | None = None, limit: int = 20) -> Report:
+        return approvals.listing(self.runtime(read_only=True), account=account, limit=limit)
+
+    def revoke(self, approval_id: int) -> Report:
+        return approvals.revoke(self.runtime(), approval_id)
 
     async def reconcile(self, *, account: str | None = None) -> Report:
         async with self.runtime() as rt:

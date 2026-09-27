@@ -19,7 +19,7 @@ from pulsar.internal.errors import (
     PulsarError,
 )
 
-from . import text
+from . import approvals, text
 from .keys import conflict, request_digest
 from .queries import item, load, require, usage, write_id
 from .records import (
@@ -55,6 +55,7 @@ def claim_plan(
     admit: Callable[[Usage], None] | None,
     day_start: datetime,
     month_start: datetime,
+    approved: bool = False,
 ) -> PlanRecord | OutcomeUnknown:
     """``Ledger.claim_plan`` inside an open transaction. An ``OutcomeUnknown``
     is returned, not raised, so the fingerprints it back-fills commit first."""
@@ -63,6 +64,8 @@ def claim_plan(
     if existing is None:
         if admit is not None:
             admit(usage(conn, account.alias, day_start=day_start, month_start=month_start))
+        if approved:
+            approvals.consume(conn, now, account_alias=account.alias, digest=digest, key=key)
         cur = conn.execute(
             "INSERT INTO writes (idempotency_key, tool, provider, account_alias,"
             " account_user_id, account_handle, caller, request_digest, plan_digest,"
@@ -114,6 +117,8 @@ def claim_plan(
                 exclude_write_id=row_id,
             )
         )
+    if approved:
+        approvals.consume(conn, now, account_alias=account.alias, digest=digest, key=key)
     # Pending and failed items (re)take the current intent: its
     # fingerprint and price, and now as their reservation time.
     conn.executemany(

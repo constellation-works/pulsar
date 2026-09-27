@@ -53,6 +53,12 @@ STRUCTURED = {
     "reads.account_alias",
     "reads.since",
     "reads.created_at",
+    "approvals.account_alias",
+    "approvals.plan_digest",
+    "approvals.created_at",
+    "approvals.expires_at",
+    "approvals.revoked_at",
+    "approvals.used_key",
 }
 
 
@@ -60,7 +66,7 @@ def test_every_text_column_is_either_redacted_or_structured(paths):
     SqliteLedger(paths).migrate()
     columns = {
         f"{table}.{name}"
-        for table in ("writes", "items", "reads")
+        for table in ("writes", "items", "reads", "approvals")
         for _, name, kind, *_ in sql(paths, f"PRAGMA table_info({table})")
         if kind == "TEXT"
     }
@@ -98,6 +104,12 @@ def test_every_writer_of_free_text_goes_through_the_hook(paths, marked):
     ledger.record_read(
         kind="mentions", provider="x", account_alias="x:constworks", caller="engager",
         since=datetime(2026, 9, 1, tzinfo=UTC), posts=3, est_cost_usd=0.015, complete=True,
+    )  # fmt: skip
+    # Approvals: who approved and the plan file it came from.
+    ledger.approve(
+        account_alias="x:constworks", digest="d" * 64, approved_by="human:daniel",
+        source="content/plan.yaml", posts=1, est_cost_usd=0.015,
+        expires_at=datetime(2099, 1, 1, tzinfo=UTC),
     )  # fmt: skip
 
     for column in REDACTED_COLUMNS:

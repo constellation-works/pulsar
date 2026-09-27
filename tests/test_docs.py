@@ -109,7 +109,7 @@ assert any(w == "README.md" and s.startswith("pulsar publish") for w, s in COMMA
 )
 
 # Placeholders in docs, by the option that takes them.
-NUMERIC = {"--limit", "--port"}
+NUMERIC = {"--limit", "--port", "revoke"}  # options, or commands whose argument is a number
 
 
 def _argv(span: str) -> list[str] | None:

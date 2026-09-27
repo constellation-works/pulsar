@@ -24,6 +24,8 @@ REDACTED_COLUMNS = (
     "writes.meta_json",
     "items.error_message",
     "reads.caller",
+    "approvals.approved_by",
+    "approvals.source",
 )
 
 

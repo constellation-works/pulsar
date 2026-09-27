@@ -7,6 +7,7 @@ from __future__ import annotations
 from .codes import (
     ACCOUNT_MISMATCH,
     API_ERROR,
+    APPROVAL_REQUIRED,
     AUTH_EXPIRED,
     BUDGET_EXCEEDED,
     CREDENTIALS_UNREADABLE,
@@ -15,6 +16,7 @@ from .codes import (
     FORBIDDEN,
     IDEMPOTENCY_CONFLICT,
     INSECURE_STORAGE,
+    INTERACTIVE_ONLY,
     INTERNAL,
     INVALID_ARGUMENT,
     INVALID_CONFIG,
@@ -37,6 +39,7 @@ __all__ = [
     # codes
     "ACCOUNT_MISMATCH",
     "API_ERROR",
+    "APPROVAL_REQUIRED",
     "AUTH_EXPIRED",
     "BUDGET_EXCEEDED",
     "CREDENTIALS_UNREADABLE",
@@ -45,6 +48,7 @@ __all__ = [
     "FORBIDDEN",
     "IDEMPOTENCY_CONFLICT",
     "INSECURE_STORAGE",
+    "INTERACTIVE_ONLY",
     "INTERNAL",
     "INVALID_ARGUMENT",
     "INVALID_CONFIG",

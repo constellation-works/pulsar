@@ -18,7 +18,8 @@ from typing import Any
 from pulsar.internal.errors import INTERNAL, INVALID_ARGUMENT, OUTCOME_UNKNOWN, PulsarError
 from pulsar.internal.fs import Paths
 
-from . import connection, imports, plans, queries, reads, single
+from . import approvals, connection, imports, plans, queries, reads, single
+from .approvals import ApprovalRecord
 from .keys import check_note
 from .reads import ReadKind
 from .records import AccountRef, ItemIntent, PlanRecord, State, WriteRecord, iso
@@ -204,6 +205,58 @@ class SqliteLedger:
             Usage(spent_day_usd=0.0, spent_month_usd=0.0, posts_day=0),
         )
 
+    def approve(
+        self,
+        *,
+        account_alias: str,
+        digest: str,
+        approved_by: str,
+        source: str | None,
+        posts: int,
+        est_cost_usd: float,
+        expires_at: datetime,
+    ) -> ApprovalRecord:
+        """Record a human's approval of ``digest`` for the account, until
+        ``expires_at``. Only a human-facing command calls this."""
+        until = iso(expires_at)
+        now = self._stamp()
+        if until <= now:
+            raise PulsarError(INVALID_ARGUMENT, "an approval must expire in the future")
+        return self._write(
+            "approve",
+            lambda conn: approvals.record(
+                conn,
+                now,
+                account_alias=account_alias,
+                digest=digest,
+                approved_by=approved_by,
+                source=source,
+                posts=posts,
+                est_cost_usd=est_cost_usd,
+                expires_at=until,
+            ),
+        )
+
+    def approvals_for(self, account_alias: str, digest: str) -> list[ApprovalRecord]:
+        """Every approval of ``digest`` for the account, newest first."""
+        return self._read(lambda conn: approvals.for_digest(conn, account_alias, digest), [])
+
+    def approvals(
+        self, *, account_alias: str | None = None, limit: int = 20
+    ) -> list[ApprovalRecord]:
+        """The newest approvals first, optionally for one account."""
+        return self._read(
+            lambda conn: approvals.listing(conn, account_alias=account_alias, limit=limit), []
+        )
+
+    def revoke_approval(self, approval_id: int) -> ApprovalRecord:
+        now = self._stamp()
+        return self._write("revoke_approval", lambda conn: approvals.revoke(conn, now, approval_id))
+
+    def now(self) -> str:
+        """The ledger's clock, in its stored format: what approval states compare against."""
+        return self._stamp()
+
     def replied_to(self, account_alias: str, post_ids: Sequence[str]) -> set[str]:
         """Which of ``post_ids`` ``account_alias`` has answered with a reply
         that went out or may have (recorded since ledger v3)."""
@@ -360,6 +413,7 @@ class SqliteLedger:
         admit: Callable[[Usage], None] | None,
         day_start: datetime,
         month_start: datetime,
+        approved: bool = False,
     ) -> PlanRecord:
         """Reserve ``key`` for a plan on one account, in one ``BEGIN IMMEDIATE``.
 
@@ -380,6 +434,11 @@ class SqliteLedger:
         Pending items of an open row count toward ``usage`` from the claim
         on (a reservation), so ``admit`` for a second plan sees what a
         thread in progress was admitted with.
+
+        ``approved`` requires a human approval of ``digest`` for the account
+        wherever ``admit`` runs (a new claim, a re-armed row), and marks it
+        used by ``key``; without one it raises ``approval_required`` and
+        writes nothing. A replay of a published row needs none.
         """
         if not items:
             raise PulsarError(
@@ -406,6 +465,7 @@ class SqliteLedger:
                 admit=admit,
                 day_start=day_start,
                 month_start=month_start,
+                approved=approved,
             ),
         )
         if isinstance(result, PulsarError):

@@ -17,8 +17,9 @@ related_artifacts: [ORB-13027, ORB-13028, ORB-13030, ORB-13039]
 # Publishing — Design
 
 The publish path as built: plan, digest, publisher, policy, ledger, reconcile, import. The
-invariants each part must keep are in [specs/](./specs/); approvals and dispatch (phase 4) are
-in [3_vision.md](./3_vision.md).
+invariants each part must keep are in [specs/](./specs/); approvals are in
+[Engagement — Design §2](../engagement/2_design.md#2-approvals), dispatch in
+[3_vision.md](./3_vision.md).
 
 ## 1. Plans
 
@@ -57,8 +58,9 @@ order; the order is the safety argument.
    account the posts as they would go out, weighted length, media facts, estimated cost and the
    digest.
 2. **Admit and claim (one transaction).** The policy is checked against the ledger's usage and
-   the row is claimed under SQLite's write lock (`BEGIN IMMEDIATE`). A refused call writes no
-   row. From here until each post is sent or the row settles, the plan's unsent posts are
+   the row is claimed under SQLite's write lock (`BEGIN IMMEDIATE`). A publish with
+   `require_approval` also consumes a human approval of the digest here. A refused call writes
+   no row. From here until each post is sent or the row settles, the plan's unsent posts are
    reserved against the budget and cap.
 3. **Send item by item.** Each post is marked `submitting` before its media upload and
    re-stamped by compare-and-set (`Ledger.item_sending`) just before the post request leaves. If

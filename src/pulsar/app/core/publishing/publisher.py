@@ -7,9 +7,10 @@ The order is the safety argument:
    under confinement and checked against the provider's rules. Nothing is
    written and nothing is sent until all of it passes.
 2. **Digest** the plan, with the loaded media bytes' hashes, so the key and
-   (in phase 4) the approval are bound to exactly what goes out.
-3. **Claim** the ledger row. Policy (budget, daily cap, quiet hours) runs
-   inside the claim's write transaction, and a claimed plan's unsent posts
+   the approval are bound to exactly what goes out.
+3. **Claim** the ledger row. Policy (budget, daily cap, quiet hours) and, for
+   a caller that requires it, the human approval of the digest run inside
+   the claim's write transaction, and a claimed plan's unsent posts
    are reserved against the budget until they are sent or settled, so two
    concurrent callers cannot both spend the last dollar.
 4. **Publish item by item**. Each post is marked ``submitting`` before its
@@ -48,9 +49,11 @@ from pulsar.app.core.ledger import (
     PUBLISHED,
     SKIPPED,
     AccountRef,
+    ApprovalRecord,
     ItemIntent,
     Ledger,
     PlanRecord,
+    approval_missing,
     check_key,
     default_key,
     is_ambiguous,
@@ -286,21 +289,48 @@ class Publisher:
 
     # -- publish --------------------------------------------------------------
 
-    def preflight(self, prepared: Prepared, *, idempotency_key: str | None = None) -> None:
+    def preflight(
+        self,
+        prepared: Prepared,
+        *,
+        idempotency_key: str | None = None,
+        require_approval: bool = False,
+    ) -> None:
         """The checks ``publish`` makes before claiming, without claiming: when
-        the plan is due and whether the policy admits it now. A dry run calls
-        this so it refuses what the live call would."""
+        the plan is due, whether it is approved (if that is required) and
+        whether the policy admits it now. A dry run calls this so it refuses
+        what the live call would."""
         now = self._now()
         self._check_due(prepared.plan, now)
         key = check_key(idempotency_key) or default_key(prepared.digest, prepared.bound.user_id)
         # Read-only: a dry run neither creates the ledger nor migrates it.
         ledger = self.ledger.reader()
+        already = ledger.get_plan(key)
+        replay = already is not None and already.state in (PUBLISHED, SKIPPED)
+        if require_approval and not replay:  # a replay sends nothing, so needs none
+            self.approval(prepared, key, ledger)
         remaining = self._remaining(prepared, key, ledger)
         tz = self.settings.policy.tz
         day_start, _ = day_window(now, tz)
         month_start, _ = month_window(now, tz)
         usage = ledger.usage(prepared.bound.alias, day_start=day_start, month_start=month_start)
         self._admit(usage, remaining, now)
+
+    def approval(
+        self, prepared: Prepared, key: str | None = None, ledger: Ledger | None = None
+    ) -> ApprovalRecord:
+        """The approval a publish of ``prepared`` under ``key`` would use, or
+        ``approval_required``. Reads only; the claim is what marks it used."""
+        ledger = ledger or self.ledger.reader()
+        key = key or default_key(prepared.digest, prepared.bound.user_id)
+        found = ledger.approvals_for(prepared.bound.alias, prepared.digest)
+        now = ledger.now()
+        for approval in sorted(found, key=lambda a: a.used_key != key):
+            if approval.admits(key, now):
+                return approval
+        raise approval_missing(
+            prepared.bound.alias, prepared.digest, found[0].state(now) if found else None
+        )
 
     @staticmethod
     def _check_due(plan: Plan, now: datetime) -> None:
@@ -346,7 +376,10 @@ class Publisher:
         idempotency_key: str | None = None,
         caller: str,
         tool: str = "publish",
+        require_approval: bool = False,
     ) -> Outcome:
+        """Claim and send ``prepared``. ``require_approval`` publishes only
+        under a human approval of its digest (checked in the claim)."""
         now = self._now()
         plan, bound = prepared.plan, prepared.bound
         self._check_due(plan, now)
@@ -373,6 +406,7 @@ class Publisher:
             admit=admit,
             day_start=day_start,
             month_start=month_start,
+            approved=require_approval,
         )
         if record.state in (PUBLISHED, SKIPPED):
             return Outcome(record=record, replayed=True)

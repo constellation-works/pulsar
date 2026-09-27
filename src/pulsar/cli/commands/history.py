@@ -16,14 +16,14 @@ def register(commands: toolkit.Commands) -> None:
     )
     p.add_argument(
         "--limit",
-        type=_limit,
+        type=parse_limit,
         default=HISTORY_LIMIT_DEFAULT,
         help=f"rows to show, 1..{HISTORY_LIMIT_MAX}; default: {HISTORY_LIMIT_DEFAULT}",
     )
     p.set_defaults(func=_history)
 
 
-def _limit(value: str) -> int:
+def parse_limit(value: str) -> int:
     try:
         limit = int(value)
     except ValueError:

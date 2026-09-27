@@ -89,6 +89,27 @@ def history(payload: Mapping[str, Any]) -> list[Block]:
     ]
 
 
+def approvals(payload: Mapping[str, Any]) -> list[Block]:
+    """``approvals`` lists them; ``approve`` shows the ones it recorded."""
+    rows = _records(payload, "approvals")
+    return [
+        fields(payload, skip=("approvals", NOTE)),
+        Table(
+            [
+                col("ID", "id", number=True),
+                col("ACCOUNT", "account"),
+                col("STATE", "state", semantic=True),
+                col("POSTS", "posts", number=True),
+                col("EXPIRES", "expires_at"),
+                col("BY", "approved_by"),
+                col("DIGEST", "digest"),
+                col("SOURCE", "source", flex=True),
+            ],
+            rows,
+        ),
+    ]
+
+
 POST_COLUMNS = [
     col("#", lambda row: row.get("idx"), number=True),
     col("LENGTH", "length", number=True),

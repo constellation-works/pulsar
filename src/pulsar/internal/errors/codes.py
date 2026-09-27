@@ -27,6 +27,10 @@ BUDGET_EXCEEDED = "budget_exceeded"
 DAILY_CAP = "daily_cap"
 QUIET_HOURS = "quiet_hours"
 NOT_DUE = "not_due"
+# Publishing an agent's draft needs a human approval of its digest, and there is none in force.
+APPROVAL_REQUIRED = "approval_required"
+# The command needs a human at a terminal (stdin is not one).
+INTERACTIVE_ONLY = "interactive_only"
 # A lock another pulsar process held past the deadline; ``detail.holder`` names it.
 LOCK_TIMEOUT = "lock_timeout"
 # A stored credential exists but cannot be read (wrong key, corrupt or newer bundle).

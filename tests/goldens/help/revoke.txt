@@ -1,0 +1,12 @@
+usage: pulsar revoke [-h] [--format MODE] [--json] id
+
+revoke an approval by id; a post already published under it stays
+
+positional arguments:
+  id             the approval's id (`pulsar approvals`)
+
+options:
+  -h, --help     show this help message and exit
+  --format MODE  output: auto (a table on a terminal, tab-separated lines when piped), table or
+                 json; default: $PULSAR_FORMAT, else auto
+  --json         shorthand for --format json

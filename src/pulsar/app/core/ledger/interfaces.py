@@ -9,6 +9,7 @@ from typing import Any, Protocol
 
 from pulsar.internal.errors import PulsarError
 
+from .approvals import ApprovalRecord
 from .reads import ReadKind
 from .records import AccountRef, ItemIntent, PlanRecord, WriteRecord
 from .usage import Usage
@@ -38,6 +39,28 @@ class Ledger(Protocol):
     def usage(self, account_alias: str, *, day_start: datetime, month_start: datetime) -> Usage: ...
 
     def unresolved(self, *, stale_after: timedelta, now: datetime) -> list[PlanRecord]: ...
+
+    def approve(
+        self,
+        *,
+        account_alias: str,
+        digest: str,
+        approved_by: str,
+        source: str | None,
+        posts: int,
+        est_cost_usd: float,
+        expires_at: datetime,
+    ) -> ApprovalRecord: ...
+
+    def approvals_for(self, account_alias: str, digest: str) -> list[ApprovalRecord]: ...
+
+    def approvals(
+        self, *, account_alias: str | None = None, limit: int = 20
+    ) -> list[ApprovalRecord]: ...
+
+    def revoke_approval(self, approval_id: int) -> ApprovalRecord: ...
+
+    def now(self) -> str: ...
 
     def replied_to(self, account_alias: str, post_ids: Sequence[str]) -> set[str]: ...
 
@@ -94,6 +117,7 @@ class Ledger(Protocol):
         admit: Callable[[Usage], None] | None,
         day_start: datetime,
         month_start: datetime,
+        approved: bool = False,
     ) -> PlanRecord: ...
 
     def begin_item(self, key: str, idx: int) -> str: ...

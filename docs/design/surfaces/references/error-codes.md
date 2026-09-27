@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Reference: error codes shared by every pulsar surface"
-last_validated: 2026-09-26
+last_validated: 2026-09-27
 ---
 
 # Reference: Error Codes
@@ -28,6 +28,8 @@ when repeating the identical call later can succeed. Codes are defined in
 | `unsupported` | the provider cannot do what the plan asks (thread, reply, quote) | change the plan |
 | `not_due` | the plan's `not_before` is in the future (`detail.retry_after`) | publish after then |
 | `quiet_hours` / `daily_cap` / `budget_exceeded` | the policy refused; nothing sent, no row (`detail.retry_after`) | wait; `retryable: false` means it can never pass on its own |
+| `approval_required` | a publish that needs a human approval has none in force for this digest and account (`detail: {account, digest, last_approval}`: none, `revoked`, `used`, `expired`); nothing sent, no row | stop; a human reads the plan and runs `pulsar approve` at a terminal |
+| `interactive_only` | `pulsar approve` was run without a terminal on stdin; nothing recorded | a human runs it at a terminal |
 | `idempotency_conflict` | the key was used for a different request, tool or account, or was skipped | use a new key |
 | `outcome_unknown` | the write may have reached the provider | do not retry; reconcile or check the timeline |
 | `duplicate` / `forbidden` / `rate_limited` / `not_found` | the provider's reason, in `detail` | duplicate: change the text; rate_limited: wait |
