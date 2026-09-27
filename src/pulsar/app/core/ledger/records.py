@@ -214,6 +214,7 @@ class ItemIntent:
     text_sha256: str
     fingerprint: str
     est_cost_usd: float
+    reply_to: str | None = None  # the post this one answers (a thread's first item)
 
 
 @dataclass(frozen=True)

@@ -233,7 +233,7 @@ roots = ["~/marketing"]
     assert s.account_config("x:constworks").expected_handle == "constworks"
     assert s.prices_for("x") == Prices(plain_post_usd=0.02, url_post_usd=0.20)
     assert s.prices_for("bsky") == Prices(0.0, 0.0)
-    assert s.prices_for("mastodon") == Prices(0.0, 0.0)
+    assert s.prices_for("mastodon") == Prices(0.0, 0.0, 0.0), "an unpriced provider is free"
     assert s.policy.daily_budget_usd == 0.5 and s.policy.monthly_budget_usd == 4.0
     assert s.policy.max_posts_per_day == 3
     assert s.policy.quiet_hours == (time(23, 0), time(7, 30))

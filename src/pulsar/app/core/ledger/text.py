@@ -23,6 +23,7 @@ REDACTED_COLUMNS = (
     "writes.note",
     "writes.meta_json",
     "items.error_message",
+    "reads.caller",
 )
 
 

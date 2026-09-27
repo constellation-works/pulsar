@@ -318,8 +318,9 @@ class Publisher:
                 text_sha256=hashlib.sha256(p.check.text.encode("utf-8")).hexdigest(),
                 fingerprint=channel.fingerprint(p.check.text),
                 est_cost_usd=p.check.estimated_cost_usd,
+                reply_to=prepared.plan.reply_to if idx == 0 else None,
             )
-            for p in prepared.posts
+            for idx, p in enumerate(prepared.posts)
         ]
 
     def _remaining(

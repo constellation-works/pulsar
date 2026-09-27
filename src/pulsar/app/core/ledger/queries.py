@@ -148,9 +148,10 @@ def usage(
     """Spend over every account and posts for ``account_alias``, since each window start.
 
     Counts committed items (submitting, published, unknown) by their
-    ``submitted_at``, and reserved items (pending, in a row still open) by
-    when they were claimed. ``exclude_write_id`` leaves out the row being
-    re-claimed, whose own items the caller is about to count as planned.
+    ``submitted_at``, reserved items (pending, in a row still open) by
+    when they were claimed, and reads by when they were recorded.
+    ``exclude_write_id`` leaves out the row being re-claimed, whose own
+    items the caller is about to count as planned.
     """
     day, month = iso(day_start), iso(month_start)
     committed = ", ".join("?" for _ in COMMITTED_ITEM_STATES)
@@ -170,8 +171,29 @@ def usage(
         (day, month, day, account_alias, PENDING, *COMMITTED_ITEM_STATES, PENDING,
          *OPEN_ROW_STATES, exclude_write_id, min(day, month)),
     ).fetchone()  # fmt: skip
+    reads = conn.execute(
+        "SELECT COALESCE(SUM(CASE WHEN created_at >= ? THEN est_cost_usd END), 0),"
+        " COALESCE(SUM(CASE WHEN created_at >= ? THEN est_cost_usd END), 0)"
+        " FROM reads WHERE created_at >= ?",
+        (day, month, min(day, month)),
+    ).fetchone()
     return Usage(
-        spent_day_usd=round(float(row[0]), 6),
-        spent_month_usd=round(float(row[1]), 6),
+        spent_day_usd=round(float(row[0]) + float(reads[0]), 6),
+        spent_month_usd=round(float(row[1]) + float(reads[1]), 6),
         posts_day=int(row[2]),
     )
+
+
+def replied_to(conn: sqlite3.Connection, account_alias: str, wanted: Sequence[str]) -> set[str]:
+    """Which of ``wanted`` the account has answered: a reply it published, or
+    one that may have gone out (``submitting``, ``unknown``), counts."""
+    if not wanted:
+        return set()
+    marks = ", ".join("?" for _ in wanted)
+    states = ", ".join("?" for _ in COMMITTED_ITEM_STATES)
+    rows = conn.execute(
+        "SELECT DISTINCT i.reply_to FROM items i JOIN writes w ON w.id = i.write_id"
+        f" WHERE w.account_alias = ? AND i.reply_to IN ({marks}) AND i.state IN ({states})",
+        (account_alias, *wanted, *COMMITTED_ITEM_STATES),
+    ).fetchall()
+    return {str(r[0]) for r in rows}

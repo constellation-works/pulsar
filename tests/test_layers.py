@@ -15,6 +15,7 @@ CORE = {
     "app.core.account",
     "app.core.channels",
     "app.core.channels.x",
+    "app.core.engagement",
     "app.core.ledger",
     "app.core.publishing",
 }
@@ -32,6 +33,8 @@ ALLOWED = {
     "app.core.channels.x": {"app.core.channels"} | INTERNAL,
     "app.core.account": {"app.core.channels"} | INTERNAL,
     "app.core.publishing": {"app.core.account", "app.core.channels", "app.core.ledger"} | INTERNAL,
+    "app.core.engagement": {"app.core.channels", "app.core.ledger", "app.core.publishing"}
+    | INTERNAL,
     "app": CORE | INTERNAL,
     "mcp": {"app"} | INTERNAL,
     "orbit": {"app"} | INTERNAL,

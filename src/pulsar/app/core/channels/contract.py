@@ -15,6 +15,10 @@ Failure semantics every adapter must keep (the ledger depends on them):
 - ``create`` is the only non-idempotent step. ``upload`` creates nothing
   visible, and ``delete`` is idempotent at the provider.
 
+Reads (``mentions``, ``own_posts``) are paid too: they return at most
+``max_posts`` posts and say whether that was everything since ``since``.
+What they return goes to the caller; nothing of it is stored.
+
 ``AuthFlow`` is separate because logins are human-only and differ per
 provider (X: OAuth 2.0 PKCE on a loopback; Mastodon: per-instance app
 registration; Bluesky: DPoP/PAR; LinkedIn: a client secret).
@@ -39,18 +43,24 @@ SUPPORTED_MIME_TYPES = IMAGE_MIME_TYPES | VIDEO_MIME_TYPES
 
 DEFAULT_PLAIN_POST_USD = 0.015
 DEFAULT_URL_POST_USD = 0.20
+# X bills reads per post returned; an estimate until checked on the portal.
+DEFAULT_READ_POST_USD = 0.005
 
 
 @dataclass(frozen=True)
 class Prices:
     plain_post_usd: float = DEFAULT_PLAIN_POST_USD
     url_post_usd: float = DEFAULT_URL_POST_USD
+    read_post_usd: float = DEFAULT_READ_POST_USD
 
     def for_post(self, *, has_url: bool) -> float:
         return self.url_post_usd if has_url else self.plain_post_usd
 
+    def for_read(self, posts: int) -> float:
+        return round(self.read_post_usd * posts, 6)
 
-FREE = Prices(plain_post_usd=0.0, url_post_usd=0.0)
+
+FREE = Prices(plain_post_usd=0.0, url_post_usd=0.0, read_post_usd=0.0)
 
 # -- a post, as a plan names it and a channel checks it.
 
@@ -88,7 +98,8 @@ class Capabilities:
     reply: bool
     quote: bool
     delete: bool
-    metrics: bool
+    mentions: bool  # Channel.mentions works
+    metrics: bool  # Channel.own_posts carries metrics
     media: MediaCapabilities
 
 
@@ -140,6 +151,57 @@ class RecentPosts:
     complete: bool
 
 
+@dataclass(frozen=True)
+class Metrics:
+    """A post's counts as the provider reports them; None where it reports none
+    (non-public counts exist only for the account's own recent posts)."""
+
+    likes: int = 0
+    replies: int = 0
+    reposts: int = 0
+    quotes: int = 0
+    bookmarks: int | None = None
+    impressions: int | None = None
+    url_clicks: int | None = None
+    profile_clicks: int | None = None
+
+
+@dataclass(frozen=True)
+class Mention:
+    """A post by someone else that mentions the account."""
+
+    post_id: str
+    url: str
+    author: str  # handle without "@", lower-case; "" when the provider did not say
+    text: str
+    created_at: datetime
+    conversation_id: str | None
+    reply_to: str | None  # the post it replies to, if it is a reply
+    metrics: Metrics
+
+
+@dataclass(frozen=True)
+class OwnPost:
+    """One of the account's own posts, with its metrics."""
+
+    post_id: str
+    url: str
+    text: str
+    created_at: datetime
+    reply_to: str | None
+    metrics: Metrics
+
+
+@dataclass(frozen=True)
+class Page[T]:
+    posts: tuple[T, ...]
+    # False when ``max_posts`` or the provider cut the listing short.
+    complete: bool
+    # Posts the provider returned, and billed: at least ``len(posts)``, more
+    # when a page's minimum size overshot ``max_posts`` or a post was unreadable.
+    fetched: int
+
+
 class Channel(Protocol):
     """One provider, bound to one account's stored credentials."""
 
@@ -181,6 +243,14 @@ class Channel(Protocol):
     async def delete(self, post_id: str) -> bool: ...
 
     async def recent_posts(self, since: datetime) -> RecentPosts: ...
+
+    async def mentions(self, since: datetime, *, max_posts: int) -> Page[Mention]:
+        """Posts mentioning the account since ``since``, newest first."""
+        ...
+
+    async def own_posts(self, since: datetime, *, max_posts: int) -> Page[OwnPost]:
+        """The account's posts since ``since`` with their metrics, newest first."""
+        ...
 
     async def aclose(self) -> None: ...
 

@@ -18,8 +18,9 @@ from typing import Any
 from pulsar.internal.errors import INTERNAL, INVALID_ARGUMENT, OUTCOME_UNKNOWN, PulsarError
 from pulsar.internal.fs import Paths
 
-from . import connection, imports, plans, queries, single
+from . import connection, imports, plans, queries, reads, single
 from .keys import check_note
+from .reads import ReadKind
 from .records import AccountRef, ItemIntent, PlanRecord, State, WriteRecord, iso
 from .schema import (
     BUSY_TIMEOUT_MS,
@@ -201,6 +202,44 @@ class SqliteLedger:
                 conn, account_alias, day_start=day_start, month_start=month_start
             ),
             Usage(spent_day_usd=0.0, spent_month_usd=0.0, posts_day=0),
+        )
+
+    def replied_to(self, account_alias: str, post_ids: Sequence[str]) -> set[str]:
+        """Which of ``post_ids`` ``account_alias`` has answered with a reply
+        that went out or may have (recorded since ledger v3)."""
+        wanted = [p for p in post_ids if p]
+        return self._read(lambda conn: queries.replied_to(conn, account_alias, wanted), set[str]())
+
+    def record_read(
+        self,
+        *,
+        kind: ReadKind,
+        provider: str,
+        account_alias: str,
+        caller: str | None,
+        since: datetime,
+        posts: int,
+        est_cost_usd: float,
+        complete: bool,
+    ) -> int:
+        """Record a paid read that happened: its kind, count and cost, never
+        what it returned. Counts toward ``usage`` spend from now on."""
+        iso(since)  # a naive window is refused before anything is written
+        now = self._stamp()
+        return self._write(
+            "record_read",
+            lambda conn: reads.record_read(
+                conn,
+                now,
+                kind=kind,
+                provider=provider,
+                account_alias=account_alias,
+                caller=caller,
+                since=since,
+                posts=posts,
+                est_cost_usd=est_cost_usd,
+                complete=complete,
+            ),
         )
 
     def unresolved(self, *, stale_after: timedelta, now: datetime) -> list[PlanRecord]:

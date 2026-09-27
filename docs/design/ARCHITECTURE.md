@@ -31,6 +31,7 @@ src/pulsar/
 │   ├── plugin.py        the Orbit plugin's tools (status, validate, history)
 │   ├── health.py, login.py, settings.py, writelog.py, importer.py
 │   └── core/            the domain; only app uses it
+│       ├── engagement/  reader: budgeted, recorded reads      ─▶ publishing, ledger, channels
 │       ├── publishing/  plan, publisher, policy, media        ─▶ ledger, account, channels
 │       ├── account/     aliases, registry, store, clients    ─▶ channels
 │       ├── ledger/      the write ledger and its usage
@@ -52,8 +53,9 @@ The rules, which `tests/test_layers.py` checks on every `make check`:
   `XClient`); everything else types against the protocols (`App`, `Runtime`, `Ledger`,
   `CredentialStore`, `Channel`, `XApi`).
 - **`core`** never imports `app`. What it needs from the app, it declares as a protocol and is
-  handed (the settings it reads, for example). Inside it, `publishing` stands on `ledger`,
-  `account` and `channels`; `account` on `channels`; `channels` and `ledger` on nothing else
+  handed (the settings it reads, for example). Inside it, `engagement` stands on `publishing`
+  (its policy and `Bound`), `ledger` and `channels`; `publishing` on `ledger`, `account` and
+  `channels`; `account` on `channels`; `channels` and `ledger` on nothing else
   in `core`.
 - **`internal`** imports nothing of pulsar outside `internal`.
 

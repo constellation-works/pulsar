@@ -15,6 +15,9 @@ from pulsar.app.core.channels.contract import (
     Identity,
     LoadedMedia,
     MediaCapabilities,
+    Mention,
+    OwnPost,
+    Page,
     PostCheck,
     PostSpec,
     Prices,
@@ -49,7 +52,8 @@ CAPS = Capabilities(
     reply=True,
     quote=True,
     delete=True,
-    metrics=False,
+    mentions=True,
+    metrics=True,
     media=MediaCapabilities(
         mime_types=frozenset({"image/png"}),
         max_bytes=(("image/png", 1024),),
@@ -75,6 +79,10 @@ class FakeChannel:
     complete: bool = True
     next_id: int = 500
     clock: list[datetime] = field(default_factory=lambda: [NOW])
+    mentioned: list[Mention] = field(default_factory=list)
+    own: list[OwnPost] = field(default_factory=list)
+    read_calls: list[tuple[str, datetime, int]] = field(default_factory=list)
+    read_error: PulsarError | None = None
 
     @property
     def capabilities(self) -> Capabilities:
@@ -135,6 +143,20 @@ class FakeChannel:
     async def recent_posts(self, since: datetime) -> RecentPosts:
         posts = tuple(p for p in reversed(self.timeline) if p.created_at >= since)
         return RecentPosts(posts=posts, complete=self.complete)
+
+    async def mentions(self, since: datetime, *, max_posts: int) -> Page[Mention]:
+        self.read_calls.append(("mentions", since, max_posts))
+        if self.read_error is not None:
+            raise self.read_error
+        found = [m for m in self.mentioned if m.created_at >= since]
+        return Page(tuple(found[:max_posts]), len(found) <= max_posts, len(found))
+
+    async def own_posts(self, since: datetime, *, max_posts: int) -> Page[OwnPost]:
+        self.read_calls.append(("own_posts", since, max_posts))
+        if self.read_error is not None:
+            raise self.read_error
+        found = [p for p in self.own if p.created_at >= since]
+        return Page(tuple(found[:max_posts]), len(found) <= max_posts, len(found))
 
     async def aclose(self) -> None:
         return None

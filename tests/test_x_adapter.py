@@ -23,11 +23,27 @@ def _media(mime: str, data: bytes = PNG_1PX, alt: str = "a chart") -> LoadedMedi
 @pytest.fixture
 async def channel(store, authed, fake_x):
     timeline: list[dict] = []
+    mentions: list[dict] = []
+    users = [{"id": "77", "username": "Alice"}, {"id": "1234567890", "username": "constworks"}]
 
     def handle(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/media/metadata"):
             fake_x.requests.append(request)
             return httpx.Response(200, json={"data": {"associated_metadata": True}})
+        if "/users/1234567890/mentions" in request.url.path:
+            fake_x.requests.append(request)
+            size = int(request.url.params["max_results"])
+            start = int(request.url.params.get("pagination_token") or 0)
+            chunk = mentions[start : start + size]
+            more = len(mentions) > start + size
+            return httpx.Response(
+                200,
+                json={
+                    "data": chunk,
+                    "includes": {"users": users},
+                    "meta": {"next_token": str(start + size)} if more else {},
+                },
+            )
         if "/users/1234567890/tweets" in request.url.path:
             fake_x.requests.append(request)
             token = request.url.params.get("pagination_token")
@@ -40,6 +56,7 @@ async def channel(store, authed, fake_x):
     client = XClient(store, transport=httpx.MockTransport(handle))
     ch = XChannel(client, user_id="1234567890", handle="constworks")
     ch.timeline = timeline  # type: ignore[attr-defined]
+    ch.mentioned = mentions  # type: ignore[attr-defined]
     yield ch
     await ch.aclose()
 
@@ -175,3 +192,97 @@ async def test_an_unreadable_post_makes_the_listing_incomplete(channel, unreadab
     recent = await channel.recent_posts(SINCE)
     assert recent.complete is False
     assert [p.post_id for p in recent.posts] == ["900"]
+
+
+def _mention(i: int, **extra) -> dict:
+    return {
+        "id": str(800 + i),
+        "text": f"@constworks question {i} &amp; more",
+        "author_id": "77",
+        "created_at": f"2026-09-26T02:0{i}:00.000Z",
+        "conversation_id": "700",
+        "public_metrics": {"like_count": i, "reply_count": 0, "retweet_count": 1,
+                           "quote_count": 0},
+        **extra,
+    }  # fmt: skip
+
+
+async def test_mentions_parse_authors_replies_and_metrics(channel, fake_x):
+    channel.mentioned.extend(
+        [_mention(0, referenced_tweets=[{"type": "replied_to", "id": "700"}]), _mention(1)]
+    )
+    page = await channel.mentions(SINCE, max_posts=50)
+    assert page.complete and page.fetched == 2
+    first = page.posts[0]
+    assert first.author == "alice" and first.url == "https://x.com/alice/status/800"
+    assert first.text == "@constworks question 0 & more", "X's entities are unescaped"
+    assert first.reply_to == "700" and first.conversation_id == "700"
+    assert first.metrics.likes == 0 and first.metrics.reposts == 1
+    assert first.metrics.impressions is None, "X gives impressions only to the author"
+    assert page.posts[1].reply_to is None
+    request = fake_x.calls("GET")[0]
+    assert request.url.params["start_time"] == "2026-09-26T01:00:00Z"
+    assert request.url.params["expansions"] == "author_id"
+
+
+async def test_mentions_ask_for_no_more_than_is_wanted(channel, fake_x):
+    channel.mentioned.extend(_mention(i % 10) for i in range(12))
+    page = await channel.mentions(SINCE, max_posts=7)
+    sizes = [int(r.url.params["max_results"]) for r in fake_x.calls("GET")]
+    assert sizes == [7], "one page of exactly what is wanted"
+    assert len(page.posts) == 7 and page.fetched == 7 and not page.complete
+
+
+async def test_a_page_minimum_overshoot_is_billed_but_not_returned(channel, fake_x):
+    channel.mentioned.extend(_mention(i) for i in range(6))
+    page = await channel.mentions(SINCE, max_posts=2)
+    assert [int(r.url.params["max_results"]) for r in fake_x.calls("GET")] == [5]
+    assert len(page.posts) == 2 and page.fetched == 5 and not page.complete
+
+
+async def test_mentions_stop_at_the_page_cap(channel, fake_x, monkeypatch):
+    monkeypatch.setattr("pulsar.app.core.channels.x.adapter.READ_PAGE_MAX", 5)
+    monkeypatch.setattr("pulsar.app.core.channels.x.adapter.READ_MAX_PAGES", 2)
+    channel.mentioned.extend(_mention(i % 10) for i in range(12))
+    page = await channel.mentions(SINCE, max_posts=50)
+    assert len(fake_x.calls("GET")) == 2
+    assert len(page.posts) == 10 and not page.complete
+
+
+async def test_an_unreadable_mention_makes_the_page_incomplete(channel):
+    channel.mentioned.extend([_mention(0), {"id": "801", "text": "no time"}])
+    page = await channel.mentions(SINCE, max_posts=50)
+    assert [m.post_id for m in page.posts] == ["800"]
+    assert not page.complete and page.fetched == 2
+
+
+async def test_own_posts_carry_non_public_metrics(channel, fake_x):
+    channel.timeline.append(
+        {
+            "id": "900",
+            "text": "shipped",
+            "created_at": "2026-09-26T01:30:00.000Z",
+            "public_metrics": {
+                "like_count": 4,
+                "reply_count": 2,
+                "retweet_count": 1,
+                "quote_count": 0,
+                "bookmark_count": 3,
+                "impression_count": 90,
+            },
+            "non_public_metrics": {
+                "impression_count": 120,
+                "url_link_clicks": 5,
+                "user_profile_clicks": 2,
+            },
+        }  # fmt: skip
+    )
+    page = await channel.own_posts(SINCE, max_posts=20)
+    (post,) = page.posts
+    assert post.url == "https://x.com/constworks/status/900"
+    assert post.metrics.impressions == 120, "the author's own count wins"
+    assert (post.metrics.likes, post.metrics.replies, post.metrics.bookmarks) == (4, 2, 3)
+    assert (post.metrics.url_clicks, post.metrics.profile_clicks) == (5, 2)
+    request = fake_x.calls("GET")[0]
+    assert "non_public_metrics" in request.url.params["tweet.fields"]
+    assert request.url.params["exclude"] == "retweets"

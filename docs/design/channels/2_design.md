@@ -36,6 +36,12 @@ provider and no HTTP library.
 | `create(post, …)` | yes | `Published(post_id, url, text)`; the only non-idempotent step |
 | `delete(post_id)` | yes | idempotent at the provider |
 | `recent_posts(since)` | yes | `RecentPosts(posts, complete)`, each with the provider-side fingerprint |
+| `mentions(since, max_posts)` | yes | `Page[Mention]`: others' posts mentioning the account, with author, reply target and public metrics |
+| `own_posts(since, max_posts)` | yes | `Page[OwnPost]`: the account's posts with their metrics |
+
+A `Page` says whether it is `complete` and how many posts the provider `fetched` (and billed),
+which can exceed what it returns. `Capabilities.mentions` and `.metrics` say whether the two
+reads work.
 
 **Failure semantics every adapter keeps** (the ledger depends on them):
 
@@ -90,7 +96,18 @@ post with media gets a trailing `t.co` link, and a reply gets the replied-to acc
 pages, and reports `complete: false` when it stopped at the page cap with more to read. X bills post reads, so reconcile
 calls it only when something is unresolved.
 
-## 7. Concerns & Honest Limitations
+## 7. Reads
+
+`mentions` pages `/users/:id/mentions` and `own_posts` pages `/users/:id/tweets` (retweets
+excluded) from `since`, newest first, up to `max_posts` and three pages. Each page asks for no
+more than is still wanted (X's minimum is 5, its maximum 100), since X bills every post a page
+returns. Mentions expand their authors for handles; text comes back with X's HTML entities
+unescaped. Own posts ask for `non_public_metrics` (impressions, link clicks, profile clicks),
+which X gives only to the author for posts from the last 30 days; public counts (likes,
+replies, reposts, quotes, bookmarks) come with both. A post without an id or a readable
+`created_at` is left out and the page marked incomplete.
+
+## 8. Concerns & Honest Limitations
 
 - **One provider has exercised the contract.** Its shape is inferred from X plus a paper study
   of Bluesky, Mastodon and LinkedIn; the second adapter will find what it missed.
@@ -100,7 +117,8 @@ calls it only when something is unresolved.
   collide. Reconcile compares one account's posts inside a claim's time window and never
   matches an id the ledger already holds, and a collision errs towards "published".
 - **Prices are X's, by hand.** X changes its price list without notice; the configured table
-  is only as right as its last manual check.
+  is only as right as its last manual check. The read price is an estimate, and X may also
+  bill the author records a mentions read expands.
 
 ## Task References
 

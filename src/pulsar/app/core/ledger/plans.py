@@ -73,10 +73,10 @@ def claim_plan(
         )  # fmt: skip
         conn.executemany(
             "INSERT INTO items (write_id, idx, state, text_sha256, fingerprint,"
-            " est_cost_usd, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            " est_cost_usd, reply_to, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 (cur.lastrowid, idx, State.PENDING, it.text_sha256, it.fingerprint,
-                 float(it.est_cost_usd), now)
+                 float(it.est_cost_usd), it.reply_to, now)
                 for idx, it in enumerate(items)
             ],
         )  # fmt: skip

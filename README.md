@@ -6,7 +6,9 @@ checks, a secret scanner, a budget and daily-cap policy, and a ledger written be
 is sent, so a retry never pays for a second post.
 
 It runs three ways over one ledger: an MCP server, the `pulsar` CLI, and an
-[Orbit](https://github.com/constellation-works/orbit) plugin. Reading timelines is not its job.
+[Orbit](https://github.com/constellation-works/orbit) plugin. It reads only what engagement
+needs (the account's mentions and its own posts' metrics), on the same budget, and never
+stores what it reads.
 
 ## Install
 

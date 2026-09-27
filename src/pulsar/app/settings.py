@@ -9,6 +9,7 @@ expected_handle = "constworks"         # the bound handle must match, else accou
 [prices.x]                             # USD per post; price lists change, so they are config
 plain_post_usd = 0.015
 url_post_usd = 0.20
+read_post_usd = 0.005                  # per post a read returns (mentions, metrics)
 
 [policy]                               # enforced before any network call
 daily_budget_usd = 1.0                 # 0 stops all paid publishing
@@ -55,6 +56,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pulsar.app.core.account import AccountConfig, normalize_alias
 from pulsar.app.core.channels.contract import (
     DEFAULT_PLAIN_POST_USD,
+    DEFAULT_READ_POST_USD,
     DEFAULT_URL_POST_USD,
     FREE,
     Prices,
@@ -114,7 +116,9 @@ def _fail(message: str, key: str | None = None) -> _Invalid:
     return _Invalid(message, key)
 
 
-def _table(data: dict[str, Any], key: str, allowed: set[str] | None, where: str) -> dict[str, Any]:
+def _table(
+    data: dict[str, Any], key: str, allowed: set[str] | frozenset[str] | None, where: str
+) -> dict[str, Any]:
     section = as_object(data.get(key, {}))
     if section is None:
         raise _fail(f"[{where}] must be a table")
@@ -143,12 +147,18 @@ def _integer(section: dict[str, Any], key: str, default: int, where: str, maximu
     return value
 
 
+PRICE_KEYS = frozenset({"plain_post_usd", "url_post_usd", "read_post_usd"})
+
+
 def _prices(section: dict[str, Any], where: str) -> Prices:
     return Prices(
         plain_post_usd=_number(
             section, "plain_post_usd", DEFAULT_PLAIN_POST_USD, where, MAX_PRICE_USD
         ),
         url_post_usd=_number(section, "url_post_usd", DEFAULT_URL_POST_USD, where, MAX_PRICE_USD),
+        read_post_usd=_number(
+            section, "read_post_usd", DEFAULT_READ_POST_USD, where, MAX_PRICE_USD
+        ),
     )
 
 
@@ -156,14 +166,14 @@ def _parse_prices(data: dict[str, Any]) -> tuple[tuple[str, Prices], ...]:
     section = _table(data, "prices", None, "prices")
     flat = {k: v for k, v in section.items() if not isinstance(v, dict)}
     nested = [k for k in section if as_object(section[k]) is not None]
-    unknown_flat = set(flat) - {"plain_post_usd", "url_post_usd"}
+    unknown_flat = set(flat) - PRICE_KEYS
     if unknown_flat:
         raise _fail(f"unknown keys in [prices]: {sorted(unknown_flat)}")
     if flat and "x" in nested:
         raise _fail("give X's prices either flat under [prices] or in [prices.x], not both")
     table: dict[str, Prices] = {"x": _prices(flat, "prices")}
     for provider in nested:
-        sub = _table(section, provider, {"plain_post_usd", "url_post_usd"}, f"prices.{provider}")
+        sub = _table(section, provider, PRICE_KEYS, f"prices.{provider}")
         table[provider.lower()] = _prices(sub, f"prices.{provider}")
     return tuple(sorted(table.items()))
 

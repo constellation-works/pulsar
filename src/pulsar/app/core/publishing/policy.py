@@ -8,6 +8,9 @@ reports. ``Policy.check`` raises the first rule that fails, in this order:
 3. ``budget_exceeded`` — today's spend (all accounts) plus this plan exceeds
    the daily budget; then the same for the calendar month.
 
+Reads are checked with ``Policy.check_read``: the budgets only. A read is
+not a post, so neither quiet hours nor the post cap apply to it.
+
 Limits are inclusive: a plan that lands exactly on a cap or budget passes.
 Money is compared as ``Decimal`` rounded to 6 places, so ``0.015 * N`` sums
 compare as written. A budget of 0 blocks every paid plan and a cap of 0
@@ -184,6 +187,19 @@ class Policy:
             )
         self._check_quiet(now)
         self._check_cap(usage, planned_posts, now)
+        self._check_budgets(usage, planned_cost_usd, now)
+
+    def check_read(self, *, usage: Usage, planned_cost_usd: float, now: datetime) -> None:
+        """Raise ``budget_exceeded`` if a read costing up to ``planned_cost_usd``
+        would overspend today's or this month's budget."""
+        _require_aware(now)
+        if not math.isfinite(planned_cost_usd) or planned_cost_usd < 0:
+            raise ValueError(
+                f"planned_cost_usd must be a finite number >= 0, got {planned_cost_usd}"
+            )
+        self._check_budgets(usage, planned_cost_usd, now)
+
+    def _check_budgets(self, usage: Usage, planned_cost_usd: float, now: datetime) -> None:
         planned = _usd(planned_cost_usd)
         if planned == 0:
             return

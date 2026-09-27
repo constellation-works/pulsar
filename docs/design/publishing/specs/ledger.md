@@ -63,13 +63,21 @@ post), `attempts`, `created_at` / `updated_at`.
 ## Items (`items`)
 
 One per post of a plan row's thread: `idx`, `state`, `text_sha256`, `fingerprint`,
-`est_cost_usd`, `post_id` / `url`, `media_ids_json`, the error columns, `submitted_at`. A legacy
+`est_cost_usd`, `post_id` / `url`, `media_ids_json`, the error columns, `submitted_at`, and
+`reply_to` (the post a thread's first item answers; empty on rows from before v3). A legacy
 `create_post` row mirrors itself as one item, so every post counts toward the daily cap.
+
+## Reads (`reads`)
+
+One per paid read, written after the read returned: `kind` (`mentions`, `own_posts`),
+`provider`, `account_alias`, `caller`, `since`, `posts` (what the provider returned and
+billed), `est_cost_usd`, `complete`, `created_at`. Never what the read returned. A read that
+failed has no row.
 
 ## Free Text
 
 `writes.caller`, `writes.error_message`, `writes.note`, the strings in `writes.meta_json` and
-`items.error_message` are written only through one redaction hook (`text.persisted_text`);
+`items.error_message` and `reads.caller` are written only through one redaction hook (`text.persisted_text`);
 `text.REDACTED_COLUMNS` is the inventory and a test checks it against the schema and every
 writer. Every other TEXT column is structured (keys, digests, ids, codes, states, times).
 
@@ -116,8 +124,9 @@ Invariants:
 
 - **Spend**: the sum of `est_cost_usd` over items that are `submitting`, `published` or
   `unknown` (counted from `submitted_at`), plus the `pending` items of rows still being
-  published (reserved, counted from when they were claimed), across all accounts, since the
-  start of the policy day and month.
+  published (reserved, counted from when they were claimed), plus every read's
+  `est_cost_usd` (counted from `created_at`), across all accounts, since the start of the
+  policy day and month.
 - **Posts today**: the same items, for one account.
 - Free: `failed` and `skipped` items, and the unsent items of a settled row (`partial`,
   `failed`).
@@ -125,6 +134,8 @@ Invariants:
 - `history(limit, account_alias)` lists rows newest first; `count(account_alias)` is the total
   it would match without the limit. `last_published(alias)` is the account's newest `published`
   row, filtered in SQL before the limit.
+- `replied_to(alias, post_ids)`: which of the posts the account answered with a reply that is
+  `submitting`, `published` or `unknown` (a reply that may have gone out counts as an answer).
 
 ## Schema Versions
 
@@ -132,6 +143,9 @@ Invariants:
 - **v2**: providers, aliases, plans and items. A v1 file migrates in place: `writes` is rebuilt
   to widen its states, old rows get provider `x` and alias `x:<handle>`, and each
   `create_post` row gains its one item (cost 0, no fingerprint).
+- **v3**: engagement. `items.reply_to`, the `reads` table, and the `approvals` table (one
+  human approval of a plan digest for an account, with its expiry, revocation and the key that
+  used it).
 - Shipped migrations are never edited; a change is a new one appended to `schema.MIGRATIONS`.
   A new file and one migrated from v1 end with identical schemas (tested).
 

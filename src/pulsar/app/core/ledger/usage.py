@@ -1,8 +1,9 @@
 """What the ledger reports to policy: money and posts already committed.
 
 "Committed" means a post that is in flight, published, or of unknown
-outcome — anything that may have cost money. Failed and skipped posts are
-free. Windows are the policy timezone's current day and calendar month.
+outcome — anything that may have cost money — and every recorded read.
+Failed and skipped posts are free. Reads spend money but are not posts.
+Windows are the policy timezone's current day and calendar month.
 """
 
 from __future__ import annotations

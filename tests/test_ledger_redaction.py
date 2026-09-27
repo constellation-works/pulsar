@@ -47,6 +47,12 @@ STRUCTURED = {
     "items.error_code",
     "items.submitted_at",
     "items.updated_at",
+    "items.reply_to",
+    "reads.kind",
+    "reads.provider",
+    "reads.account_alias",
+    "reads.since",
+    "reads.created_at",
 }
 
 
@@ -54,7 +60,7 @@ def test_every_text_column_is_either_redacted_or_structured(paths):
     SqliteLedger(paths).migrate()
     columns = {
         f"{table}.{name}"
-        for table in ("writes", "items")
+        for table in ("writes", "items", "reads")
         for _, name, kind, *_ in sql(paths, f"PRAGMA table_info({table})")
         if kind == "TEXT"
     }
@@ -87,6 +93,11 @@ def test_every_writer_of_free_text_goes_through_the_hook(paths, marked):
         key="i", tool="import:posted.jsonl", digest="d", provider="x", account=ACCT,
         caller="importer", created_at=datetime(2026, 9, 1, tzinfo=UTC), post_id="1", url="u",
         text_sha256=None, note="historic", meta={"superseded_note": "old words"},
+    )  # fmt: skip
+    # Reads: caller.
+    ledger.record_read(
+        kind="mentions", provider="x", account_alias="x:constworks", caller="engager",
+        since=datetime(2026, 9, 1, tzinfo=UTC), posts=3, est_cost_usd=0.015, complete=True,
     )  # fmt: skip
 
     for column in REDACTED_COLUMNS:

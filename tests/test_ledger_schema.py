@@ -34,7 +34,7 @@ def test_v1_database_migrates_in_place(paths):
     assert ledger.count() == len(before)
 
     assert sql(paths, "PRAGMA user_version") == [(SCHEMA_VERSION,)]
-    assert SCHEMA_VERSION == 2
+    assert SCHEMA_VERSION == 3
     names = {r[1] for r in schema_of(paths)}
     assert {"writes_state", "writes_post_id", "writes_account", "writes_alias"} <= names
     assert {"items", "items_state", "items_submitted"} <= names

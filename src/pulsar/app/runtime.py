@@ -33,6 +33,7 @@ from pulsar.app.core.account import (
 )
 from pulsar.app.core.channels.contract import Identity
 from pulsar.app.core.channels.x import XChannel, XClient
+from pulsar.app.core.engagement import Reader
 from pulsar.app.core.ledger import SqliteLedger
 from pulsar.app.core.publishing import Bound, Plan, Publisher
 from pulsar.internal.errors import (
@@ -139,6 +140,7 @@ class LocalRuntime:
             # the Orbit workspace.
             media_base=media_base,
         )
+        self.reader = Reader(ledger=self.ledger, settings=self.settings)
         self._transport = transport
         self._client_kwargs = client_kwargs
         self._clients: dict[str, XClient] = {}

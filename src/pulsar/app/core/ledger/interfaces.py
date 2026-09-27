@@ -9,6 +9,7 @@ from typing import Any, Protocol
 
 from pulsar.internal.errors import PulsarError
 
+from .reads import ReadKind
 from .records import AccountRef, ItemIntent, PlanRecord, WriteRecord
 from .usage import Usage
 
@@ -37,6 +38,21 @@ class Ledger(Protocol):
     def usage(self, account_alias: str, *, day_start: datetime, month_start: datetime) -> Usage: ...
 
     def unresolved(self, *, stale_after: timedelta, now: datetime) -> list[PlanRecord]: ...
+
+    def replied_to(self, account_alias: str, post_ids: Sequence[str]) -> set[str]: ...
+
+    def record_read(
+        self,
+        *,
+        kind: ReadKind,
+        provider: str,
+        account_alias: str,
+        caller: str | None,
+        since: datetime,
+        posts: int,
+        est_cost_usd: float,
+        complete: bool,
+    ) -> int: ...
 
     def claim(
         self,

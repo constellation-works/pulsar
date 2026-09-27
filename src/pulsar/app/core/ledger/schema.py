@@ -133,8 +133,46 @@ SELECT
 FROM writes WHERE tool = 'create_post';
 """
 
+# v3: engagement. ``items.reply_to`` is the post a thread's first item
+# answers (earlier rows have none), so a mention can be told apart as
+# answered. ``reads`` records each paid read: what, for whom, how many posts
+# and what it cost, never what came back. ``approvals`` records a human's yes
+# to one plan digest for one account, until it expires or is revoked;
+# ``used_key`` is the write that published under it.
+SCHEMA_V3 = """
+ALTER TABLE items ADD COLUMN reply_to TEXT;
+CREATE INDEX items_reply_to ON items (reply_to);
+CREATE TABLE reads (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind            TEXT    NOT NULL CHECK (kind IN ('mentions', 'own_posts')),
+    provider        TEXT    NOT NULL,
+    account_alias   TEXT    NOT NULL,
+    caller          TEXT,
+    since           TEXT    NOT NULL,
+    posts           INTEGER NOT NULL,
+    est_cost_usd    REAL    NOT NULL,
+    complete        INTEGER NOT NULL,
+    created_at      TEXT    NOT NULL
+);
+CREATE INDEX reads_created ON reads (created_at);
+CREATE TABLE approvals (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_alias   TEXT    NOT NULL,
+    plan_digest     TEXT    NOT NULL,
+    approved_by     TEXT    NOT NULL,
+    source          TEXT,
+    posts           INTEGER NOT NULL,
+    est_cost_usd    REAL    NOT NULL,
+    created_at      TEXT    NOT NULL,
+    expires_at      TEXT    NOT NULL,
+    revoked_at      TEXT,
+    used_key        TEXT
+);
+CREATE INDEX approvals_digest ON approvals (account_alias, plan_digest);
+"""
+
 # user_version N -> the script that brings a version N-1 database to N.
-MIGRATIONS: dict[int, str] = {1: SCHEMA_V1, 2: SCHEMA_V2}
+MIGRATIONS: dict[int, str] = {1: SCHEMA_V1, 2: SCHEMA_V2, 3: SCHEMA_V3}
 SCHEMA_VERSION = max(MIGRATIONS)
 
 

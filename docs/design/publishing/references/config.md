@@ -25,6 +25,7 @@ expected_handle = "constworks"       # bound handle must match, else account_mis
 [prices.x]                           # USD per post: estimated_cost_usd and budgets
 plain_post_usd = 0.015               # X changes its prices; verify on the developer portal
 url_post_usd = 0.20                  # (flat plain_post_usd/url_post_usd under [prices] = X)
+read_post_usd = 0.005                # per post a read returns (mentions, metrics); an estimate
 
 [policy]                             # checked before any network call
 daily_budget_usd = 1.0               # all accounts; 0 stops all paid publishing
@@ -42,6 +43,7 @@ roots = ["~/workspace/constellation/marketing"]   # default: none (path uploads 
 | `default_account` | none: the only bound account | [Accounts — Design §3](../../accounts/2_design.md) |
 | `accounts.<alias>.expected_handle` | none: the alias's handle only | [Accounts — Design §3](../../accounts/2_design.md) |
 | `prices.<provider>.plain_post_usd`, `url_post_usd` | X: 0.015 / 0.20; others: 0 | [specs/policy.md](../specs/policy.md) |
+| `prices.<provider>.read_post_usd` | X: 0.005; others: 0 | [Engagement — Design §1](../../engagement/2_design.md#1-reads) |
 | `policy.*` | as above, no quiet hours | [specs/policy.md](../specs/policy.md) |
 | `media.roots` | none | [specs/media-confinement.md](../specs/media-confinement.md) |
 
@@ -50,7 +52,7 @@ to catch a typo at load rather than let it through a budget:
 
 | Key | Type | Allowed |
 |---|---|---|
-| `prices.<provider>.plain_post_usd`, `url_post_usd` | number | 0 to 100 |
+| `prices.<provider>.plain_post_usd`, `url_post_usd`, `read_post_usd` | number | 0 to 100 |
 | `policy.daily_budget_usd` | number | 0 to 10,000 |
 | `policy.monthly_budget_usd` | number | 0 to 100,000 |
 | `policy.max_posts_per_day` | integer (not `5.0`) | 0 to 10,000 |

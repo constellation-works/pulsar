@@ -14,6 +14,7 @@ from typing import Any, Protocol, Self
 
 from pulsar.app.core.account import Account, AccountRegistry
 from pulsar.app.core.channels.x import XApi
+from pulsar.app.core.engagement import Reader
 from pulsar.app.core.ledger import Ledger
 from pulsar.app.core.publishing import Bound, Plan, Publisher
 from pulsar.internal.fs import Paths
@@ -41,6 +42,9 @@ class Runtime(Protocol):
 
     @property
     def publisher(self) -> Publisher: ...
+
+    @property
+    def reader(self) -> Reader: ...
 
     def caller(self, explicit: str | None, default: str = "unknown") -> str: ...
 

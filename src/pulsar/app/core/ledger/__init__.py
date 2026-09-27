@@ -33,7 +33,7 @@ share one home. ``PRAGMA user_version`` carries the schema version and
 ``schema.MIGRATIONS`` brings an older file up to date in place.
 
 The ledger stores hashes and ids only: never post text, media bytes or
-credentials.
+credentials, and never what a read returned.
 
 ``writes.jsonl`` is an export: every terminal transition appends one line
 there through ``WriteLog.export``. The ledger is the source of truth.
@@ -47,9 +47,10 @@ the file.
 Layout: ``records`` (``State`` and row values), ``keys`` (idempotency keys
 and digests), ``text`` (the redaction hook for free text), ``schema`` (DDL,
 migrations, transactions), ``connection`` (read-write and read-only opens),
-``queries`` (reads), ``single`` (the legacy single-request API), ``plans``
-(the plan API), ``imports`` (historic rows), ``interfaces`` (``Ledger``, the
-protocol callers type against) and ``facade`` (``SqliteLedger``, its implementation).
+``queries`` (reads), ``reads`` (paid provider reads), ``single`` (the legacy
+single-request API), ``plans`` (the plan API), ``imports`` (historic rows),
+``interfaces`` (``Ledger``, the protocol callers type against) and ``facade``
+(``SqliteLedger``, its implementation).
 Import from this package, not from the modules.
 """
 
@@ -58,6 +59,7 @@ from __future__ import annotations
 from .facade import SqliteLedger
 from .interfaces import Ledger
 from .keys import check_key, check_note, default_key, request_digest
+from .reads import ReadKind
 from .records import (
     COMMITTED_ITEM_STATES,
     FAILED,
@@ -95,6 +97,8 @@ __all__ = [
     "check_note",
     "default_key",
     "request_digest",
+    # reads
+    "ReadKind",
     # records
     "COMMITTED_ITEM_STATES",
     "FAILED",
