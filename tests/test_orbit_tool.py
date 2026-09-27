@@ -458,3 +458,7 @@ def test_an_auto_task_may_call_only_what_it_requires(path):
     assert "publish" not in required, "an auto-task only drafts; a human-promoted task publishes"
     assert paid - {"publish"} <= required
     assert "never publish" in template["description"].lower()
+    # Its commits land on the main branch and its publish task only posts: neither leaves a diff.
+    assert "no-diff-expected" in template["tags"]
+    for spawned in re.findall(r"tags `\[([^\]]*)\]`", template["description"]):
+        assert "no-diff-expected" in spawned.split(", ")

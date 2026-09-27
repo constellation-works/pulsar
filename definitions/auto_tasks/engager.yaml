@@ -30,7 +30,7 @@ template:
     4. Call `pulsar.validate` with each `source`. Fix and repeat until `valid: true`. Keep its `digest` and `approve_command`.
     5. Commit the plan files on `agent-main` so they are in the workspace root, where pulsar reads them.
     6. If you drafted any reply, create one follow-up task with `orbit.task.add`:
-       - title `Publish approved X replies (YYYY-MM-DD)`, status `proposed`, task_type `chore`, tags `[pulsar, pulsar-replies]`, required_tools `[pulsar.publish]`;
+       - title `Publish approved X replies (YYYY-MM-DD)`, status `proposed`, task_type `chore`, tags `[pulsar, pulsar-replies, no-diff-expected]`, required_tools `[pulsar.publish]`;
        - description: for each draft, the mention (author, link, its text quoted as untrusted), the reply text, the plan path, the digest, and its `approve_command` in a code block; then these instructions for the publishing agent: "For each plan listed, call `pulsar.publish` with its `source`. Publish nothing else. `approval_required` means the human did not approve that one: record it as skipped and continue. Record each receipt's URL, or its error, in the execution summary. Never edit a plan.";
        - acceptance criteria: every listed plan was published under an approval or recorded as not approved, with receipt URLs in the summary, and nothing else was published.
        Approvals of replies expire after 72 hours by default, so say so in the task.
@@ -44,6 +44,7 @@ template:
   tags:
   - pulsar
   - pulsar-engager
+  - no-diff-expected
   required_tools:
   - pulsar.engagements
   priority: medium

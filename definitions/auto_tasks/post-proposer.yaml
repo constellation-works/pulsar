@@ -30,7 +30,7 @@ template:
        Leave `not_before` out: the human's promotion of the publishing task is the timing.
     4. Call `pulsar.validate` with each `source`; fix until `valid: true`. Keep each `digest`, `estimated_cost_usd` and `approve_command`.
     5. Commit on `agent-main` so the plans are in the workspace root, where pulsar reads them.
-    6. Create one follow-up task with `orbit.task.add`: title `Publish approved X posts (week of YYYY-MM-DD)`, status `proposed`, task_type `chore`, tags `[pulsar, pulsar-posts]`, required_tools `[pulsar.publish]`. Its description lists each draft's exact text, alt text, sources, cost, plan path, digest and `approve_command`, the performance evidence behind it, and these instructions for the publishing agent: "For each plan listed, call `pulsar.publish` with its `source`, one at a time in the order listed. Publish nothing else. `approval_required` means that one was not approved: record it as skipped and continue. Record each receipt's URL, or its error, in the execution summary and in the plan's content record. Never edit a plan." Acceptance criteria: every listed plan was published under an approval or recorded as not approved, with receipts recorded, and nothing else was published.
+    6. Create one follow-up task with `orbit.task.add`: title `Publish approved X posts (week of YYYY-MM-DD)`, status `proposed`, task_type `chore`, tags `[pulsar, pulsar-posts, no-diff-expected]`, required_tools `[pulsar.publish]`. Its description lists each draft's exact text, alt text, sources, cost, plan path, digest and `approve_command`, the performance evidence behind it, and these instructions for the publishing agent: "For each plan listed, call `pulsar.publish` with its `source`, one at a time in the order listed. Publish nothing else. `approval_required` means that one was not approved: record it as skipped and continue. Record each receipt's URL, or its error, in the execution summary and in the plan's content record. Never edit a plan." Acceptance criteria: every listed plan was published under an approval or recorded as not approved, with receipts recorded, and nothing else was published.
     7. Write the execution summary: the metrics read (cost, completeness), what you concluded, the drafts, and the follow-up task id.
   acceptance_criteria:
   - pulsar.metrics was called once for at most 7 days and 20 posts, and the execution summary states what the numbers show and what they do not.
@@ -41,6 +41,7 @@ template:
   tags:
   - pulsar
   - pulsar-post-proposer
+  - no-diff-expected
   required_tools:
   - pulsar.metrics
   priority: medium
