@@ -15,7 +15,7 @@ import pytest
 from mcp.client._memory import InMemoryTransport
 from mcp.client.session import ClientSession
 
-from pulsar.accounts import (
+from pulsar.app.core.account import (
     LEGACY_NEEDS_ALIAS,
     Account,
     AccountRegistry,
@@ -24,11 +24,12 @@ from pulsar.accounts import (
     canonical_alias,
     require_expected,
 )
-from pulsar.channels import Identity
-from pulsar.channels.x import XClient, complete_login
-from pulsar.errors import PulsarError
-from pulsar.home import AccountConfig, Settings, account_slug, alias_from_slug
-from pulsar.surfaces.mcp import build_server
+from pulsar.app.core.channels.contract import Identity
+from pulsar.app.core.channels.x import XClient, complete_login
+from pulsar.app.settings import AccountConfig, Settings
+from pulsar.internal.errors import PulsarError
+from pulsar.internal.fs import account_slug, alias_from_slug
+from pulsar.mcp import build_server
 
 from .conftest import ALIAS, REFRESH, ROTATED_ACCESS, SECRETS, make_runtime, register
 from .lock_probe import blocked_on_lock
@@ -626,10 +627,10 @@ def test_legacy_status_of_a_missing_home_creates_nothing(paths):
 
 
 def test_the_accounts_lock_times_out_naming_its_holder(paths, bundle, monkeypatch):
-    from pulsar.home import hold_lock
+    from pulsar.internal.fs import hold_lock
 
     register(paths, bundle)
-    monkeypatch.setattr("pulsar.accounts.registry.ACCOUNTS_LOCK_WAIT_SECONDS", 0.2)
+    monkeypatch.setattr("pulsar.app.core.account.registry.ACCOUNTS_LOCK_WAIT_SECONDS", 0.2)
     held, release = threading.Event(), threading.Event()
 
     def holder():

@@ -10,8 +10,9 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-from pulsar.app import LocalApp, configure_logging, default_paths
-from pulsar.surfaces.cli import run
+from pulsar.app.facade import LocalApp
+from pulsar.app.runtime import configure_logging, default_paths
+from pulsar.cli.main import run
 
 
 def main(argv: Sequence[str] | None = None) -> int:

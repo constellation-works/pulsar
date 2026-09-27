@@ -124,7 +124,7 @@ Either way the entry names a real alternative and a non-trivial `Cost:`. Format:
 ## 6. Links and Task IDs
 
 - Relative links only, with a `./` or `../` prefix. Code links go from the doc to the file
-  (`../../../src/pulsar/publishing/publisher.py`).
+  (`../../../src/pulsar/app/core/publishing/publisher.py`).
 - Task ids are plain bracketed text, never links: `[ORB-13028]`. pulsar's tasks live in
   Orbit workspace `ws_pulsar` on the posting host; Orbit-side gaps live in `ws_orbit`. Both use
   `ORB-` ids.

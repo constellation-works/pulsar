@@ -26,24 +26,13 @@
 
 ## Conventions
 
-- **Inject dependencies, or move the module down.** A module gets what it
-  depends on as an argument: a class takes it in its constructor, a function
-  takes it as a parameter. It does not import or build it for itself. For
-  example, `pulsar.main` builds the `App` and passes it to `pulsar.surfaces.cli.run`.
-  If a module is used by only one higher module, move it beneath that module
-  instead: `cli/toolkit/` sits under `cli/` because only the CLI uses it.
-- **Type an injected dependency by its interface.** The parameter's type is a
-  `typing.Protocol` named for the role (`Ledger`, `CredentialStore`,
-  `Channel`), not the class that implements it. The implementation satisfies
-  the protocol structurally and is named for how it does the job
-  (`SqliteLedger`, `FernetFileStore`, `XChannel`). Only the code that builds
-  the dependency names the implementation.
-- **Each package exposes what others use in its `__init__.py`.** Everything
-  imported from outside a package is re-exported in its `__init__.py` and
-  listed in `__all__`. Callers import the package, not its leaf files: for
-  example, `from pulsar.surfaces.cli import toolkit`, then `toolkit.notice`.
-- **A package holds only leaf modules that belong to the group it is named
-  for.** `commands/` holds commands. What the commands stand on is not a
-  command, so it lives in `toolkit/`. A flat, generic package that holds
-  everything, such as `core`, is the thing to avoid: split it into packages
-  named for what they hold.
+- The tree is the architecture; [ARCHITECTURE.md](docs/design/ARCHITECTURE.md) has it and
+  `tests/test_layers.py` enforces it. Front ends (`cli`, `mcp`, `orbit`) use `app` and
+  `internal`, and reach `app/core` only through `app/exports.py`. `core` never imports
+  `app`; `internal` imports nothing above it.
+- Inject dependencies: a class takes them in its constructor, a function as parameters.
+  Only the entry point reads the process (environment, cwd, `$HOME`), and only `app/runtime.py`
+  and `app/facade.py` build the implementations. Type an injected dependency by a
+  `typing.Protocol` named for its role (`Ledger`, `CredentialStore`, `Channel`).
+- A package with subpackages keeps its `__init__.py` to a docstring, so importing one module
+  beneath it stays cheap. A package without subpackages may re-export its public names there.

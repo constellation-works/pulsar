@@ -9,7 +9,7 @@ doc_role: vision
 type: design
 summary: Drafts, approvals bound to the digest, standing policies for routines, and a dispatch routine with no model in the publish path.
 tags: [publishing, approvals, drafts, dispatch, routines]
-paths: ["src/pulsar/publishing/publisher.py", "src/pulsar/ledger/**"]
+paths: ["src/pulsar/app/core/publishing/publisher.py", "src/pulsar/app/core/ledger/**"]
 related_features: [surfaces, channels]
 related_artifacts: [ORB-13030, ORB-13115]
 ---

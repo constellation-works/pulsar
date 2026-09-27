@@ -1,5 +1,5 @@
 import sys
 
-from pulsar.main import main
+from .main import main
 
 sys.exit(main())

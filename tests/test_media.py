@@ -10,8 +10,9 @@ from pathlib import Path
 
 import pytest
 
-from pulsar.errors import PulsarError
-from pulsar.publishing import MAX_IMAGE_BYTES, MAX_VIDEO_BYTES, load_media, media, sniff_mime
+from pulsar.app.core.channels.contract import MAX_IMAGE_BYTES, MAX_VIDEO_BYTES
+from pulsar.app.core.publishing import load_media, media, sniff_mime
+from pulsar.internal.errors import PulsarError
 
 from .media_samples import GIF, JPEG, MP4, PEM_KEY, PNG, QUICKTIME, WEBP
 

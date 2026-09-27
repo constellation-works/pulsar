@@ -22,7 +22,7 @@ import time
 from pathlib import Path
 from typing import Any, Literal, assert_never
 
-from pulsar.accounts import (
+from pulsar.app.core.account import (
     ACTIVE,
     REAUTH_REQUIRED,
     REVOKED,
@@ -33,11 +33,11 @@ from pulsar.accounts import (
     home_command,
     login_command,
 )
-from pulsar.channels.x import REFRESH_AHEAD_SECONDS, load_client_id
-from pulsar.errors import AUTH_EXPIRED, PulsarError
-from pulsar.home import Settings
+from pulsar.app.core.channels.x import REFRESH_AHEAD_SECONDS, load_client_id
+from pulsar.internal.errors import AUTH_EXPIRED, PulsarError
 
 from .interfaces import Report, Runtime
+from .settings import Settings
 
 Health = Literal["healthy", "unverified", "unhealthy"]
 TokenState = Literal["valid", "expiring", "expired"]

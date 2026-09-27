@@ -9,7 +9,7 @@ doc_role: overview
 type: design
 summary: How pulsar binds provider accounts to a host, stores their tokens, and proves which handle a write will post as.
 tags: [accounts, auth, oauth, credentials]
-paths: ["src/pulsar/accounts/registry.py", "src/pulsar/accounts/store.py", "src/pulsar/home/paths.py", "src/pulsar/home/files.py", "src/pulsar/channels/x/auth.py", "src/pulsar/channels/x/client.py"]
+paths: ["src/pulsar/app/core/account/registry.py", "src/pulsar/app/core/account/store.py", "src/pulsar/internal/fs/paths.py", "src/pulsar/internal/fs/files.py", "src/pulsar/app/core/channels/x/auth.py", "src/pulsar/app/core/channels/x/client.py"]
 related_features: [publishing, surfaces]
 related_artifacts: [ORB-12124, ORB-13027, ORB-13028, ORB-13039]
 ---
@@ -54,13 +54,13 @@ the alias names. No agent ever sees a token, and no tool can accept one.
 
 | Concern | File | Task |
 |---------|------|------|
-| Registry, alias canonicalisation, handle checks | [accounts/registry.py](../../../src/pulsar/accounts/registry.py) | [ORB-13028] |
-| Encrypted bundle store, `CredentialStore` interface | [accounts/store.py](../../../src/pulsar/accounts/store.py) | [ORB-13027] |
-| Home layout, alias → directory slug | [home/paths.py](../../../src/pulsar/home/paths.py) | [ORB-13028] |
-| Owner-only files, atomic saves, `insecure_storage` | [home/files.py](../../../src/pulsar/home/files.py) | [ORB-13027] |
-| OAuth 2.0 PKCE login and identity check | [channels/x/auth.py](../../../src/pulsar/channels/x/auth.py) | [ORB-12124], [ORB-13028] |
-| Refresh under a per-account file lock | [channels/x/client.py](../../../src/pulsar/channels/x/client.py) | [ORB-13027] |
-| `pulsar auth login | status | logout | migrate` | [surfaces/cli/commands/auth.py](../../../src/pulsar/surfaces/cli/commands/auth.py) | [ORB-13027], [ORB-13028] |
+| Registry, alias canonicalisation, handle checks | [app/core/account/registry.py](../../../src/pulsar/app/core/account/registry.py) | [ORB-13028] |
+| Encrypted bundle store, `CredentialStore` interface | [app/core/account/store.py](../../../src/pulsar/app/core/account/store.py) | [ORB-13027] |
+| Home layout, alias → directory slug | [internal/fs/paths.py](../../../src/pulsar/internal/fs/paths.py) | [ORB-13028] |
+| Owner-only files, atomic saves, `insecure_storage` | [internal/fs/files.py](../../../src/pulsar/internal/fs/files.py) | [ORB-13027] |
+| OAuth 2.0 PKCE login and identity check | [app/core/channels/x/auth.py](../../../src/pulsar/app/core/channels/x/auth.py) | [ORB-12124], [ORB-13028] |
+| Refresh under a per-account file lock | [app/core/channels/x/client.py](../../../src/pulsar/app/core/channels/x/client.py) | [ORB-13027] |
+| `pulsar auth login | status | logout | migrate` | [cli/commands/auth.py](../../../src/pulsar/cli/commands/auth.py) | [ORB-13027], [ORB-13028] |
 
 ## Task References
 

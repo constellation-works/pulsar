@@ -1,11 +1,11 @@
 import pytest
 
-from pulsar.accounts import FernetFileStore, TokenBundle
-from pulsar.channels.x import validate_text, weighted_length
-from pulsar.errors import INVALID_TEXT, SECRET_DETECTED, PulsarError
-from pulsar.guard import SECRET_PATTERNS, looks_generated, redact, scan_for_secrets
-from pulsar.guard import scanner as guard
-from pulsar.home import DEFAULT_PLAIN_POST_USD, DEFAULT_URL_POST_USD, Prices
+from pulsar.app.core.account import FernetFileStore, TokenBundle
+from pulsar.app.core.channels.contract import DEFAULT_PLAIN_POST_USD, DEFAULT_URL_POST_USD, Prices
+from pulsar.app.core.channels.x import validate_text, weighted_length
+from pulsar.internal.errors import INVALID_TEXT, SECRET_DETECTED, PulsarError
+from pulsar.internal.guard import SECRET_PATTERNS, looks_generated, redact, scan_for_secrets
+from pulsar.internal.guard import scanner as guard
 
 
 def test_weighted_length_counts_urls_as_23_and_emoji_as_2():

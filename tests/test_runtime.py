@@ -8,10 +8,10 @@ import logging
 
 import pytest
 
-from pulsar.accounts import FernetFileStore
-from pulsar.app import CALLER_ENV, RedactingFilter, configure_logging
-from pulsar.errors import AuthExpired, PulsarError
-from pulsar.home import Settings
+from pulsar.app.core.account import FernetFileStore
+from pulsar.app.runtime import CALLER_ENV, RedactingFilter, configure_logging
+from pulsar.app.settings import Settings
+from pulsar.internal.errors import AuthExpired, PulsarError
 
 from .conftest import ALIAS, make_runtime, register
 

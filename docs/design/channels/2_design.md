@@ -9,7 +9,7 @@ doc_role: design
 type: design
 summary: The Channel protocol's failure semantics, and how the X adapter measures text, uploads media, maps errors and fingerprints posts.
 tags: [channels, providers, x, adapter, fingerprint]
-paths: ["src/pulsar/channels/contract.py", "src/pulsar/channels/x/**"]
+paths: ["src/pulsar/app/core/channels/contract.py", "src/pulsar/app/core/channels/x/**"]
 related_features: [publishing, accounts]
 related_artifacts: [ORB-13006, ORB-13028]
 ---
@@ -21,7 +21,7 @@ The adapter contract and the X adapter as built. Other providers are in
 
 ## 1. The Contract
 
-[adapter.py](../../../src/pulsar/channels/contract.py) `Channel` is a protocol; core imports no
+[adapter.py](../../../src/pulsar/app/core/channels/contract.py) `Channel` is a protocol; core imports no
 provider and no HTTP library.
 
 | Method | Network | Contract |
@@ -45,11 +45,11 @@ provider and no HTTP library.
 - a failure before the request left (connect error, pool timeout) is `api_error`, retryable.
 
 `AuthFlow` (`begin`, `complete`) is declared for per-provider logins; X's login predates it and
-is still module functions in [channels/x/auth.py](../../../src/pulsar/channels/x/auth.py).
+is still module functions in [app/core/channels/x/auth.py](../../../src/pulsar/app/core/channels/x/auth.py).
 
 ## 2. X Text Rules
 
-[text.py](../../../src/pulsar/channels/x/text.py): at most 280 weighted characters; a URL
+[text.py](../../../src/pulsar/app/core/channels/x/text.py): at most 280 weighted characters; a URL
 counts 23, CJK and emoji count 2, other characters 1. Empty text, control characters, and reply
 plus quote together are `invalid_text`. The estimated cost is `url_post_usd` when the text
 contains a URL, else `plain_post_usd`.
@@ -66,7 +66,7 @@ contains a URL, else `plain_post_usd`.
 
 ## 4. X Error Mapping
 
-[client.py](../../../src/pulsar/channels/x/client.py) `map_http_error` turns X's responses
+[client.py](../../../src/pulsar/app/core/channels/x/client.py) `map_http_error` turns X's responses
 into codes, passing X's reason through in `detail`: `duplicate` (400 naming a duplicate),
 `forbidden` (403), `rate_limited` (429, retryable), `not_found` (404), and `api_error` for the
 rest. A refresh X rejects is `auth_expired` and marks the account `reauth_required`. On
@@ -77,7 +77,7 @@ rest. A refresh X rejects is `auth_expired` and marks the account `reauth_requir
 
 X rewrites posted text: links become `t.co` links, `&`, `<`, `>` come back HTML-escaped, a
 post with media gets a trailing `t.co` link, and a reply gets the replied-to accounts'
-`@handles` prepended. [channels/x/adapter.py](../../../src/pulsar/channels/x/adapter.py):
+`@handles` prepended. [app/core/channels/x/adapter.py](../../../src/pulsar/app/core/channels/x/adapter.py):
 
 - `fingerprint(text)` hashes the text with every URL and any leading run of `@handles`
   removed, NFC, whitespace collapsed. It is applied to what pulsar sends.

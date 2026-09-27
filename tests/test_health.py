@@ -7,9 +7,9 @@ import time
 
 import pytest
 
-from pulsar.accounts import AccountRegistry, TokenBundle
-from pulsar.app import attention
-from pulsar.errors import PulsarError
+from pulsar.app.core.account import AccountRegistry, TokenBundle
+from pulsar.app.health import attention
+from pulsar.internal.errors import PulsarError
 
 from .conftest import ALIAS, ROTATED_ACCESS, SECRETS, make_app, register
 

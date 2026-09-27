@@ -90,6 +90,6 @@ Design docs live in [docs/design](docs/design/) ([conventions](docs/design/CONVE
 make check    # uv lock --check, ruff, basedpyright strict, pytest (offline)
 ```
 
-The packages under `src/pulsar` are channel-neutral and import no HTTP, except `channels/x`,
-the X channel; `app` joins them into the verbs; `surfaces/` (the CLI, the MCP server and the
-Orbit backend) are the front ends on top, and import only `app`.
+The tree under `src/pulsar` is the architecture ([ARCHITECTURE.md](docs/design/ARCHITECTURE.md)):
+the front ends (`cli/`, `mcp/`, `orbit/`) call `app/`, whose modules consume the domain in
+`app/core/`; `internal/` holds the leaf utilities everything uses.

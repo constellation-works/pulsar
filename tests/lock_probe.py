@@ -6,7 +6,7 @@ import threading
 
 import pytest
 
-from pulsar.home import files as fsutil
+from pulsar.internal.fs import files as fsutil
 
 
 def blocked_on_lock(monkeypatch: pytest.MonkeyPatch) -> threading.Event:

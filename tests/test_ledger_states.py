@@ -6,8 +6,7 @@ import json
 
 import pytest
 
-from pulsar.errors import INTERNAL, PulsarError
-from pulsar.ledger import (
+from pulsar.app.core.ledger import (
     COMMITTED_ITEM_STATES,
     FAILED,
     OPEN_ROW_STATES,
@@ -24,6 +23,7 @@ from pulsar.ledger import (
     is_ambiguous,
     is_settled,
 )
+from pulsar.internal.errors import INTERNAL, PulsarError
 
 from .test_ledger import claim_plan, send_all, sql
 

@@ -16,10 +16,12 @@ import jsonschema
 import pytest
 import yaml
 
-from pulsar.app import LocalApp, default_paths, ops
-from pulsar.home import Paths
+from pulsar.app import ops
+from pulsar.app.facade import LocalApp
+from pulsar.app.runtime import default_paths
+from pulsar.internal.fs import Paths
 from pulsar.main import main as pulsar_main
-from pulsar.surfaces.orbit import backend as orbit_tool
+from pulsar.orbit import backend as orbit_tool
 
 from .conftest import ALIAS, SECRETS, make_app, register
 from .media_samples import PNG

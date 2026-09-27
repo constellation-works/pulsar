@@ -30,10 +30,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from pulsar.errors import INTERNAL, PulsarError
-from pulsar.home import text_sha256
-from pulsar.jsonx import JSONObject, as_object
-from pulsar.ledger import (
+from pulsar.app.core.ledger import (
     IMPORT_TOOL,
     PUBLISHED,
     SKIPPED,
@@ -44,6 +41,8 @@ from pulsar.ledger import (
     check_note,
     request_digest,
 )
+from pulsar.internal.errors import INTERNAL, PulsarError
+from pulsar.internal.fs import JSONObject, as_object, text_sha256
 
 IMPORT_CALLER = "pulsar-import"
 _META_KEYS = ("superseded_post_id", "superseded_note")

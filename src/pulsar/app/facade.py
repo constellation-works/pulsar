@@ -16,14 +16,15 @@ from typing import Any
 
 import httpx
 
-from pulsar.accounts import AccountRegistry
-from pulsar.channels.x import load_client_id, login
-from pulsar.errors import PulsarError
-from pulsar.home import Paths, Settings, load_settings
+from pulsar.app.core.account import AccountRegistry
+from pulsar.app.core.channels.x import load_client_id, login
+from pulsar.internal.errors import PulsarError
+from pulsar.internal.fs import Paths
 
 from . import health, ops
 from .interfaces import Report
 from .runtime import LocalRuntime
+from .settings import Settings, load_settings
 
 
 class LocalApp:

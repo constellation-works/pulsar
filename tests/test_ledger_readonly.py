@@ -19,10 +19,10 @@ from typing import Any
 
 import pytest
 
-import pulsar.ledger.connection as connection_mod
-from pulsar.errors import INTERNAL, INVALID_CONFIG, PulsarError
-from pulsar.home import Paths
-from pulsar.ledger import SCHEMA_VERSION, SqliteLedger, Usage
+import pulsar.app.core.ledger.connection as connection_mod
+from pulsar.app.core.ledger import SCHEMA_VERSION, SqliteLedger, Usage
+from pulsar.internal.errors import INTERNAL, INVALID_CONFIG, PulsarError
+from pulsar.internal.fs import Paths
 
 from .test_ledger import (
     ACCT,

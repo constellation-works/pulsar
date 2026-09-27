@@ -3,8 +3,10 @@ import stat
 
 import pytest
 
-from pulsar.errors import PulsarError
-from pulsar.home import Paths, Prices, Settings, append_private, load_settings, write_private_atomic
+from pulsar.app.core.channels.contract import Prices
+from pulsar.app.settings import Settings, load_settings
+from pulsar.internal.errors import PulsarError
+from pulsar.internal.fs import Paths, append_private, write_private_atomic
 
 
 @pytest.fixture

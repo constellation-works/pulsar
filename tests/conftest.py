@@ -17,10 +17,12 @@ from urllib.parse import parse_qs
 import httpx
 import pytest
 
-from pulsar.accounts import Account, AccountRegistry, FernetFileStore, TokenBundle
-from pulsar.app import LocalApp, LocalRuntime
-from pulsar.guard import scanner as guard
-from pulsar.home import Paths, Settings, load_settings
+from pulsar.app.core.account import Account, AccountRegistry, FernetFileStore, TokenBundle
+from pulsar.app.facade import LocalApp
+from pulsar.app.runtime import LocalRuntime
+from pulsar.app.settings import Settings, load_settings
+from pulsar.internal.fs import Paths
+from pulsar.internal.guard import scanner as guard
 
 ACCESS = "access-token-AAAA1111"
 REFRESH = "refresh-token-BBBB2222"

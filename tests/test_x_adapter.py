@@ -4,11 +4,9 @@ from datetime import UTC, datetime
 import httpx
 import pytest
 
-from pulsar.channels import LoadedMedia
-from pulsar.channels.x import XChannel, XClient, fingerprint, remote_fingerprint
-from pulsar.errors import PulsarError
-from pulsar.home import Prices
-from pulsar.plan import MediaRef, PostSpec
+from pulsar.app.core.channels.contract import LoadedMedia, MediaRef, PostSpec, Prices
+from pulsar.app.core.channels.x import XChannel, XClient, fingerprint, remote_fingerprint
+from pulsar.internal.errors import PulsarError
 
 from .media_samples import JPEG, MP4
 from .media_samples import PNG as PNG_1PX
@@ -156,7 +154,7 @@ async def test_recent_posts_paginates_and_reports_completeness(channel, fake_x, 
     first = fake_x.calls("GET")[0]
     assert first.url.params["start_time"] == "2026-09-26T01:00:00Z"
 
-    monkeypatch.setattr("pulsar.channels.x.adapter.RECONCILE_MAX_PAGES", 2)
+    monkeypatch.setattr("pulsar.app.core.channels.x.adapter.RECONCILE_MAX_PAGES", 2)
     capped = await channel.recent_posts(SINCE)
     assert not capped.complete and len(capped.posts) == 4
 

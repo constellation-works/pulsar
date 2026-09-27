@@ -9,7 +9,7 @@ doc_role: decisions
 type: design
 summary: Exec backend over mcp, one settings source, plan errors as results, workspace-confined plugin media, the launcher's shape, and CLI output modes.
 tags: [surfaces, orbit-plugin, mcp]
-paths: ["plugin.yaml", "bin/pulsar", "src/pulsar/surfaces/orbit/backend.py", "src/pulsar/surfaces/mcp/server.py"]
+paths: ["plugin.yaml", "bin/pulsar", "src/pulsar/orbit/backend.py", "src/pulsar/mcp/server.py"]
 related_features: [publishing, accounts]
 related_artifacts: [ORB-12124, ORB-13029]
 ---
@@ -22,7 +22,7 @@ Non-obvious decisions about pulsar's front ends. See
 ## Orbit runs pulsar as an exec backend, one process per call
 
 **Recorded:** 2026-09-26 · [ORB-13029]
-**Code anchors:** `plugin.yaml` (`backend.type: exec`), `src/pulsar/surfaces/orbit/backend.py::main`
+**Code anchors:** `plugin.yaml` (`backend.type: exec`), `src/pulsar/orbit/backend.py::main`
 
 ### Context
 
@@ -42,7 +42,7 @@ it must, and exits.
 ## `config.toml` is the only settings source
 
 **Recorded:** 2026-09-26 · [ORB-13029]
-**Code anchors:** `src/pulsar/surfaces/orbit/backend.py::_parse`, `schemas/config.json`
+**Code anchors:** `src/pulsar/orbit/backend.py::_parse`, `schemas/config.json`
 
 ### Context
 
@@ -63,7 +63,7 @@ schema, and a call carrying keys is refused, not ignored.
 ## `validate` reports an invalid plan as a result
 
 **Recorded:** 2026-09-26 · [ORB-13029]
-**Code anchors:** `src/pulsar/surfaces/orbit/backend.py::validate`
+**Code anchors:** `src/pulsar/orbit/backend.py::validate`
 
 ### Context
 
@@ -86,7 +86,7 @@ unreadable source, an `account` that is not bound or not the plan's) and a broke
 ## Plugin calls confine media to the workspace
 
 **Recorded:** 2026-09-26 · [ORB-13029]
-**Code anchors:** `src/pulsar/surfaces/orbit/backend.py::_settings`, `src/pulsar/surfaces/orbit/backend.py::_source_path`
+**Code anchors:** `src/pulsar/orbit/backend.py::_settings`, `src/pulsar/orbit/backend.py::_source_path`
 
 ### Context
 
@@ -131,7 +131,7 @@ Python with `PYTHONPATH` at the plugin's `src/`.
 ## The CLI keeps its verb-first grammar
 
 **Recorded:** 2026-09-26 · [ORB-13138]
-**Code anchors:** `src/pulsar/surfaces/cli/main.py::build_parser`
+**Code anchors:** `src/pulsar/cli/main.py::build_parser`
 
 ### Context
 
@@ -155,7 +155,7 @@ tell apart; `auth` is the only resource with verbs of its own. New commands go u
 
 **Recorded:** 2026-09-26 · [ORB-13138]
 **Superseded by:** [The CLI renders for its reader, as orbit's does](#the-cli-renders-for-its-reader-as-orbits-does)
-**Code anchors:** `src/pulsar/surfaces/cli/toolkit/context.py::emit`
+**Code anchors:** `src/pulsar/cli/toolkit/context.py::emit`
 
 ### Context
 
@@ -181,7 +181,7 @@ prints the version as plain text.
 ## The CLI renders for its reader, as orbit's does
 
 **Recorded:** 2026-09-26 · [ORB-13248]
-**Code anchors:** `src/pulsar/surfaces/cli/toolkit/render.py::resolve_mode`, `src/pulsar/surfaces/cli/toolkit/render.py::resolve_terminal`, `src/pulsar/surfaces/cli/toolkit/views.py`, `src/pulsar/surfaces/cli/toolkit/parser.py::CommandParser`
+**Code anchors:** `src/pulsar/cli/toolkit/render.py::resolve_mode`, `src/pulsar/cli/toolkit/render.py::resolve_terminal`, `src/pulsar/cli/toolkit/views.py`, `src/pulsar/cli/toolkit/parser.py::CommandParser`
 
 ### Context
 
@@ -213,7 +213,7 @@ plugin go through `orbit-tool` and MCP.
 ## `pulsar orbit-tool` exits 0 when it answered
 
 **Recorded:** 2026-09-26 · [ORB-13138]
-**Code anchors:** `src/pulsar/surfaces/orbit/backend.py::main`
+**Code anchors:** `src/pulsar/orbit/backend.py::main`
 
 ### Context
 
@@ -232,7 +232,7 @@ means the backend crashed and its output is discarded.
 ## Renamed flags stay for one release
 
 **Recorded:** 2026-09-26 · [ORB-13138]
-**Code anchors:** `src/pulsar/surfaces/cli/commands/publish.py::_publish`, `src/pulsar/surfaces/cli/commands/auth.py::_status`
+**Code anchors:** `src/pulsar/cli/commands/publish.py::_publish`, `src/pulsar/cli/commands/auth.py::_status`
 
 ### Context
 
@@ -253,7 +253,7 @@ and `import-posted --confirm` are new requirements, not renames, and have no ali
 ## A POST without an Origin is an MCP client, not a browser
 
 **Recorded:** 2026-09-26 · [ORB-13138]
-**Code anchors:** `src/pulsar/surfaces/mcp/server.py::loopback_security`, `tests/test_server.py::test_http_accepts_only_its_own_loopback_authority`
+**Code anchors:** `src/pulsar/mcp/server.py::loopback_security`, `tests/test_server.py::test_http_accepts_only_its_own_loopback_authority`
 
 ### Context
 
@@ -360,7 +360,7 @@ the next rename keeps the old field for a release.
 ## Reconcile and first-use migration apply without `--confirm`
 
 **Recorded:** 2026-09-26 · [ORB-13138]
-**Code anchors:** `src/pulsar/app/ops.py::reconcile_report`, `src/pulsar/surfaces/cli/commands/auth.py::_migrate_quietly`, `src/pulsar/app/runtime.py::Runtime.writer`
+**Code anchors:** `src/pulsar/app/ops.py::reconcile_report`, `src/pulsar/cli/commands/auth.py::_migrate_quietly`, `src/pulsar/app/runtime.py::Runtime.writer`
 
 ### Context
 

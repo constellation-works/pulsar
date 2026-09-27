@@ -9,7 +9,7 @@ doc_role: overview
 type: design
 summary: The plan, its digest, the publisher, the policy and the ledger — how pulsar turns a request into at most one paid post per intent.
 tags: [publishing, plan, ledger, idempotency, policy, reconcile]
-paths: ["src/pulsar/plan/model.py", "src/pulsar/publishing/publisher.py", "src/pulsar/ledger/**", "src/pulsar/publishing/policy.py", "src/pulsar/ledger/usage.py", "src/pulsar/guard/scanner.py", "src/pulsar/publishing/media.py", "src/pulsar/app/importer.py", "src/pulsar/app/writelog.py", "src/pulsar/home/settings.py"]
+paths: ["src/pulsar/app/core/publishing/plan.py", "src/pulsar/app/core/publishing/publisher.py", "src/pulsar/app/core/ledger/**", "src/pulsar/app/core/publishing/policy.py", "src/pulsar/app/core/ledger/usage.py", "src/pulsar/internal/guard/scanner.py", "src/pulsar/app/core/publishing/media.py", "src/pulsar/app/importer.py", "src/pulsar/app/writelog.py", "src/pulsar/app/settings.py"]
 related_features: [accounts, channels, surfaces]
 related_artifacts: [ORB-13006, ORB-13027, ORB-13028, ORB-13030]
 ---
@@ -54,15 +54,15 @@ the account's timeline.
 
 | Concern | File | Task |
 |---------|------|------|
-| Plan model, normalisation, canonical digest | [plan/model.py](../../../src/pulsar/plan/model.py) | [ORB-13028] |
-| Validate, admit, claim, send, reconcile | [publishing/publisher.py](../../../src/pulsar/publishing/publisher.py) | [ORB-13028] |
-| Ledger: rows, items, states, usage, schema versions | [ledger/](../../../src/pulsar/ledger/) | [ORB-13027], [ORB-13028] |
-| Policy: quiet hours, cap, budgets | [publishing/policy.py](../../../src/pulsar/publishing/policy.py), [ledger/usage.py](../../../src/pulsar/ledger/usage.py) | [ORB-13028] |
-| Secret scanner | [guard/scanner.py](../../../src/pulsar/guard/scanner.py) | [ORB-12124] |
-| Media confinement, type sniffing, limits | [publishing/media.py](../../../src/pulsar/publishing/media.py) | [ORB-13006], [ORB-13027] |
+| Plan model, normalisation, canonical digest | [app/core/publishing/plan.py](../../../src/pulsar/app/core/publishing/plan.py) | [ORB-13028] |
+| Validate, admit, claim, send, reconcile | [app/core/publishing/publisher.py](../../../src/pulsar/app/core/publishing/publisher.py) | [ORB-13028] |
+| Ledger: rows, items, states, usage, schema versions | [ledger/](../../../src/pulsar/app/core/ledger/) | [ORB-13027], [ORB-13028] |
+| Policy: quiet hours, cap, budgets | [app/core/publishing/policy.py](../../../src/pulsar/app/core/publishing/policy.py), [app/core/ledger/usage.py](../../../src/pulsar/app/core/ledger/usage.py) | [ORB-13028] |
+| Secret scanner | [internal/guard/scanner.py](../../../src/pulsar/internal/guard/scanner.py) | [ORB-12124] |
+| Media confinement, type sniffing, limits | [app/core/publishing/media.py](../../../src/pulsar/app/core/publishing/media.py) | [ORB-13006], [ORB-13027] |
 | `writes.jsonl` export | [app/writelog.py](../../../src/pulsar/app/writelog.py) | [ORB-13027] |
 | `posted.jsonl` import | [app/importer.py](../../../src/pulsar/app/importer.py) | [ORB-13028] |
-| `config.toml` | [home/settings.py](../../../src/pulsar/home/settings.py) | [ORB-13027], [ORB-13028] |
+| `config.toml` | [app/settings.py](../../../src/pulsar/app/settings.py) | [ORB-13027], [ORB-13028] |
 
 Contracts: [specs/ledger.md](./specs/ledger.md), [specs/idempotency.md](./specs/idempotency.md),
 [specs/policy.md](./specs/policy.md), [specs/media-confinement.md](./specs/media-confinement.md).

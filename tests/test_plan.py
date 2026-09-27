@@ -2,8 +2,10 @@ import hashlib
 
 import pytest
 
-from pulsar.errors import PulsarError
-from pulsar.plan import MediaRef, Plan, normalize_alias
+from pulsar.app.core.account import normalize_alias
+from pulsar.app.core.channels.contract import MediaRef
+from pulsar.app.core.publishing import Plan
+from pulsar.internal.errors import PulsarError
 
 MEDIA = {
     "hero.png": b"png-bytes-1",

@@ -9,7 +9,7 @@ doc_role: design
 type: design
 summary: How a plan is normalised and digested, how the publisher admits, claims and sends it, and how reconcile settles unknown posts.
 tags: [publishing, plan, ledger, idempotency, policy, reconcile]
-paths: ["src/pulsar/plan/model.py", "src/pulsar/publishing/publisher.py", "src/pulsar/ledger/**", "src/pulsar/publishing/policy.py", "src/pulsar/ledger/usage.py", "src/pulsar/guard/scanner.py", "src/pulsar/publishing/media.py", "src/pulsar/app/importer.py", "src/pulsar/app/writelog.py"]
+paths: ["src/pulsar/app/core/publishing/plan.py", "src/pulsar/app/core/publishing/publisher.py", "src/pulsar/app/core/ledger/**", "src/pulsar/app/core/publishing/policy.py", "src/pulsar/app/core/ledger/usage.py", "src/pulsar/internal/guard/scanner.py", "src/pulsar/app/core/publishing/media.py", "src/pulsar/app/importer.py", "src/pulsar/app/writelog.py"]
 related_features: [accounts, channels, surfaces]
 related_artifacts: [ORB-13027, ORB-13028, ORB-13030, ORB-13039]
 ---
@@ -23,7 +23,7 @@ in [3_vision.md](./3_vision.md).
 ## 1. Plans
 
 A plan is YAML (the CLI) or the same shape as an object (MCP `validate_plan`, Orbit
-`pulsar.validate`) ([plan.py](../../../src/pulsar/plan/model.py)):
+`pulsar.validate`) ([plan.py](../../../src/pulsar/app/core/publishing/plan.py)):
 
 ```yaml
 account: x:constworks            # or accounts: [...]; omitted = the default account
@@ -48,7 +48,7 @@ moving the schedule keeps the digest and the idempotency key; see
 
 ## 2. The Publisher
 
-[publisher.py](../../../src/pulsar/publishing/publisher.py) runs a plan for one account in a fixed
+[publisher.py](../../../src/pulsar/app/core/publishing/publisher.py) runs a plan for one account in a fixed
 order; the order is the safety argument.
 
 1. **Prepare (offline).** Provider rules (length, media type, size, count, video and GIF
@@ -85,8 +85,8 @@ Summarised here; the contract is [specs/idempotency.md](./specs/idempotency.md).
 
 ## 4. Policy
 
-[policy.py](../../../src/pulsar/publishing/policy.py) checks, in order, `quiet_hours`, `daily_cap`
-and `budget_exceeded` (day, then month) against [usage.py](../../../src/pulsar/ledger/usage.py),
+[policy.py](../../../src/pulsar/app/core/publishing/policy.py) checks, in order, `quiet_hours`, `daily_cap`
+and `budget_exceeded` (day, then month) against [usage.py](../../../src/pulsar/app/core/ledger/usage.py),
 before any network call, from `create_post` and `pulsar publish` alike. The rules, windows and
 `retry_after` semantics are in [specs/policy.md](./specs/policy.md); the keys in
 [references/config.md](./references/config.md). Prices come from `[prices.<provider>]` in
@@ -95,7 +95,7 @@ config, never constants.
 ## 5. The Ledger
 
 `ledger.sqlite3` in the home, SQLite in WAL mode, schema version in `PRAGMA user_version`
-([ledger/](../../../src/pulsar/ledger/)). One `writes` row per logical write and one
+([ledger/](../../../src/pulsar/app/core/ledger/)). One `writes` row per logical write and one
 `items` row per post of a plan row. Several processes share it; claims and state changes take
 the write lock. States, columns, usage accounting and schema migration are specified in
 [specs/ledger.md](./specs/ledger.md).
@@ -125,7 +125,7 @@ the write lock. States, columns, usage accounting and schema migration are speci
 
 ## 7. Guards on Content
 
-- **Secret scanner** ([guard.py](../../../src/pulsar/guard/scanner.py)): every post text, alt
+- **Secret scanner** ([guard.py](../../../src/pulsar/internal/guard/scanner.py)): every post text, alt
   text, media payload and idempotency key is scanned for credential patterns (`sk-…`, `ghp_…`,
   `github_pat_…`, `xox…`, AWS/Google/Stripe keys, X bearer tokens, `Bearer …` headers, PEM
   private keys, JWTs, `token=…`-style assignments) before any network call, including on
@@ -140,8 +140,8 @@ the write lock. States, columns, usage accounting and schema migration are speci
 - **Redaction at rest** (`guard.redact`): free text pulsar persists or logs (the caller label,
   provider error messages, notes, `meta` strings, `writes.jsonl` lines, stderr logs) passes
   through `redact`, which masks the same live values and shapes as `[redacted:<label>]` and keeps the words
-  around them. The ledger's inventory is `ledger/text.py`'s `REDACTED_COLUMNS`.
-- **Media confinement** ([media.py](../../../src/pulsar/publishing/media.py)): files are read only
+  around them. The ledger's inventory is `app/core/ledger/text.py`'s `REDACTED_COLUMNS`.
+- **Media confinement** ([media.py](../../../src/pulsar/app/core/publishing/media.py)): files are read only
   from configured roots, opened without following symlinks, size-checked before reading, and
   typed by content. See [specs/media-confinement.md](./specs/media-confinement.md).
 

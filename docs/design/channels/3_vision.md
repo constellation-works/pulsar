@@ -9,7 +9,7 @@ doc_role: vision
 type: design
 summary: Bluesky as the second channel, per-provider auth flows, and an optional metrics capability.
 tags: [channels, providers, bluesky, mastodon, linkedin, metrics]
-paths: ["src/pulsar/channels/contract.py", "src/pulsar/channels/**"]
+paths: ["src/pulsar/app/core/channels/contract.py", "src/pulsar/app/core/channels/**"]
 related_features: [accounts, publishing]
 related_artifacts: [ORB-13031]
 ---
