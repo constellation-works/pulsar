@@ -449,16 +449,22 @@ def test_an_auto_task_may_call_only_what_it_requires(path):
     assert definition["dedupe"] == "skip_if_open"
     assert list(definition["schedule"]) == ["cron"]
     template = definition["template"]
-    kinds = {t["name"]: t["execution_kind"] for t in MANIFEST["spec"]["tools"]}
     required = {name.removeprefix("pulsar.") for name in template["required_tools"]}
-    assert required <= {n for n, k in kinds.items() if k == "mutating"}
-    # Every paid tool the instructions call is one the task requires, and none publishes.
+    # Every pulsar.* tool the instructions call, except publish, is in required_tools.
     called = set(re.findall(r"`pulsar\.(\w+)`", template["description"]))
-    paid = {n for n in called if kinds.get(n) == "mutating"}
     assert "publish" not in required, "an auto-task only drafts; a human-promoted task publishes"
-    assert paid - {"publish"} <= required
+    assert called - {"publish"} <= required
     assert "never publish" in template["description"].lower()
-    # Its commits land on the main branch and its publish task only posts: neither leaves a diff.
-    assert "no-diff-expected" in template["tags"]
+    # Definitions leave files for pipeline delivery and never instruct committing.
+    cleaned = path.read_text().replace("uncommitted", "").replace("commit permalink", "")
+    assert "commit" not in cleaned.lower()
+    # no-diff-expected is absent from templates producing a diff.
+    assert "no-diff-expected" not in template["tags"]
+    # Engager's publish task writes nothing (keeps no-diff-expected);
+    # post-proposer's records receipts in content records (drops no-diff-expected).
     for spawned in re.findall(r"tags `\[([^\]]*)\]`", template["description"]):
-        assert "no-diff-expected" in spawned.split(", ")
+        tags = [t.strip() for t in spawned.split(",")]
+        if path.stem == "post-proposer":
+            assert "no-diff-expected" not in tags
+        elif path.stem == "engager":
+            assert "no-diff-expected" in tags

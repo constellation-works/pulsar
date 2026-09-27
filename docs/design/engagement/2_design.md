@@ -108,18 +108,20 @@ can hand it to the human.
 [definitions/auto_tasks/](../../../definitions/auto_tasks/), declared under
 `spec.definitions.auto_tasks`. Orbit seeds them into a workspace's `.orbit/auto_tasks/` as
 `pulsar-<name>`, `enabled: false`, when the plugin is enabled there; a human reviews and
-switches each on. Each is `dedupe: skip_if_open`, and each minted task is tagged `pulsar`
-and `no-diff-expected`, as is each publish task it creates: their commits land on the main
-branch and publishing leaves no diff, so the pipeline completes them without one.
+switches each on. Each is `dedupe: skip_if_open`, and each minted task is tagged `pulsar`.
+Because each auto-task produces a diff (plan files or reports) and leaves them uncommitted
+for the pipeline to deliver to `agent-main`, `no-diff-expected` is omitted from their template tags.
+The post-proposer's follow-up publishing task also produces a diff when recording receipts in
+content records, while the engager's follow-up task writes nothing and keeps `no-diff-expected`.
 
 | Auto-task | Schedule (host-local) | Requires | Does |
 |---|---|---|---|
-| `engager` | daily 09:00 | `pulsar.engagements` | reads 24 hours of mentions (at most 20), summarises them, writes one reply plan per mention worth answering under `engagement/YYYY-MM-DD/`, validates and commits them, and creates one `proposed` task requiring `pulsar.publish` that lists each draft, its digest and its approve command |
-| `post-proposer` | Fridays 16:00 | `pulsar.metrics` | reads 7 days of the account's posts, drafts up to three posts as `plan.yaml` beside their content records (no `not_before`), and creates the same kind of proposal task; drafts nothing while three already wait |
-| `weekly-report` | Mondays 16:00 | `pulsar.metrics` | reports the week from `status`, `history` and one metrics read, every figure with its source and read time |
+| `engager` | daily 09:00 | `pulsar.engagements`, `pulsar.status`, `pulsar.validate` | reads 24 hours of mentions (at most 20), summarises them, writes one reply plan per mention worth answering under `engagement/YYYY-MM-DD/`, validates them, leaves them uncommitted for pipeline delivery, and creates one `proposed` task requiring `pulsar.publish` that lists each draft, its digest and its approve command |
+| `post-proposer` | Fridays 16:00 | `pulsar.metrics`, `pulsar.status`, `pulsar.validate` | reads 7 days of the account's posts, drafts up to three posts as `plan.yaml` beside their content records (no `not_before`), leaves them uncommitted for pipeline delivery, and creates the same kind of proposal task; drafts nothing while three already wait |
+| `weekly-report` | Mondays 16:00 | `pulsar.history`, `pulsar.metrics`, `pulsar.status` | reports the week from `status`, `history` and one metrics read, every figure with its source and read time; leaves the report uncommitted for pipeline delivery |
 
 No auto-task requires `pulsar.publish` (a test holds this): drafting and publishing are separate
-tasks with a human between them. Plans must be committed on the workspace's main branch,
+tasks with a human between them. Plans are delivered to the workspace's main branch by the pipeline,
 because the plugin reads `source` from the workspace root. The workspace's own guides (voice,
 strategy, content-record template) decide the details; the definitions defer to them where
 they exist.

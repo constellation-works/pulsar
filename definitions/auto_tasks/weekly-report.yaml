@@ -21,18 +21,19 @@ template:
     2. `pulsar.history` with `limit: 100`: the week's rows, published, failed, skipped or unknown, and their estimated cost.
     3. `pulsar.metrics`: per post, impressions, likes, replies, reposts, quotes, link and profile clicks; and the week's totals. Compare with the previous report if there is one, and say when a change is too small to mean anything.
     4. The approval queue: proposed `pulsar-posts` and `pulsar-replies` tasks, and how long each has waited. Approvals themselves are in pulsar's ledger, which no tool lists; report the tasks.
-    5. Observations separate from hypotheses; recommend a change only with evidence. Commit on `agent-main`.
+    5. Observations separate from hypotheses; recommend a change only with evidence. Leave the report uncommitted: the pipeline delivers it to `agent-main`.
   acceptance_criteria:
   - A dated report covers the last seven days with a source and read time for every figure, and unreported counts are marked unavailable rather than zero.
   - It lists every post published in the window with its metrics and totals, failed or unresolved writes, spend against the budget, and the waiting approval queue.
-  - pulsar.metrics was called once, no mentions were read, nothing was published or approved, and the report is committed on agent-main.
+  - pulsar.metrics was called once, no mentions were read, nothing was published or approved, and the report is left for the pipeline to deliver to agent-main.
   task_type: chore
   tags:
   - pulsar
   - pulsar-weekly-report
-  - no-diff-expected
   required_tools:
+  - pulsar.history
   - pulsar.metrics
+  - pulsar.status
   priority: low
   complexity: low
   status: backlog
