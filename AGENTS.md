@@ -15,8 +15,8 @@
   approval, and a publish of an agent's draft never skips the approval check.
 - Live X calls need a human-authorized token on the host; tests must never hit
   the network — use the fake transport in `tests/`.
-- `agent-main` is the landing branch; commit directly, no PR gate. Daniel owns
-  releases and any change to the X app registration.
+- `agent-main` is the base branch; Orbit delivers task work as a PR against
+  it. Daniel owns releases and any change to the X app registration.
 - The installable Orbit plugin is `.orbit-plugin/`: its manifest, launcher,
   schemas, skills, definitions and conformance goldens live there. Root `src/`,
   `pyproject.toml` and `uv.lock` are canonical; `make plugin` refreshes their

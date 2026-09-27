@@ -7,4 +7,5 @@ dist/
 *.egg-info/
 # never commit a token bundle, even a test one
 *.tokens.json
+# Orbit per-user state — not a repository artifact.
 .orbit/
