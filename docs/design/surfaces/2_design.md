@@ -145,8 +145,8 @@ All are `execution_kind: read_only`, `mcp_scope: workspace`, with request and re
 schemas under [schemas/](../../../schemas/). An input key the request schema does not list is
 refused (`invalid_argument` naming it). The tools read the home without writing to it. Panels: *Pulsar accounts* (kv, `status`) and
 *Recent publications* (table, `history`). Two skills ship with it:
-[pulsar-publish](../../../skills/pulsar-publish/SKILL.md) (check accounts, draft and validate
-a plan) and [pulsar-setup](../../../skills/pulsar-setup/SKILL.md) (walk a human through
+[pulsar-publish](../../../skills/publish/SKILL.md) (check accounts, draft and validate
+a plan) and [pulsar-setup](../../../skills/setup/SKILL.md) (walk a human through
 installing pulsar and binding an account).
 
 ### How it runs

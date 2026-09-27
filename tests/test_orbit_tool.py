@@ -138,8 +138,10 @@ def test_launcher_and_skill_ship_in_the_tree():
     )
     for skill in MANIFEST["spec"]["skills"]:
         text = (ROOT / skill / "SKILL.md").read_text()
-        assert re.search(r"(?m)^name: pulsar-", text), (
-            "Orbit installs a plugin skill only under the plugin's own name prefix"
+        # Orbit links skills/<dir> as <namespace>-<dir>; the skill must answer to that name.
+        linked = f"{MANIFEST['metadata']['name']}-{Path(skill).name}"
+        assert re.search(rf"(?m)^name: {re.escape(linked)}$", text), (
+            f"{skill} links as {linked}; its SKILL.md must be named that"
         )
     # The plugin installer refuses symlinks anywhere in the tree.
     assert not (ROOT / "CLAUDE.md").is_symlink()
