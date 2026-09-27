@@ -1,8 +1,8 @@
 ---
 title: Publishing — Design
 owner: claude
-last_updated: 2026-09-26
-last_validated: 2026-09-26
+last_updated: 2026-09-27
+last_validated: 2026-09-27
 status: Accepted
 feature: publishing
 doc_role: design
@@ -61,7 +61,10 @@ order; the order is the safety argument.
    the row is claimed under SQLite's write lock (`BEGIN IMMEDIATE`). A publish with
    `require_approval` also consumes a human approval of the digest here. A refused call writes
    no row. From here until each post is sent or the row settles, the plan's unsent posts are
-   reserved against the budget and cap.
+   reserved against the budget and cap. The claim runs in a thread, so a claim waiting out
+   another writer's lock does not hold up a long-lived server's other calls; the per-item
+   writes below stay on the event loop, ordered with their sends
+   ([decision](./4_decisions.md#publisher-ledger-writes-run-on-the-event-loop)).
 3. **Send item by item.** Each post is marked `submitting` before its media upload and
    re-stamped by compare-and-set (`Ledger.item_sending`) just before the post request leaves. If
    reconcile settled it meanwhile (a very slow upload looks like a dead sender), the post is not
@@ -144,8 +147,10 @@ the write lock. States, columns, usage accounting and schema migration are speci
   through `redact`, which masks the same live values and shapes as `[redacted:<label>]` and keeps the words
   around them. The ledger's inventory is `app/core/ledger/text.py`'s `REDACTED_COLUMNS`.
 - **Media confinement** ([media.py](../../../src/pulsar/app/core/publishing/media.py)): files are read only
-  from configured roots, opened without following symlinks, size-checked before reading, and
-  typed by content. See [specs/media-confinement.md](./specs/media-confinement.md).
+  from configured roots, opened by walking the resolved path down from `/` without following
+  a symlink (so a root, or a parent of it, swapped for a symlink after resolution is refused,
+  while a root configured as a symlink still works), size-checked before reading, and typed by
+  content. See [specs/media-confinement.md](./specs/media-confinement.md).
 
 ## 8. Importing `posted.jsonl`
 
@@ -176,8 +181,11 @@ to compare.
   text to price); their posts still count toward the daily cap.
 - **Estimated, not billed, cost.** Budgets use the configured price table. If X changes prices
   and the config is not updated, budgets are wrong in either direction.
-- **Blocking I/O on the event loop.** File and SQLite calls run on the async path;
-  [ORB-13039] proposes moving them off it, together with closing a media-root swap race.
+- **Per-item ledger writes can hold the event loop.** They stay inline so each is ordered with
+  its send; under another process's write lock one can wait up to the 10 s busy timeout.
+- **A root is a path, not an inode.** The open refuses a symlink anywhere on the resolved
+  path, but a real directory renamed onto the root (which needs write access to its parent)
+  is the root from then on.
 - **The fingerprint can collide.** Two posts that differ only in URLs, leading mentions or
   whitespace fingerprint alike; the "never match an id already held" rule limits the damage to
   mis-attributing which of two ambiguous posts went out.
@@ -187,6 +195,6 @@ to compare.
 - [ORB-13027] — added the ledger v0, idempotency and `outcome_unknown`.
 - [ORB-13028] — added plans, the publisher, ledger v2, policy, reconcile, import.
 - [ORB-13030] — phase 4: approvals, standing policies, dispatch.
-- [ORB-13039] — proposed: blocking I/O off the event loop; media-root swap race.
+- [ORB-13039] — took the plan claim off the event loop; closed the media-root swap race.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

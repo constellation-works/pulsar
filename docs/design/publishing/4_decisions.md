@@ -149,7 +149,7 @@ substring; everything else is classified from status codes and fields.
 
 ## Publisher ledger writes run on the event loop
 
-**Recorded:** 2026-09-26 · [ORB-13138]
+**Recorded:** 2026-09-26 · [ORB-13138] · amended 2026-09-27 · [ORB-13039]
 **Code anchors:** `src/pulsar/app/core/publishing/publisher.py::Publisher.publish`, `src/pulsar/app/core/publishing/publisher.py::Publisher.reconcile`, `src/pulsar/app/tools.py::_settle_on_error`, `src/pulsar/app/tools.py::_record_success`
 
 ### Context
@@ -161,18 +161,23 @@ or before the commit while the send already happened.
 
 ### Decision
 
-The publisher's per-item ledger writes (short, local transactions under a 5 s busy timeout),
-the MCP server's settling of a legacy `upload_media` / `delete_post` row, and reconcile's
-ledger reads and settles between its timeline requests, run inline on the event loop, so
-each is ordered with its send or read. Slow or unbounded work (preparing a plan, reading
-media, account and registry reads, claims made by the MCP surfaces) goes to a thread on
-every surface, the CLI included.
+The publisher's per-item ledger writes (short, local transactions under a 10 s busy
+timeout), the MCP server's settling of a legacy `upload_media` / `delete_post` row, and
+reconcile's ledger reads and settles between its timeline requests, run inline on the event
+loop, so each is ordered with its send or read. Slow or unbounded work (preparing a plan,
+reading media, account and registry reads) goes to a thread on every surface, the CLI
+included. So does every claim: the publisher's plan claim (with its policy and approval
+check, in the same transaction) and the MCP server's `upload_media` / `delete_post` claims.
+A claim precedes any send, so a thread cannot detach it from one; a cancellation that lands
+while it commits leaves a claimed row with nothing sent, which a retry of the key resumes.
 
 ### Consequences
 
 - The ledger can never disagree with what was sent because of task cancellation.
-- Cost: under lock contention a write can hold the loop up to the busy timeout; the MCP
-  server serves one account's writes at a time anyway.
+- A claim waiting on another process's write lock does not stall the MCP server's other
+  calls (`tests/test_server.py::test_a_claim_waiting_on_the_ledger_lock_does_not_stall_other_calls`).
+- Cost: under lock contention a per-item write or settle can hold the loop up to the busy
+  timeout; the MCP server serves one account's writes at a time anyway.
 
 ## `writes.jsonl` is a best-effort export
 
@@ -254,5 +259,6 @@ helper or by `Plan.from_mapping`, and flows on as `str`. Records that hold them 
 - [ORB-13027] — added the ledger v0 and `outcome_unknown`.
 - [ORB-13028] — added plans, digests, reservations and the publisher.
 - [ORB-13138] — aligned the publishing core with the constellation standards.
+- [ORB-13039] — took the plan claim off the event loop.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

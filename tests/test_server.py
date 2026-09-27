@@ -4,8 +4,10 @@ import base64
 import json
 import os
 import re
+import sqlite3
 from pathlib import Path
 
+import anyio
 import httpx
 import pytest
 from mcp.client._memory import InMemoryTransport
@@ -672,6 +674,33 @@ async def test_create_post_on_a_skipped_key_is_a_conflict_not_a_receipt(
     assert out["ok"] is False and out["code"] == "idempotency_conflict"
     assert out["detail"]["state"] == "skipped"
     assert fake_x.calls("POST", "/tweets") == []
+
+
+async def test_a_claim_waiting_on_the_ledger_lock_does_not_stall_other_calls(
+    session, authed, fake_x, paths
+):
+    """The plan claim waits out another writer in a thread, not on the shared event loop."""
+    _payload(await session.call_tool("create_post", {"text": "creates the ledger"}))
+    _payload(await session.call_tool("whoami", {}))  # cached, so it needs no network
+    holder = sqlite3.connect(paths.ledger_db, isolation_level=None)
+    holder.execute("BEGIN IMMEDIATE")
+    posted: dict[str, object] = {}
+
+    async def create_post():
+        posted.update(_payload(await session.call_tool("create_post", {"text": "waits"})))
+
+    try:
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(create_post)
+            await anyio.sleep(0.2)  # let create_post reach the claim
+            with anyio.fail_after(3):  # well under the 10 s busy timeout
+                out = _payload(await session.call_tool("whoami", {}))
+            assert out["username"] == "constworks"
+            assert posted == {}, "create_post must still be waiting on the lock"
+            holder.execute("COMMIT")
+    finally:
+        holder.close()
+    assert posted["ok"] is True and posted["text"] == "waits"
 
 
 # -- HTTP transport ---------------------------------------------------------------------

@@ -281,6 +281,31 @@ def test_symlink_swapped_in_after_resolution_is_not_followed(root, outside, monk
     assert "cannot open" in err.message
 
 
+@pytest.mark.parametrize("swapped", ["root", "parent"])
+def test_root_or_parent_swapped_for_a_symlink_after_resolution_is_refused(
+    tmp_path, outside, monkeypatch, swapped
+):
+    """Resolution pins the root's real path; the open walks it without following a symlink."""
+    root = tmp_path / "parent" / "root"
+    root.mkdir(parents=True)
+    (root / "pic.png").write_bytes(PNG)
+    target = root if swapped == "root" else root.parent
+    decoy = outside / "root" if swapped == "root" else outside
+    (outside / "root").mkdir()
+    (outside / "root" / "pic.png").write_bytes(PNG)
+    real_resolve = media._resolve_confined  # pyright: ignore[reportPrivateUsage]
+
+    def resolve_then_swap(*args):
+        found = real_resolve(*args)
+        target.rename(target.with_name(target.name + ".orig"))
+        target.symlink_to(decoy, target_is_directory=True)
+        return found
+
+    monkeypatch.setattr(media, "_resolve_confined", resolve_then_swap)
+    err = _refused(str(root / "pic.png"), None, None, roots=[root])
+    assert "cannot open" in err.message
+
+
 def test_base64_with_mismatched_mime_is_refused():
     err = _refused(None, base64.b64encode(JPEG).decode(), "image/png", roots=[])
     assert err.detail == {"declared": "image/png", "sniffed": "image/jpeg"}

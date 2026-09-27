@@ -13,8 +13,9 @@ secrets match none of its patterns. The defences here are, in order:
    escapes the roots is refused; the pulsar home, where the token bundle and
    key live, is refused even when a root contains it.
 2. **Regular files only**, opened without following symlinks at any
-   component (a walk from the root with ``O_NOFOLLOW``), so a path swapped
-   for a symlink after resolution cannot redirect the read. The opened fd
+   component (a walk from ``/`` down the resolved path with ``O_NOFOLLOW``),
+   so a file, directory, root or parent of the root swapped for a symlink
+   after resolution cannot redirect the read. The opened fd
    must be the inode that was checked, and its size is checked against the
    limit *before* any byte is read; the read itself is bounded.
 3. **Magic bytes are authoritative.** The content must be a PNG, JPEG, GIF,
@@ -168,21 +169,30 @@ def _resolve_confined(
     )
 
 
-def open_beneath(resolved: Path, root: Path) -> int:
-    """Open ``resolved`` by walking down from ``root`` without following any symlink.
+# Directories on the walk are opened ``O_PATH`` where the platform has it, so
+# an ancestor the process may search but not list does not block the open.
+_WALK_FLAGS = getattr(os, "O_PATH", os.O_RDONLY) | os.O_DIRECTORY | os.O_NOFOLLOW
 
-    ``resolved`` has no symlinks in it, so meeting one here means the tree
-    changed after resolution; ``O_NOFOLLOW`` turns that into an error instead
-    of a redirected read. ``O_NONBLOCK`` keeps a FIFO swapped in from hanging
-    the open; the caller refuses anything that is not a regular file.
+
+def open_beneath(resolved: Path, root: Path) -> int:
+    """Open ``resolved`` (inside ``root``) walking down from ``/``, following no symlink.
+
+    Both are resolved paths with no symlinks in them, so meeting one here
+    means the tree changed after resolution: the file, a directory below the
+    root, the root itself or one of its parents swapped for a symlink.
+    ``O_NOFOLLOW`` turns that into an error instead of a redirected read, so
+    the root the walk passes through is the one resolution named. A root
+    configured as a symlink still works: resolution followed it, and the walk
+    takes the real path it led to. ``O_NONBLOCK`` keeps a FIFO swapped in from
+    hanging the open; the caller refuses anything that is not a regular file.
     """
     parts = resolved.relative_to(root).parts
     if not parts:
         raise PulsarError(INVALID_MEDIA, f"not a regular file: {resolved}")
-    fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+    fd = os.open(root.anchor, _WALK_FLAGS)
     try:
-        for name in parts[:-1]:
-            nxt = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+        for name in (*root.parts[1:], *parts[:-1]):
+            nxt = os.open(name, _WALK_FLAGS, dir_fd=fd)
             os.close(fd)
             fd = nxt
         return os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)

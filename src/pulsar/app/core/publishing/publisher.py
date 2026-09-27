@@ -28,6 +28,7 @@ as ``PreparedPost.uploaded``, and the surface binds them into the digest.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 from collections.abc import Callable, Sequence
@@ -390,24 +391,32 @@ class Publisher:
         tz = self.settings.policy.tz
         day_start, _ = day_window(now, tz)
         month_start, _ = month_window(now, tz)
-        remaining = self._remaining(prepared, key)
 
-        def admit(usage: Any) -> None:
-            self._admit(usage, remaining, now)
+        def claim() -> PlanRecord:
+            remaining = self._remaining(prepared, key)
 
-        record = self.ledger.claim_plan(
-            key=key,
-            tool=tool,
-            digest=prepared.digest,
-            provider=bound.provider,
-            account=bound.ref,
-            caller=caller,
-            items=intents,
-            admit=admit,
-            day_start=day_start,
-            month_start=month_start,
-            approved=require_approval,
-        )
+            def admit(usage: Any) -> None:
+                self._admit(usage, remaining, now)
+
+            return self.ledger.claim_plan(
+                key=key,
+                tool=tool,
+                digest=prepared.digest,
+                provider=bound.provider,
+                account=bound.ref,
+                caller=caller,
+                items=intents,
+                admit=admit,
+                day_start=day_start,
+                month_start=month_start,
+                approved=require_approval,
+            )
+
+        # The claim can wait out another process's write lock (the busy
+        # timeout), so it runs in a thread: a long-lived server's other calls
+        # keep going. Nothing is sent before it returns, so the thread cannot
+        # detach it from a send; the per-item writes below stay inline.
+        record = await asyncio.to_thread(claim)
         if record.state in (PUBLISHED, SKIPPED):
             return Outcome(record=record, replayed=True)
         return await self._run(prepared, key, record)

@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: media confinement — roots, regular files, bounded reads, content-typed uploads"
-last_validated: 2026-09-26
+last_validated: 2026-09-27
 ---
 
 # Spec: Media Confinement
@@ -33,9 +33,10 @@ its patterns.
 ## Opening
 
 - Directories, FIFOs and devices are refused before they are opened.
-- The file is opened by walking down from the root with no-follow opens, and the opened file
-  must be the one that was checked, so swapping the path after the check does not redirect the
-  read.
+- The file is opened by walking its resolved path down from `/` with no-follow opens, and the
+  opened file must be the one that was checked, so swapping the file, a directory, the root or
+  a parent of the root for a symlink after the check does not redirect the read. A root
+  configured as a symlink still works: resolution follows it and the walk takes the real path.
 - The size limit is checked from the open file's metadata before any byte is read, and the read
   stops one byte past the limit.
 
