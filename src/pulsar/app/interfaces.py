@@ -92,6 +92,7 @@ class App(Protocol):
         read_only: bool = False,
         settings: Settings | None = None,
         media_base: Path | None = None,
+        upload_deadline: float | None = None,
     ) -> Runtime: ...
 
     def default_account(self) -> str | None: ...

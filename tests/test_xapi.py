@@ -197,13 +197,120 @@ class FakeClock:
         self.elapsed += seconds
 
 
+def timed_upload_transport(clock, seconds_per_append, paths):
+    def handle(request):
+        path = request.url.path
+        paths.append(path)
+        if path.endswith("/initialize"):
+            return httpx.Response(200, json={"data": {"id": "710000"}})
+        if path.endswith("/append"):
+            clock.elapsed += seconds_per_append
+            return httpx.Response(200, json={"data": {}})
+        assert path.endswith("/finalize")
+        return httpx.Response(200, json={"data": {"id": "710000"}})
+
+    return httpx.MockTransport(handle)
+
+
+async def test_100_mib_upload_at_two_mbit_has_enough_time_without_cap(store, authed):
+    clock = FakeClock()
+    paths = []
+    client = XClient(
+        store,
+        transport=timed_upload_transport(clock, 16, paths),
+        monotonic=clock.monotonic,
+    )
+    try:
+        assert await client.upload_media(b"v" * (100 * 1024 * 1024), "video/mp4") == (
+            "710000",
+            "succeeded",
+        )
+    finally:
+        await client.aclose()
+    assert clock.elapsed == 400
+    assert sum(path.endswith("/append") for path in paths) == 25
+    assert paths[-1].endswith("/finalize")
+
+
+async def test_pathologically_slow_upload_times_out_before_next_request(store, authed):
+    clock = FakeClock()
+    paths = []
+    client = XClient(
+        store,
+        transport=timed_upload_transport(clock, 20, paths),
+        monotonic=clock.monotonic,
+    )
+    try:
+        with pytest.raises(PulsarError) as exc:
+            await client.upload_media(b"v" * (100 * 1024 * 1024), "video/mp4")
+    finally:
+        await client.aclose()
+    assert exc.value.code == "upload_timeout" and exc.value.retryable
+    assert paths[-1].endswith("/append")
+    assert not any(path.endswith("/finalize") for path in paths)
+
+
+async def test_plugin_upload_cap_fails_before_backend_timeout(store, authed):
+    clock = FakeClock()
+    paths = []
+    client = XClient(
+        store,
+        transport=timed_upload_transport(clock, 5, paths),
+        monotonic=clock.monotonic,
+        upload_deadline=55,
+    )
+    try:
+        with pytest.raises(PulsarError) as exc:
+            await client.upload_media(b"v" * (100 * 1024 * 1024), "video/mp4")
+    finally:
+        await client.aclose()
+    assert exc.value.code == "upload_timeout"
+    assert clock.elapsed == 55 < 60
+    assert not any(path.endswith("/finalize") for path in paths)
+
+
+async def test_completed_finalize_is_not_reclassified_as_upload_timeout(store, authed):
+    clock = FakeClock()
+    paths = []
+
+    def handle(request):
+        response = timed_upload_transport(clock, 0, paths).handle_request(request)
+        if request.url.path.endswith("/finalize"):
+            clock.elapsed = 31
+        return response
+
+    client = XClient(store, transport=httpx.MockTransport(handle), monotonic=clock.monotonic)
+    try:
+        assert await client.upload_media(b"a", "image/png") == ("710000", "succeeded")
+    finally:
+        await client.aclose()
+    assert paths[-1].endswith("/finalize") and clock.elapsed == 31
+
+
+async def test_in_flight_upload_stall_is_upload_timeout(store, authed, monkeypatch):
+    clock = FakeClock()
+    monkeypatch.setattr("pulsar.app.core.channels.x.client.UPLOAD_DEADLINE_FLOOR_SECONDS", 0.02)
+
+    async def stalled(_request):
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+    client = XClient(store, transport=httpx.MockTransport(stalled), monotonic=clock.monotonic)
+    try:
+        with pytest.raises(PulsarError) as exc:
+            await client.upload_media(b"", "image/png")
+    finally:
+        await client.aclose()
+    assert exc.value.code == "upload_timeout"
+
+
 async def test_upload_deadline_expires_between_chunks_before_finalize(store, authed, fake_x):
     clock = FakeClock()
 
     def handle(request):
         response = fake_x.handle(request)
         if request.url.path.endswith("/append"):
-            clock.elapsed += 3
+            clock.elapsed += 15
         return response
 
     client = XClient(store, transport=httpx.MockTransport(handle), monotonic=clock.monotonic)

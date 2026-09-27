@@ -68,8 +68,8 @@ REFRESH_AHEAD_SECONDS = 120
 IMAGE_CHUNK_BYTES = 1024 * 1024
 VIDEO_CHUNK_BYTES = 4 * 1024 * 1024
 PROCESSING_TIMEOUT_SECONDS = 300
-UPLOAD_DEADLINE_FLOOR_SECONDS = 5
-UPLOAD_MIN_BYTES_PER_SECOND = 5 * 1024 * 1024
+UPLOAD_DEADLINE_FLOOR_SECONDS = 30
+UPLOAD_MIN_BYTES_PER_SECOND = 256 * 1024
 # The most provider-supplied text an error message embeds.
 PROVIDER_TEXT_LIMIT = 500
 
@@ -157,6 +157,7 @@ class XClient:
         monotonic: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         timeout: float = 30.0,
+        upload_deadline: float | None = None,
     ) -> None:
         self.store = store
         self.base_url = base_url.rstrip("/")
@@ -164,6 +165,7 @@ class XClient:
         self._now = now
         self._monotonic = monotonic
         self._sleep = sleep
+        self._upload_deadline = upload_deadline
         self._http = httpx.AsyncClient(transport=transport, timeout=timeout)
         self._refresh_lock = asyncio.Lock()
         self._pinned = False
@@ -431,20 +433,19 @@ class XClient:
             + UPLOAD_DEADLINE_FLOOR_SECONDS
             + len(data) / UPLOAD_MIN_BYTES_PER_SECOND
         )
+        if self._upload_deadline is not None:
+            deadline = min(deadline, self._upload_deadline)
 
         async def upload_request(method: str, path: str, **kwargs: Any) -> httpx.Response:
             remaining = deadline - self._monotonic()
             if remaining <= 0:
                 raise PulsarError(UPLOAD_TIMEOUT, "X media upload timed out")
             try:
-                response = await asyncio.wait_for(
+                return await asyncio.wait_for(
                     self.request(method, path, **kwargs), timeout=remaining
                 )
             except TimeoutError as exc:
                 raise PulsarError(UPLOAD_TIMEOUT, "X media upload timed out") from exc
-            if self._monotonic() >= deadline:
-                raise PulsarError(UPLOAD_TIMEOUT, "X media upload timed out")
-            return response
 
         init = await upload_request(
             "POST",

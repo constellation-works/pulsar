@@ -129,6 +129,22 @@ def test_manifest_declares_exactly_the_backend_tools():
         assert tool["output_schema"] == {"$ref": f"schemas/{tool['name']}.response.json"}
 
 
+def test_publish_passes_upload_cap_below_backend_timeout(state, workspace, monkeypatch):
+    observed = []
+
+    async def fake_publish(rt, **_kwargs):
+        observed.append(rt._client_kwargs["upload_deadline"])
+        return {}
+
+    monkeypatch.setattr(plugin, "publish", fake_publish)
+    app = plugin_app({"ORBIT_PLUGIN_STATE": str(state)})
+    call = orbit_tool.Call("publish", {"source": "plan.yaml"}, {"workspace_root": str(workspace)})
+    assert asyncio.run(orbit_tool.publish(app, call)) == {}
+    remaining = observed[0] - orbit_tool.time.monotonic()
+    assert 0 < remaining <= orbit_tool.PUBLISH_UPLOAD_TIMEOUT_SECONDS
+    assert remaining * 1000 < MANIFEST["spec"]["backend"]["timeout_ms"]
+
+
 def test_no_request_schema_takes_a_credential():
     for path in (ROOT / "schemas").glob("*.request.json"):
         schema = json.loads(path.read_text())

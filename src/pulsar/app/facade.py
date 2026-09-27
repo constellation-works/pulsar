@@ -60,6 +60,7 @@ class LocalApp:
         read_only: bool = False,
         settings: Settings | None = None,
         media_base: Path | None = None,
+        upload_deadline: float | None = None,
     ) -> LocalRuntime:
         """A runtime over this home: the home's settings unless ``settings``,
         media paths from ``media_base`` else the cwd."""
@@ -70,6 +71,7 @@ class LocalApp:
             media_base=self.cwd if media_base is None else media_base,
             transport=self.transport,
             read_only=read_only,
+            upload_deadline=upload_deadline,
         )
 
     # -- accounts ---------------------------------------------------------------------

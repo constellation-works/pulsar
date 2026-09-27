@@ -33,6 +33,7 @@ import asyncio
 import json
 import logging
 import sys
+import time
 from collections.abc import Callable, Coroutine, Mapping
 from dataclasses import replace
 from pathlib import Path
@@ -50,6 +51,7 @@ log = logging.getLogger(__name__)
 
 NAMESPACE = "pulsar"
 ENVELOPE_VERSION = 1
+PUBLISH_UPLOAD_TIMEOUT_SECONDS = 55.0
 
 # Each tool's input keys: the request schemas' properties (a test holds them
 # equal). Anything else is refused, not ignored.
@@ -212,7 +214,12 @@ async def publish(app: App, call: Call) -> Output:
         raise PulsarError(INVALID_ARGUMENT, "`source` needs a workspace")
     account = call.string("account")
     dry_run = call.flag("dry_run")
-    rt = app.runtime(read_only=dry_run, settings=_settings(app, call), media_base=call.workspace)
+    rt = app.runtime(
+        read_only=dry_run,
+        settings=_settings(app, call),
+        media_base=call.workspace,
+        upload_deadline=time.monotonic() + PUBLISH_UPLOAD_TIMEOUT_SECONDS,
+    )
     async with rt:
         return await plugin.publish(
             rt,

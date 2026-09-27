@@ -11,7 +11,7 @@ summary: The Channel protocol's failure semantics, and how the X adapter measure
 tags: [channels, providers, x, adapter, fingerprint]
 paths: ["src/pulsar/app/core/channels/contract.py", "src/pulsar/app/core/channels/x/**"]
 related_features: [publishing, accounts]
-related_artifacts: [ORB-13006, ORB-13028, ORB-13207]
+related_artifacts: [ORB-13006, ORB-13028, ORB-13207, ORB-13285]
 ---
 
 # Channels — Design
@@ -66,11 +66,14 @@ contains a URL, else `plain_post_usd`.
   checks the account's entitlement). At most 4 items per post; video and GIF must be alone.
 - Upload uses the v2 chunked endpoints (`initialize`, `append`, `finalize`): 1 MiB chunks for
   images, 4 MiB for video. From before `initialize` through the `finalize` response, the
-  monotonic deadline is 5 seconds plus media bytes divided by 5 MiB/s (at most 25 seconds for
-  the 100 MiB local cap). Each request is bounded by the remaining time, and the client checks
-  the deadline after each response. On expiry, no further chunk or `finalize` is sent and the
-  client raises retryable `upload_timeout`. The publisher records the item failed, so a retry
-  can upload again.
+  monotonic deadline is 30 seconds plus media bytes divided by 256 KiB/s (about 2 Mbit/s;
+  430 seconds for 100 MiB). Each request is bounded by the remaining time. A request still in
+  flight at the deadline, or a next request that cannot start before it, fails as retryable
+  `upload_timeout`; a completed response is kept. Each HTTP request also has a 30-second
+  timeout. The Orbit plugin passes one absolute deadline 55 seconds after `publish` starts,
+  five seconds below its 60-second backend limit; the client uses the earlier deadline. CLI
+  and MCP do not pass this cap. The publisher records a timed-out item failed, so a retry can
+  upload again.
   Video then waits up to five minutes for processing state `succeeded`;
   `failed` or a timeout is `invalid_media` with the last processing detail and no media id.
 - Alt text goes to `POST /2/media/metadata` after the upload and before the post, for images
@@ -134,5 +137,6 @@ replies, reposts, quotes, bookmarks) come with both. A post without an id or a r
 - [ORB-13006] — added MP4 upload with processing poll.
 - [ORB-13028] — introduced the contract, the X channel and the fingerprint.
 - [ORB-13207] — bounded chunked media upload before finalize.
+- [ORB-13285] — set a conservative upload rate and pass the Orbit deadline to the client.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
