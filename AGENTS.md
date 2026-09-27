@@ -17,7 +17,7 @@
   the network — use the fake transport in `tests/`.
 - `agent-main` is the landing branch; commit directly, no PR gate. Daniel owns
   releases and any change to the X app registration.
-- The Orbit plugin is `plugin.yaml` + `bin/pulsar` + `schemas/` +
+- The Orbit plugin is defined by its manifest plus `bin/pulsar` + `schemas/` +
   `skills/` + `tests/conformance/`. A tool change updates its schema
   and goldens; `orbit plugin test <clean export> --grant fs,network` runs them
   under the sandbox. No symlinks in the tree: the installer refuses them.

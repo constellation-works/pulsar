@@ -28,7 +28,9 @@ from .media_samples import PNG
 from .test_server import SECRET_PARAM
 
 ROOT = Path(__file__).resolve().parent.parent
-MANIFEST = yaml.safe_load((ROOT / "plugin.yaml").read_text())
+MANIFESTS = tuple(ROOT.glob("orbit_*.yaml"))
+assert len(MANIFESTS) == 1, "expected exactly one root Orbit manifest"
+MANIFEST = yaml.safe_load(MANIFESTS[0].read_text())
 GOLDENS = yaml.safe_load((ROOT / "tests" / "conformance" / "pulsar.yaml").read_text())["tests"]
 assert GOLDENS, "tests/conformance/pulsar.yaml has no cases"
 

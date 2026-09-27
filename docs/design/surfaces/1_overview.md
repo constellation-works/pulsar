@@ -9,7 +9,7 @@ doc_role: overview
 type: design
 summary: pulsar's three front ends over one core and one ledger — the standalone MCP server, the operator CLI and the Orbit plugin.
 tags: [surfaces, mcp, cli, orbit-plugin]
-paths: ["src/pulsar/**", "plugin.yaml", "bin/pulsar", "schemas/**", "skills/**", "tests/conformance/**"]
+paths: ["src/pulsar/**", "orbit_*.yaml", "bin/pulsar", "schemas/**", "skills/**", "tests/conformance/**"]
 related_features: [publishing, accounts]
 related_artifacts: [ORB-12124, ORB-13028, ORB-13029, ORB-13030]
 ---
@@ -53,7 +53,7 @@ translates requests and errors; it never decides policy and never touches a cred
 | Operator verbs | [app/ops.py](../../../src/pulsar/app/ops.py) | [ORB-13028] |
 | Orbit exec backend: envelopes, inputs, sandbox | [orbit/backend.py](../../../src/pulsar/orbit/backend.py) | [ORB-13029] |
 | Plugin tools behind it | [app/plugin.py](../../../src/pulsar/app/plugin.py) | [ORB-13029] |
-| Plugin manifest, launcher | [plugin.yaml](../../../plugin.yaml), [bin/pulsar](../../../bin/pulsar) | [ORB-13029] |
+| Orbit plugin manifest and launcher | root `orbit_*.yaml`, [bin/pulsar](../../../bin/pulsar) | [ORB-13029] |
 | Tool schemas, skill, goldens | [schemas/](../../../schemas/), [skills/](../../../skills/), [tests/conformance/](../../../tests/conformance/pulsar.yaml) | [ORB-13029] |
 
 Error codes shared by all surfaces: [references/error-codes.md](./references/error-codes.md).

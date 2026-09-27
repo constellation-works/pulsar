@@ -9,7 +9,7 @@ doc_role: design
 type: design
 summary: The MCP tools and the caller boundary, the operator CLI, and how the Orbit plugin runs (home, settings, paths, grants, launcher, envelope).
 tags: [surfaces, mcp, cli, orbit-plugin]
-paths: ["src/pulsar/**", "plugin.yaml", "bin/pulsar", "schemas/**"]
+paths: ["src/pulsar/**", "orbit_*.yaml", "bin/pulsar", "schemas/**"]
 related_features: [publishing, accounts]
 related_artifacts: [ORB-13029, ORB-13032, ORB-13114, ORB-13115, ORB-13138]
 ---
@@ -135,7 +135,7 @@ beneath them, `src/pulsar/cli/toolkit/` holds what they are written against: `co
 
 ## 3. Orbit Plugin
 
-`plugin.yaml` (schemaVersion 2, namespace `pulsar`, exec backend, requires Orbit `>=0.24.0
+The tool-specific manifest (schemaVersion 2, namespace `pulsar`, exec backend, requires Orbit `>=0.24.0
 <1.0.0`, platforms linux and macos, program `uv`). Three offline tools and three that spend
 money:
 

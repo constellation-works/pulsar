@@ -1,5 +1,5 @@
 #!/bin/sh
-# Orbit exec backend launcher (plugin.yaml backend.command).
+# Orbit exec backend launcher (manifest backend.command).
 #
 # The plugin root is read-only under the sandbox and may not contain a venv
 # (the installer refuses symlinks), so the environment, uv's cache, any

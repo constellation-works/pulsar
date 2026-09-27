@@ -1,7 +1,7 @@
 ---
 title: Surfaces — Vision
 owner: claude
-last_updated: 2026-09-26
+last_updated: 2026-09-27
 last_validated: 2026-09-26
 status: Draft
 feature: surfaces
@@ -9,7 +9,7 @@ doc_role: vision
 type: design
 summary: The phase 4 plugin tools (submit, publish, approve, dispatch), operator-only approval, and what Orbit must provide for them.
 tags: [surfaces, orbit-plugin, approvals, routines]
-paths: ["plugin.yaml", "src/pulsar/orbit/backend.py"]
+paths: ["orbit_*.yaml", "src/pulsar/orbit/backend.py"]
 related_features: [publishing]
 related_artifacts: [ORB-13030, ORB-13114, ORB-13115]
 ---
