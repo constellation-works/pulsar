@@ -2,7 +2,7 @@
 title: Surfaces — Decisions
 owner: claude
 last_updated: 2026-09-27
-last_validated: 2026-09-26
+last_validated: 2026-09-27
 status: Accepted
 feature: surfaces
 doc_role: decisions
@@ -281,30 +281,32 @@ loopback only (`--host` is a closed choice) and the `Host` allow-list is exact (
   stdio. The server holds no credential it returns, and every write still passes the ledger,
   the policy and the secret scanner.
 
-## No supply-chain gate beyond the lock and dependabot
+## Audit the complete lock in a separate networked gate
 
-**Recorded:** 2026-09-26 · [ORB-13138]
-**Code anchors:** `Makefile` (`lint`: `uv lock --check`), `.github/dependabot.yml`, `uv.lock`
+**Recorded:** 2026-09-27 · [ORB-13208]
+**Code anchors:** `Makefile` (`audit`), `scripts/audit.py::audit`, `audit-exceptions.toml`, `.github/workflows/check.yml`
 
 ### Context
 
-A supply-chain gate would deny yanked packages, open advisories and unknown sources, and
-allow-list licenses. For pulsar that is an advisory audit and a license check of `uv.lock`. `make check` must also run offline, and an advisory audit
-needs the network.
+`uv lock --check` catches drift but cannot tell whether a pinned release has since gained an
+advisory or been yanked. Dependabot is weekly and does not enforce license policy. Advisory and
+PyPI metadata queries need the network; `make check` must remain usable offline.
 
 ### Decision
 
-For now the gate is: every dependency pinned with hashes in `uv.lock` from PyPI only,
-`uv lock --check` in `make check` so the lock cannot drift from `pyproject.toml`, and
-dependabot proposing updates and security fixes. A Python audit gate (advisories, yanked
-releases, licenses, with dated exceptions) is follow-up work.
+Keep `make check` offline. Run `make audit` separately in CI. It reads every external package
+in `uv.lock`, refuses non-PyPI sources, queries OSV for advisories, and queries each pinned
+PyPI release for license metadata and the yank state of every locked artifact hash. The checked-in
+`audit-exceptions.toml` is an exact license allow-list plus finding-specific exceptions. Each
+exception needs a reason and re-review date; the audit fails on that date even if the finding
+has disappeared. Unknown license metadata fails unless explicitly excepted. No exception can
+hide an unavailable artifact or an API failure.
 
 ### Consequences
 
-- A lock that drifted from `pyproject.toml` fails `make check`, and every install is the
-  hashed, PyPI-sourced set in `uv.lock` (`uv sync --frozen`).
-- Cost: a known-vulnerable or yanked pin is caught only when dependabot raises it, and licenses
-  are not checked. Re-review when the audit gate lands.
+- Offline development checks remain deterministic; CI checks live advisory and release state.
+- Cost: CI now depends on OSV and PyPI availability and runs a request per pinned release. A
+  release with imprecise license metadata needs an explicit, time-bounded review exception.
 
 ## The launcher's sync is bounded only where timeout(1) runs
 
@@ -392,6 +394,7 @@ It renames within the home, refuses to overwrite credentials, and is what `pulsa
 - [ORB-13029] — built the Orbit plugin.
 - [ORB-13114] — Orbit: structured plugin errors (ws_orbit).
 - [ORB-13138] — aligned the surfaces with the constellation standards.
+- [ORB-13208] — added a networked supply-chain audit gate.
 - [ORB-13248] — human output, grouped help and plain errors for the CLI.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

@@ -28,3 +28,6 @@ jobs:
 
       - name: Check
         run: make check
+
+      - name: Audit locked dependencies
+        run: make audit

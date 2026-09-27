@@ -1,0 +1,22 @@
+# Exact license values from PyPI release metadata are allowed. Composite SPDX
+# expressions are listed explicitly; an unknown or changed value fails closed.
+license_allowlist = [
+    "Apache-2.0",
+    "Apache-2.0 OR BSD-2-Clause",
+    "Apache-2.0 OR BSD-3-Clause",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "MIT",
+    "MIT-0",
+    "MPL-2.0",
+    "PSF",
+    "PSF-2.0",
+]
+
+[[exceptions]]
+kind = "license"
+name = "colorama"
+version = "0.4.6"
+value = "unknown"
+reason = "The release publishes only a generic BSD classifier; confirm its exact variant before allow-listing it."
+review_date = 2026-12-27
