@@ -15,8 +15,12 @@ stores what it reads.
 Python 3.12+ and [uv](https://docs.astral.sh/uv/).
 
 ```sh
-uv sync
+uv tool install git+https://github.com/constellation-works/pulsar@v0.1.0
 ```
+
+This puts `pulsar` on your PATH. From a checkout instead, `uv sync` and prefix each command
+with `uv run`. Before upgrading, read the [changelog](CHANGELOG.md), then run
+`pulsar migrate --confirm`.
 
 ## Authorize an account (human, once)
 
@@ -24,8 +28,8 @@ Create an X app with OAuth 2.0, type *Native app*, callback `http://127.0.0.1:89
 Then, on the posting host (over SSH, forward the callback with `ssh -L 8976:127.0.0.1:8976`):
 
 ```sh
-uv run pulsar auth login --account x:<handle> --client-id <CLIENT_ID>
-uv run pulsar auth status            # add --live to prove the refresh works
+pulsar auth login --account x:<handle> --client-id <CLIENT_ID>
+pulsar auth status            # add --live to prove the refresh works
 ```
 
 pulsar checks with X that the token belongs to `@<handle>` before storing it, encrypted,
@@ -40,12 +44,12 @@ day. See [the config reference](docs/design/publishing/references/config.md).
 ## Use
 
 ```sh
-uv run pulsar validate plan.yaml          # what would be posted, its cost and digest; offline
-uv run pulsar publish plan.yaml --confirm # post it (idempotent: re-running replays the receipt)
-uv run pulsar status                      # budget and cap use, unresolved writes
-uv run pulsar reconcile                   # settle posts whose outcome is unknown
-uv run pulsar serve                       # MCP server (stdio)
-uv run pulsar migrate --confirm           # after an upgrade: bring the home up to date
+pulsar validate plan.yaml          # what would be posted, its cost and digest; offline
+pulsar publish plan.yaml --confirm # post it (idempotent: re-running replays the receipt)
+pulsar status                      # budget and cap use, unresolved writes
+pulsar reconcile                   # settle posts whose outcome is unknown
+pulsar serve                       # MCP server (stdio)
+pulsar migrate --confirm           # after an upgrade: bring the home up to date
 ```
 
 Output is a table on a terminal and tab-separated lines when piped; add `--json` (or set
@@ -64,11 +68,11 @@ posts:
 
 As an Orbit plugin (`pulsar.status`, `validate`, `history`; and, from tasks that require
 them, `engagements`, `metrics` and `publish`, which publishes only what a human approved with
-`pulsar approve`), install from a commit export:
+`pulsar approve`), install from an export of the release tag, in a clone:
 
 ```sh
-mkdir /tmp/pulsar-plugin && git archive agent-main | tar -x -C /tmp/pulsar-plugin
-orbit plugin add /tmp/pulsar-plugin --enable --grant 'fs={{workspace}},{{plugin_state}}' --grant network
+mkdir /tmp/pulsar-plugin-v0.1.0 && git archive v0.1.0 | tar -x -C /tmp/pulsar-plugin-v0.1.0
+orbit plugin add /tmp/pulsar-plugin-v0.1.0 --enable --grant 'fs={{workspace}},{{plugin_state}}' --grant network
 orbit pulsar status
 ```
 
