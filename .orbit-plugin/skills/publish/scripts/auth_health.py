@@ -10,6 +10,10 @@ import json
 import sys
 from typing import Any
 
+# Kept in sync with pulsar.app.health; an expired token alone does not prove
+# cached identity or exclude another unverified reason.
+REFRESH_UNVERIFIED_REASON = "the access token has expired and the refresh was not exercised"
+
 
 def plan(status: dict[str, Any], tasks: dict[str, Any]) -> dict[str, Any]:
     """Return task additions, escalations, and existing per-account task IDs."""
@@ -24,6 +28,15 @@ def plan(status: dict[str, Any], tasks: dict[str, Any]) -> dict[str, Any]:
             continue
         if health not in ("unverified", "unhealthy"):
             raise ValueError("unknown account health")
+        if (
+            health == "unverified"
+            and account["status"] == "active"
+            and account["authorized"] is True
+            and account["reauth_required"] is False
+            and account["token_state"] == "expired"
+            and account["reason"] == REFRESH_UNVERIFIED_REASON
+        ):
+            continue
         alias = account["alias"]
         tag = f"pulsar-auth-health:{alias}"
         attention = next(

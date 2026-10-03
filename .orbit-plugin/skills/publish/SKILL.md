@@ -12,7 +12,7 @@ only then may an agent publish it.
 
 | Tool | Use it to |
 |---|---|
-| `pulsar.status` | see each account's token health, the day and month budget, posts today against the cap, unresolved writes and the last publication; `healthy` and `attention` summarise what needs a human |
+| `pulsar.status` | see each account's token health, the day and month budget, posts today against the cap, unresolved writes and the last publication; `ready` gates the selected account, `healthy` and `attention` report all health concerns, and `default_account` is the effective default |
 | `pulsar.validate` | check a plan (inline `plan`, or a workspace-relative YAML `source`) and get, per account, the exact posts, weighted lengths, media facts, estimated cost and the plan `digest` |
 | `pulsar.history` | list the newest ledger rows (`limit` 1–100, optional `account`) with state, URL and cost; `keys` looks up the rows held under those idempotency keys instead |
 | `pulsar.engagements` | read others' posts mentioning the account (`hours` 1–168, default 24; `limit` 1–100, default 20), each with `replied` |
@@ -46,12 +46,18 @@ and general timelines are not its job.
 
 ## Draft and validate
 
-1. Call `pulsar.status`. If `healthy` is false, read `attention` and stop: an
-   account that needs a login, or writes with an unknown outcome, are for a human.
+1. Call `pulsar.status`, naming `account` when the plan targets a specific one.
+   If `ready` is false, record `attention` and `default_account` and stop: select
+   an account when no default is available; known auth failures, unresolved
+   writes and legacy migration need a human. `ready` allows unverified health:
+   the first live call settles it and handles an expired token's refresh.
+   If a later live call returns `auth_expired` or `reauth_required`, stop and
+   record its error and attention; never run a login or live check yourself.
 2. Write the plan. One post is `text:` (plus optional `media:`); a thread is
    `posts:`, a list of those. Every media item needs `alt`, and its `path` must lie
    inside the workspace. `reply_to` or `quote`, never both. `account` (for example
-   `x:<handle>`) or `accounts:`; omitted means the default account.
+   `x:<handle>`) or `accounts:`; omitted means the effective default account:
+   the configured default, else the sole non-revoked bound account.
    ```yaml
    account: x:<handle>
    posts:
@@ -87,10 +93,13 @@ already skipped, with its note and no URL, and continue to the next plan.
    branch: pulsar reads `source` from the workspace root.
 2. The human runs it at a terminal: it shows the full posts and asks them to type
    the digest's first characters. You cannot run it for them, and must not try.
-3. When the task that publishes runs, call `pulsar.publish` with `source`. It
+3. When the task that publishes runs, check `pulsar.status` with the plan's
+   account and stop if `ready` is false, recording its attention. For several
+   accounts check each one. Then call `pulsar.publish` with `source`. It
    sends only if every account's digest is approved; an edited plan needs a new
    approval (a changed `not_before` does not). Calling it again replays the
-   receipt and sends nothing.
+   receipt and sends nothing. If the live call returns `auth_expired` or
+   `reauth_required`, stop and record its error and attention for a human.
 
 A plan with a `not_before` slot can instead wait for the `pulsar-dispatch` routine,
 if a human has enabled it and its directory is under `[dispatch] plans` in pulsar's
@@ -102,7 +111,7 @@ the ledger sends it once, so a publish task and the routine can both reach it.
 
 | code | do |
 |---|---|
-| `auth_expired`, `account_mismatch` | stop; a human runs `pulsar auth login --account <alias>` |
+| `auth_expired`, `reauth_required`, `account_mismatch` | stop and record the returned error and attention; a human runs the returned remedy for the named home and account |
 | `unknown_account` | use an alias from `detail.known`, or ask a human to bind it |
 | `invalid_text`, `invalid_plan`, `invalid_media`, `unsupported` | fix the plan (`detail` says where) |
 | `secret_detected` | rewrite the text; never retry it verbatim |
@@ -123,8 +132,11 @@ plugin and MCP server, one checked step at a time.
 ## Auth-health
 
 The plugin seeds `pulsar-auth-health` disabled. When a human enables it, its daily
-offline `pulsar.status` check files a proposed human attention task per unverified
-or unhealthy account. It writes no files and never runs a live check or login.
+offline `pulsar.status` check files a proposed human attention task per unhealthy
+account or unverified account needing investigation. Routine access-token expiry
+with a stored refresh token and a matching cached identity raises no follow-up:
+the next authorized live call handles refresh. It writes no files and never runs
+a live check or login.
 The exact command in `attention` names the correct home and account.
 
 The auto-task uses [scripts/auth_health.py](./scripts/auth_health.py), relative to
@@ -143,8 +155,9 @@ to file duplicate tasks.
 The helper returns `followups` (arguments for `orbit.task.add`), `updates`
 (arguments for `orbit.task.update`) and `skipped` (existing account task IDs).
 Supply your model provenance and workspace to the task tools. New tasks stay
-proposed for a human. All healthy produces empty lists; unverified produces a
-medium-priority Verify task; `reauth_required` produces a high-priority
+proposed for a human. Healthy and routine-expiry accounts produce empty lists;
+other unverified reasons (including no cached identity) produce a medium-priority
+Verify task; `reauth_required` produces a high-priority
 Re-authorize task. The stable `pulsar-auth-health:<alias>` tag suppresses new
 tasks while one is open, including blocked or someday. If verification becomes
 re-authorization, update the open task's title and priority and add current

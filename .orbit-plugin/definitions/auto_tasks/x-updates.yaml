@@ -19,7 +19,7 @@ template:
 
     ## Steps
 
-    1. Call `pulsar.status`. If `healthy` is false, write `attention` into the execution summary and stop. Note `default_account`: every plan names that one account.
+    1. Call `pulsar.status`. If `ready` is false, write `attention` and `default_account` into the execution summary and stop. An unverified account with routine token expiry can proceed; the first live call handles refresh. If a later live call returns `auth_expired` or `reauth_required`, stop and record its error and attention in the summary. Note the effective `default_account` (the configured default, else the sole bound account): every plan names that one account.
     2. Collect candidates for the window with `gh`:
        - releases: for each public, non-archived repository (`gh repo list constellation-works --visibility public --no-archived --json name --limit 200`), its published releases (`gh release list -R constellation-works/<repo> --exclude-drafts --exclude-pre-releases --json tagName,name,publishedAt`) as `{"kind": "release", "repo", "tag", "title", "url", "at"}`;
        - newly public repositories: created in the window (`gh repo list ... --json name,createdAt,url,description`), or made public in it (`PublicEvent` in `gh api orgs/constellation-works/events`), as `{"kind": "repo", "repo", "title", "url", "at"}`;

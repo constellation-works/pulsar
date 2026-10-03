@@ -17,7 +17,7 @@ template:
 
     ## Steps
 
-    1. `pulsar.status`: budget and daily-cap use, unresolved writes, account health. Unresolved writes and unhealthy accounts go at the top, for a human.
+    1. Call `pulsar.status`: budget and daily-cap use, unresolved writes, account health. If `ready` is false, write `attention` and `default_account` into the execution summary and stop. An unverified account with routine token expiry can proceed; the first live call handles refresh. If a later live call returns `auth_expired` or `reauth_required`, stop and record its error and attention in the summary. Unresolved writes and unhealthy accounts go at the top of the report, for a human.
     2. `pulsar.history` with `limit: 100`: the week's rows, published, failed, skipped or unknown, and their estimated cost.
     3. `pulsar.metrics`: per post, impressions, likes, replies, reposts, quotes, link and profile clicks; and the week's totals. Compare with the previous report if there is one, and say when a change is too small to mean anything.
     4. The approval queue: proposed `pulsar-posts` and `pulsar-replies` tasks, and how long each has waited. Approvals themselves are in pulsar's ledger, which no tool lists; report the tasks.

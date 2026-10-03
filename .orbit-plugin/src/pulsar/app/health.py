@@ -43,6 +43,8 @@ from .settings import Settings
 
 Health = Literal["healthy", "unverified", "unhealthy"]
 TokenState = Literal["valid", "expiring", "expired"]
+# The offline auth-health planner recognises this reason as routine expiry.
+REFRESH_UNVERIFIED_REASON = "the access token has expired and the refresh was not exercised"
 
 
 def token_state(expires_in_s: int) -> TokenState:
@@ -88,11 +90,16 @@ async def auth_report(rt: Runtime, *, account: str | None = None, live: bool = F
     legacy = registry.legacy_status(settings)
     if legacy.state != "none":
         out["legacy"] = {"state": legacy.state, "alias": legacy.alias, "message": legacy.message}
-    out["default_account"] = settings.default_account
+    rows = registry.accounts()
+    default_account = settings.default_account
+    if default_account is None:
+        bound = [alias for alias, row in rows.items() if row.status != REVOKED]
+        if len(bound) == 1:
+            default_account = bound[0]
+    out["default_account"] = default_account
     if account is not None:
         targets = [registry.resolve(account, settings)]
     else:
-        rows = registry.accounts()
         targets = [rows[alias] for alias in sorted(rows)]
     for target in targets:
         out["accounts"].append(await _account(registry, settings, target, rt if live else None))
@@ -196,5 +203,5 @@ def _health(entry: dict[str, Any]) -> tuple[Health, str | None]:
     if entry["mismatch"] is None:
         return "unverified", "no identity cached for the stored credentials"
     if entry["token_state"] == "expired" and not entry["refreshed"]:
-        return "unverified", "the access token has expired and the refresh was not exercised"
+        return "unverified", REFRESH_UNVERIFIED_REASON
     return "healthy", None

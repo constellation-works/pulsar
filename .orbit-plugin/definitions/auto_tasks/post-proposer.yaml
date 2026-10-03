@@ -18,7 +18,7 @@ template:
 
     ## Steps
 
-    1. Call `pulsar.status`; if `healthy` is false, write `attention` into the summary and stop.
+    1. Call `pulsar.status`; if `ready` is false, write `attention` and `default_account` into the summary and stop. An unverified account with routine token expiry can proceed; the first live call handles refresh. If a later live call returns `auth_expired` or `reauth_required`, stop and record its error and attention in the summary.
     2. Call `pulsar.metrics`. Note what did well and what did not (impressions, likes, replies, reposts, link clicks), and say which differences are too small to mean anything.
     3. Draft up to three posts. For each, write the content record the workspace's conventions call for and, beside it, a `plan.yaml`:
        ```yaml

@@ -36,7 +36,9 @@ spec:
       description: >-
         Accounts and their health (healthy, unverified or unhealthy, from local state:
         no refresh is attempted and nothing is written), budget and daily-cap use, writes
-        with an unknown outcome, and the last publication per account.
+        with an unknown outcome, and the last publication per account. `ready` gates the
+        selected account without blocking routine token expiry; `default_account` includes
+        the sole bound account when no default is configured.
       execution_kind: read_only
       mcp_scope: workspace
       input_schema: { $ref: schemas/status.request.json }

@@ -4,6 +4,7 @@
   "required": [
     "default_account",
     "healthy",
+    "ready",
     "attention",
     "accounts"
   ],
@@ -12,11 +13,16 @@
       "type": [
         "string",
         "null"
-      ]
+      ],
+      "description": "Effective default: configured default_account, else the sole non-revoked bound account; null when none or several are bound without a configured default."
     },
     "healthy": {
       "type": "boolean",
       "description": "Every account is healthy (not merely unverified) with nothing unresolved."
+    },
+    "ready": {
+      "type": "boolean",
+      "description": "Offline gate for the explicit account, else the effective default. False when no account is selected, its health is unhealthy, it has unresolved writes, or legacy credentials await migration. Unverified health, including an expired access token with a stored refresh token, may be settled by the first live call. Does not prove refresh will succeed or bypass approval, budget, caps or quiet hours."
     },
     "attention": {
       "type": "array",

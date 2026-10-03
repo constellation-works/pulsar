@@ -23,7 +23,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `pulsar.status` work as for X. The client is the loopback development client unless
   `[oauth.bsky] client_id` names a hosted client-metadata document.
 - **auth-health auto-task.** A disabled daily offline check of all bound accounts proposes
-  deduplicated human attention tasks for unverified or unhealthy logins. It never refreshes,
+  deduplicated human attention tasks for non-routine unverified or unhealthy logins. It never refreshes,
   logs in or publishes; the task carries the account's exact verify or re-authorize command.
 - **x-updates auto-task.** The retired x-updates routine as a plugin auto-task, seeded
   disabled: it drafts approval-gated plans for new constellation-works releases, newly
@@ -40,6 +40,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Offline readiness.** `pulsar.status` exposes `ready` for the selected account while
+  preserving three-valued health and `healthy`. Its `default_account` reports the configured
+  default or, when unset, the sole non-revoked bound account.
 - **Plugin layout.** The installable plugin now lives in `.orbit-plugin/`, with its manifest
   at `.orbit-plugin/plugin.yaml`, launcher, schemas, skills, definitions and conformance
   goldens. Root `src/`, `pyproject.toml` and `uv.lock` remain canonical; `make plugin`
@@ -58,6 +61,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Scheduled token expiry.** The auto-tasks and publishing skill gate on readiness so
+  routine access-token expiry with a stored refresh token can reach the first authorized
+  live call. Auth-health no longer files verification tasks for that state with a matching
+  cached identity; unhealthy accounts and other unverified reasons still raise attention.
+- **Unset default account.** Status reports the same sole-account fallback that account-less
+  validate and publish plans resolve to, without requiring a config file.
 - **Sandboxed media validation.** Extension claims no longer initialize the host MIME
   database, avoiding a denied `/etc/mime.types` read for workspace-contained MP4s and
   images. Confinement, content checks, secret scanning and approval digests are unchanged.

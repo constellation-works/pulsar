@@ -18,7 +18,7 @@ template:
 
     ## Steps
 
-    1. Call `pulsar.status`. If `healthy` is false, write `attention` into the execution summary and stop: that is for a human.
+    1. Call `pulsar.status`. If `ready` is false, write `attention` and `default_account` into the execution summary and stop. An unverified account with routine token expiry can proceed; the first live call handles refresh. If a later live call returns `auth_expired` or `reauth_required`, stop and record its error and attention in the summary.
     2. Call `pulsar.engagements` as above.
     3. For each reply worth sending, write one plan file at `engagement/YYYY-MM-DD/reply-<post_id>.yaml`:
        ```yaml
