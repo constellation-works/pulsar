@@ -1,7 +1,9 @@
 """The installable plugin contains a fresh copy of the canonical runtime package."""
 
 import os
+import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 from scripts.build_plugin import PLUGIN, ROOT, check
@@ -28,6 +30,44 @@ def test_generated_package_matches_canonical_files():
     assert not any(
         path.name == "__pycache__" or path.suffix == ".pyc" for path in (PLUGIN / "src").rglob("*")
     )
+
+
+def test_plugin_project_does_not_discover_a_parent_workspace(tmp_path: Path):
+    # A parent outside the plugin's read grants fails discovery in Orbit's
+    # sandbox. Malformed TOML makes an accidental parent read fail everywhere.
+    parent_project = tmp_path / "pyproject.toml"
+    parent_project.write_text("[project\n")
+    plugin = tmp_path / ".orbit-plugin"
+    plugin.mkdir()
+    for name in ("pyproject.toml", "uv.lock"):
+        shutil.copy2(PLUGIN / name, plugin / name)
+    uv = shutil.which("uv")
+    assert uv is not None, "make check requires uv"
+    result = subprocess.run(
+        [
+            uv,
+            "tree",
+            "--frozen",
+            "--offline",
+            "--no-python-downloads",
+            "--python",
+            sys.executable,
+            "--project",
+            str(plugin),
+        ],
+        cwd=plugin,
+        env={
+            **os.environ,
+            "UV_CACHE_DIR": str(tmp_path / "uv-cache"),
+            "UV_PROJECT_ENVIRONMENT": str(tmp_path / "venv"),
+            "UV_PYTHON_INSTALL_DIR": str(tmp_path / "uv-python"),
+        },
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "pulsar v" in result.stdout
+    assert str(parent_project) not in result.stderr
 
 
 def test_plugin_layout_and_manifest_paths():
