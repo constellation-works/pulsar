@@ -27,12 +27,16 @@ from pulsar.main import main as pulsar_main
 from pulsar.orbit import backend as orbit_tool
 
 from .conftest import ALIAS, SECRETS, make_app, register
+from .fake_bsky import DID as BSKY_DID
+from .fake_bsky import HANDLE as BSKY_HANDLE
 from .media_samples import PNG
 from .test_server import SECRET_PARAM
 
 ROOT = Path(__file__).resolve().parent.parent
 PLUGIN = ROOT / ".orbit-plugin"
 MANIFEST = yaml.safe_load((PLUGIN / "plugin.yaml").read_text())
+BSKY = f"bsky:{BSKY_HANDLE}"
+DPOP_KEY = "dpop-key-QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo"
 GOLDENS = yaml.safe_load((PLUGIN / "tests" / "conformance" / "pulsar.yaml").read_text())["tests"]
 assert GOLDENS, ".orbit-plugin/tests/conformance/pulsar.yaml has no cases"
 
@@ -292,6 +296,29 @@ def test_status_reports_a_bound_account_without_its_credentials(state, home, bun
     assert account["posts"] == {"used": 0, "cap": 5, "remaining": 5}
     assert account["unresolved"] == [] and account["last_published"] is None
     assert out["healthy"] is True and out["attention"] == []
+
+
+def test_status_reports_a_bluesky_account_like_an_x_one_without_its_key(
+    state, home, bundle, workspace
+):
+    register(home, bundle, ALIAS, handle="constworks", provider_user_id="1")
+    dpop = replace(
+        bundle,
+        token_type="DPoP",
+        dpop_key=DPOP_KEY,
+        service="https://pds.example.test",
+        token_url="https://auth.example.test/oauth/token",
+    )
+    register(home, dpop, BSKY, handle=BSKY_HANDLE, provider_user_id=BSKY_DID)
+    out = run(state, workspace, "status")["output"]
+    by_alias = {a["alias"]: a for a in out["accounts"]}
+    assert set(by_alias[BSKY]) == set(by_alias[ALIAS])
+    entry = by_alias[BSKY]
+    assert entry["health"] == "healthy" and entry["token_state"] == "valid"
+    assert entry["reauth_required"] is False and entry["authorized"] is True
+    assert out["healthy"] is True and out["attention"] == []
+    blob = json.dumps(out)
+    assert not any(s in blob for s in (*SECRETS, DPOP_KEY))
 
 
 def test_status_asks_for_a_login_when_the_token_is_gone(state, home, workspace):

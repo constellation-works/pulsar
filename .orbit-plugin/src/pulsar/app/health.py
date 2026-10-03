@@ -13,7 +13,8 @@ Health is three-valued (unknown never reads as healthy):
 
 The default report reads only local state: no network, no writes.
 ``live`` is the explicit check that costs a refresh (which rotates the
-token pair) and a ``/users/me`` read, and records what it proved.
+token pair) and an identity lookup (X: ``/users/me``; Bluesky:
+``getSession``), and records what it proved.
 """
 
 from __future__ import annotations

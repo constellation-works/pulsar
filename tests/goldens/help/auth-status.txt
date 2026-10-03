@@ -9,8 +9,8 @@ options:
   --json             shorthand for --format json
   --account ACCOUNT  report only this account (an alias, provider:handle such as x:<handle>);
                      default: all
-  --live             prove each binding: force a token refresh (rotates the pair), then GET
-                     /users/me
+  --live             prove each binding: force a token refresh (rotates the pair), then ask the
+                     provider who the token belongs to
   --offline          deprecated, no effect: the default is offline
 
 Exit 0 only when every reported account is healthy.

@@ -30,6 +30,13 @@ class TokenBundle:
     token_type: str = "bearer"  # "DPoP" for a token bound to a key (Bluesky)
     # Minted per login, carried across refreshes; None for bundles saved before it existed.
     binding_id: str | None = None
+    # A DPoP-bound bundle (atproto OAuth) also carries, across refreshes: the
+    # private key its tokens are bound to (a P-256 JWK's ``d``), minted per login
+    # and as secret as the tokens; the account's PDS; and the authorization
+    # server's token endpoint. None for every other bundle.
+    dpop_key: str | None = None
+    service: str | None = None
+    token_url: str | None = None
 
     def expires_within(self, seconds: float) -> bool:
         return time.time() + seconds >= self.expires_at

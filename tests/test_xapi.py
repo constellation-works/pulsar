@@ -13,6 +13,7 @@ import httpx
 import pytest
 
 from pulsar.app.core.account import FernetFileStore
+from pulsar.app.core.channels import loopback
 from pulsar.app.core.channels.credentials import TokenBundle
 from pulsar.app.core.channels.x import (
     CallbackServer,
@@ -929,9 +930,9 @@ def callback():
 def test_a_silent_connection_cannot_hold_the_login_past_its_deadline(monkeypatch):
     """A preconnect that never sends a request is dropped, so ``wait`` still
     times out instead of blocking on the socket."""
-    shipped = auth._Callback.timeout
+    shipped = loopback._Callback.timeout
     assert shipped is not None and 0 < shipped <= 30, "the handler's socket timeout is set"
-    monkeypatch.setattr(auth._Callback, "timeout", 0.5)  # the same mechanism, faster
+    monkeypatch.setattr(loopback._Callback, "timeout", 0.5)  # the same mechanism, faster
     server = CallbackServer("the-state", port=0)
     server.timeout = 0.1
     result: dict[str, object] = {}
@@ -1063,8 +1064,8 @@ def test_a_browser_launcher_cannot_write_to_stdout(monkeypatch, capfd):
         opened.append(url)
         return True
 
-    monkeypatch.setattr(auth.webbrowser, "open", chatty_open)
-    auth.open_quietly("https://x.com/i/oauth2/authorize")
+    monkeypatch.setattr(loopback.webbrowser, "open", chatty_open)
+    loopback.open_quietly("https://x.com/i/oauth2/authorize")
     print("payload")
     assert opened == ["https://x.com/i/oauth2/authorize"]
     assert capfd.readouterr().out == "payload\n"

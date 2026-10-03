@@ -7,11 +7,11 @@ status: Accepted
 feature: accounts
 doc_role: design
 type: design
-summary: Login with identity check, encrypted per-account bundles, locked refresh, migration, offline auth-health alarms and the storage boundary.
-tags: [accounts, auth, oauth, credentials, storage]
-paths: ["src/pulsar/app/core/account/registry.py", "src/pulsar/app/core/account/store.py", "src/pulsar/app/core/account/clients.py", "src/pulsar/app/core/channels/credentials.py", "src/pulsar/app/login.py", "src/pulsar/internal/fs/paths.py", "src/pulsar/internal/fs/files.py", "src/pulsar/app/core/channels/x/auth.py", "src/pulsar/app/core/channels/x/client.py", "src/pulsar/cli/commands/auth.py"]
+summary: X and Bluesky logins with identity check, encrypted per-account bundles (Bluesky's DPoP key included), locked refresh, migration, offline auth-health alarms and the storage boundary.
+tags: [accounts, auth, oauth, credentials, storage, bluesky, dpop]
+paths: ["src/pulsar/app/core/account/registry.py", "src/pulsar/app/core/account/store.py", "src/pulsar/app/core/account/clients.py", "src/pulsar/app/core/channels/credentials.py", "src/pulsar/app/core/channels/loopback.py", "src/pulsar/app/login.py", "src/pulsar/internal/fs/paths.py", "src/pulsar/internal/fs/files.py", "src/pulsar/app/core/channels/x/auth.py", "src/pulsar/app/core/channels/x/client.py", "src/pulsar/app/core/channels/bluesky/auth.py", "src/pulsar/app/core/channels/bluesky/client.py", "src/pulsar/cli/commands/auth.py"]
 related_features: [publishing, surfaces]
-related_artifacts: [ORB-13008, ORB-13009, ORB-13027, ORB-13028, ORB-13039, ORB-13138, ORB-13279, ORB-13725]
+related_artifacts: [ORB-13008, ORB-13009, ORB-13027, ORB-13028, ORB-13031, ORB-13039, ORB-13138, ORB-13279, ORB-13725, ORB-13729]
 ---
 
 # Accounts — Design
@@ -26,7 +26,7 @@ key                          one Fernet key for every account (0600)
 client.json                  OAuth client ids, one per provider
 accounts.json                the registry
 accounts.lock                serialises registry read-modify-writes
-accounts/<slug>/tokens.enc   that account's encrypted bundle
+accounts/<slug>/tokens.enc   that account's encrypted bundle (Bluesky: with its DPoP key)
 accounts/<slug>/refresh.lock that account's cross-process refresh lock
 config.toml                  operator settings (optional)
 ledger.sqlite3, writes.jsonl the write ledger and its export (publishing)
@@ -45,18 +45,20 @@ itself must not be a symlink ([decision](./4_decisions.md#refuse-a-symlinked-hom
 
 ## 2. Login
 
-`pulsar auth login --account x:<handle> [--client-id ID] [--no-browser]` is human-only and runs
-outside every tool surface. The OAuth steps are X's
-([app/core/channels/x/auth.py](../../../src/pulsar/app/core/channels/x/auth.py)) and store nothing;
-the identity check and the binding are the app's ([app/login.py](../../../src/pulsar/app/login.py)).
+`pulsar auth login --account <alias> [--client-id ID] [--no-browser]` is human-only and runs
+outside every tool surface. The OAuth steps are the provider's and store nothing; the identity
+check and the binding are the app's ([app/login.py](../../../src/pulsar/app/login.py)). Both
+providers come back to the same loopback listener
+([channels/loopback.py](../../../src/pulsar/app/core/channels/loopback.py)),
+`http://127.0.0.1:8976/callback`; on a remote host it is forwarded with
+`ssh -L 8976:127.0.0.1:8976`.
 
-1. OAuth 2.0 authorization code with PKCE, public client, scopes `tweet.read tweet.write
-   users.read offline.access`, loopback callback `http://127.0.0.1:8976/callback`. On a remote
-   host the callback is forwarded with `ssh -L 8976:127.0.0.1:8976`.
-2. Before anything is stored, pulsar asks X (`GET /2/users/me`) whom the new token belongs to.
-   If the handle is not the alias's, or not the configured `expected_handle`, the login is
-   refused with `account_mismatch` naming both handles and nothing is written.
-3. The bundle is saved under the account's refresh lock, a fresh `binding_id` is minted, and
+Whatever the provider, the binding is the same:
+
+1. Before anything is stored, pulsar asks the provider whom the new token belongs to. If the
+   handle is not the alias's, or not the configured `expected_handle`, the login is refused
+   with `account_mismatch` naming both handles and nothing is written, not even the client id.
+2. The bundle is saved under the account's refresh lock, a fresh `binding_id` is minted, and
    the registry row is written before the lock is released, so a refresh already in flight
    cannot write the previous login's rotated tokens over the new one.
 
@@ -69,7 +71,58 @@ loopback listener is not trusted for being loopback: it answers only a `Host` of
 `127.0.0.1:<port>` or `localhost:<port>` (else 400 for none, 421 for another), refuses any
 `Origin` but that same `http://` authority (403), and records a redirect only when its `state`
 is this login's. A forged or stray request is refused and the wait goes on; only the real
-redirect (a `code`, or X's `error`) ends it.
+redirect (a `code`, or the provider's `error`) ends it.
+
+### X
+
+[x/auth.py](../../../src/pulsar/app/core/channels/x/auth.py): OAuth 2.0 authorization code with
+PKCE, public client, scopes `tweet.read tweet.write users.read offline.access`. The identity is
+`GET /2/users/me` asked with the new token. `--client-id` is the X app's OAuth 2.0 client id,
+required the first time and remembered after.
+
+### Bluesky
+
+[bluesky/auth.py](../../../src/pulsar/app/core/channels/bluesky/auth.py), atproto OAuth, reached
+through the provider factory (`runtime.login_flow`, an `AuthFlow`):
+
+1. **Discovery.** The alias's handle resolves to a DID (`https://<handle>/.well-known/atproto-did`,
+   else `com.atproto.identity.resolveHandle` on `bsky.social`), the DID to its document
+   (`plc.directory`, or `did:web`'s `/.well-known/did.json`) and PDS, the PDS to its
+   authorization server (`/.well-known/oauth-protected-resource`), and that to its metadata
+   (`/.well-known/oauth-authorization-server`: issuer, PAR, authorization and token endpoints,
+   ES256 DPoP). A handle that resolves nowhere sends no one to a browser.
+2. **PAR, PKCE, DPoP.** The login mints a P-256 DPoP key, then pushes the authorization request
+   (scope `atproto transition:generic`, PKCE S256, `state`, the handle as `login_hint`) with a
+   DPoP proof. The human approves at the authorization endpoint, which gets only the client id
+   and the `request_uri`. The redirect must carry this login's `state` and the issuer's `iss`.
+   The code is exchanged at the token endpoint, again under a proof of the same key, for a
+   DPoP-bound pair. A `use_dpop_nonce` answer is repeated once with the nonce the server sent;
+   the next request to that server reuses it.
+3. **Identity.** The token response's `sub` DID is resolved to its document. Its handle
+   (`alsoKnownAs`) counts only when it resolves back to the same DID; otherwise the identity has
+   no handle and the login is `account_mismatch` ("an unverified account"). The issuer must be
+   the authorization server of `sub`'s own PDS, or the login is refused (`api_error`, nothing
+   stored).
+4. **What is stored.** The bundle keeps the tokens (`token_type` `DPoP`), the DPoP key, the
+   PDS URL and the token endpoint, so every later request and refresh goes to that account's
+   servers with proofs of that key. Each login mints a new key.
+
+**Client id.** atproto names a client by the URL of its client-metadata document:
+
+| Client id | When | Needs |
+|---|---|---|
+| `http://localhost?redirect_uri=…&scope=…` (loopback development client) | default | nothing hosted; one host, a human at a browser |
+| `https://<host>/<path>` (hosted client-metadata document) | `[oauth.bsky] client_id` in `config.toml`, or `--client-id` | the document, published |
+
+The loopback client is the spec's development client and suits a CLI on one host; the
+authorization server shows it as such. Production use needs a hosted client-metadata document
+(`client_id` equal to its own URL, `application_type: native`, `redirect_uris` including
+`http://127.0.0.1:8976/callback`, `grant_types` `authorization_code` and `refresh_token`,
+`scope: atproto transition:generic`, `token_endpoint_auth_method: none`,
+`dpop_bound_access_tokens: true`). **Publishing that document is a human action, Daniel's, like
+the X app registration**: pulsar neither hosts nor names a location for it. Without
+`--client-id` a Bluesky login uses `[oauth.bsky] client_id`, else the client id of the last
+Bluesky login, else the loopback client.
 
 ## 3. Selecting and Checking an Account
 
@@ -97,7 +150,7 @@ login's identity for the old binding.
 ## 4. Status
 
 `pulsar auth status` ([health.py](../../../src/pulsar/app/health.py)) reports each
-account with every key present (null when unknown): `alias`, `status`, `expected_handle`,
+account, X or Bluesky alike, with every key present (null when unknown): `alias`, `status`, `expected_handle`,
 `mismatch`, `token_state`, `account`, `account_source`, `verified`, `refreshed`,
 `reauth_required`, `error`, and `health` with its `reason`. Exit 0 only when every reported
 account is `healthy`.
@@ -110,7 +163,8 @@ account is `healthy`.
 - **Default.** Local state only: no network call and no write. Legacy credentials are
   reported under `legacy`, not migrated. The Orbit `pulsar.status` tool uses this.
 - **`--live`.** The proof: rotates the token pair through the account's refresh lock, fetches
-  the identity from X and rewrites the registry row. One `/users/me` read per account.
+  the identity from the provider and rewrites the registry row. One identity read per account
+  (X `/users/me`, Bluesky `com.atproto.server.getSession` on the account's PDS).
 - **`--offline`** is a deprecated no-op (the default is offline) and warns on stderr.
 
 Cached identity is tagged with the `binding_id` it was fetched under, so after a re-login it
@@ -119,7 +173,8 @@ re-login finishes after it.
 
 ## 5. Refresh
 
-Refresh is automatic ([app/core/channels/x/client.py](../../../src/pulsar/app/core/channels/x/client.py)).
+Refresh is automatic ([x/client.py](../../../src/pulsar/app/core/channels/x/client.py),
+[bluesky/client.py](../../../src/pulsar/app/core/channels/bluesky/client.py)).
 Each account's refresh runs under an exclusive `flock` on `accounts/<slug>/refresh.lock`: the
 first process refreshes, the others wait (up to 45 s, then `lock_timeout`) and reuse the bundle
 it saved. Accounts do not wait for each other. Store reads and writes run in a worker thread,
@@ -142,6 +197,11 @@ registry row becomes `reauth_required`; the message names the account and the ho
 command a human runs: `PULSAR_HOME=<home> pulsar auth login --account <alias>`. `auth logout`
 deletes the bundle under the same lock and marks the row `revoked`; the row stays for history.
 
+A Bluesky refresh posts to the bundle's token endpoint under a DPoP proof signed with the
+stored key (repeated once for `use_dpop_nonce`), and the rotated bundle keeps the key, the PDS,
+the token endpoint and the binding. Bluesky's authorization server rotates the refresh token on
+use too, so the same lock and compare-and-swap apply.
+
 A token response without `expires_in` is stored as already expiring, so the next call
 refreshes rather than trusting an invented lifetime. A failure inside pulsar after X answered
 (the save failed) is `internal`, never `outcome_unknown`: only the token POST was sent.
@@ -152,7 +212,10 @@ refreshes rather than trusting an invented lifetime. A failure inside pulsar aft
 `CredentialStore` interface ([channels/credentials.py](../../../src/pulsar/app/core/channels/credentials.py));
 the rest of pulsar codes against the interface.
 
-- Fernet encryption with one `key` at the home root for all accounts.
+- Fernet encryption with one `key` at the home root for all accounts. A Bluesky bundle's DPoP
+  private key (a P-256 JWK's `d`) is inside the same ciphertext as its tokens and is masked in
+  logs like them. The DPoP fields are written only when set, so an X bundle reads the same
+  to a pulsar from before they existed.
 - Saves are atomic (temp file, `fsync`, rename, directory `fsync`), so a crash mid-refresh never
   destroys the only refresh token. The `key` is created once with `publish_new_private` (temp
   file, `fsync`, `link`, directory `fsync`), so concurrent first saves agree on one key, and a
@@ -250,6 +313,17 @@ migration alone does not create an account alarm when account health is healthy.
   one, so a re-login is always seen.
 - **Login needs a human with a browser and a loopback port.** Re-authorization on a headless
   host goes through SSH port forwarding; there is no device-code fallback.
+- **The default Bluesky client is a development client.** Until a human publishes a
+  client-metadata document and configures `[oauth.bsky] client_id`, Bluesky logins use the
+  loopback client, which the authorization server presents as such and may treat more
+  strictly (for example shorter-lived sessions).
+- **Handles without an HTTPS well-known fall back to `bsky.social`.** pulsar does not query
+  DNS, so a handle published only as a `_atproto` TXT record is resolved by `bsky.social`'s
+  `resolveHandle`. The bidirectional check (the DID document must claim the handle) still
+  applies, but that resolver is trusted for the handle-to-DID step.
+- **A Bluesky refresh does not re-check `sub`.** The refresh token is bound to the DPoP key
+  and the issuer, and the identity is re-checked by `--live` and before every write against
+  the cached row, not on each refresh.
 - **Refresh lock wait is bounded but blocking.** A process holding the lock for 45 s (a hung
   token endpoint) turns every other caller's write into `lock_timeout`, which names it.
 - **Only the home's own path is checked for symlinks.** Directories above the home (say a
@@ -261,9 +335,11 @@ migration alone does not create an account alarm when account health is healthy.
 - [ORB-13009] — Orbit: host-held secrets with compare-and-swap rotation (ws_orbit).
 - [ORB-13027] — added atomic owner-only storage, the refresh lock and `auth status --live`.
 - [ORB-13028] — added the registry, aliases, verified login, `expected_handle` and migration.
+- [ORB-13031] — added the Bluesky channel and client that a Bluesky login's bundle drives.
 - [ORB-13039] — the phase-1 review that found the unpinned post token.
 - [ORB-13138] — aligned storage, locks, errors and the login listener with the constellation standards.
 - [ORB-13279] — pinned a write's token to the binding whose identity was checked.
 - [ORB-13725] — added the disabled daily offline auth-health alarm and per-account human follow-ups.
+- [ORB-13729] — added the Bluesky login (atproto OAuth with PAR, PKCE and DPoP) and its stored DPoP key.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

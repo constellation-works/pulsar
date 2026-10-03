@@ -8,12 +8,14 @@ compare-and-swap; ``pinned(binding_id)`` refuses to send under any login but
 the one whose identity was checked (``account_mismatch``).
 
 Authorization. A bundle whose ``token_type`` is ``DPoP`` (atproto OAuth) is
-sent as ``Authorization: DPoP <token>`` with a ``DPoP`` proof the injected
-``DpopProof`` signs per request; the client keeps each server's latest
-``DPoP-Nonce`` and repeats a request once when the server asks for a fresh one
-(it refused the request, so the repeat cannot double-write). Without a
-``DpopProof`` a DPoP-bound bundle is refused before anything is sent; any
-other bundle is sent as a bearer token.
+sent as ``Authorization: DPoP <token>`` with a ``DPoP`` proof signed per
+request with the key stored in the bundle (or an injected ``DpopProof``); the
+client keeps each server's latest ``DPoP-Nonce`` and repeats a request once
+when the server asks for a fresh one (it refused the request, so the repeat
+cannot double-write). A DPoP-bound bundle without a key is refused before
+anything is sent; any other bundle is sent as a bearer token. A bundle that
+names its PDS (``service``) and token endpoint (``token_url``), as a login's
+does, is sent there; the constructor's are the defaults for one that does not.
 
 Failures follow the channel contract: a request that provably never left is
 retryable ``api_error``; for a ``non_idempotent`` procedure
@@ -57,6 +59,7 @@ from ..credentials import (
     TokenBundle,
 )
 from .config import BSKY_SERVICE, BSKY_TOKEN_URL
+from .dpop import Es256Proof
 from .interfaces import DpopProof
 
 # Raised before any request byte reaches the server; retrying cannot double-write.
@@ -86,7 +89,7 @@ def _bounded(value: object) -> str:
     return f"{text[:PROVIDER_TEXT_LIMIT]}… [truncated]"
 
 
-def _error_body(resp: httpx.Response) -> dict[str, Any]:
+def error_detail(resp: httpx.Response) -> dict[str, Any]:
     """XRPC's ``{error, message}``, bounded and redacted; the status for the rest."""
     try:
         body = as_object(resp.json())
@@ -101,7 +104,7 @@ def _error_body(resp: httpx.Response) -> dict[str, Any]:
 
 
 def map_http_error(resp: httpx.Response) -> PulsarError:
-    detail = _error_body(resp)
+    detail = error_detail(resp)
     name = detail.get("error")
     if resp.status_code == 429 or name == "RateLimitExceeded":
         return PulsarError(RATE_LIMITED, "Bluesky rate limit hit; retry later", detail=detail)
@@ -114,13 +117,13 @@ def map_http_error(resp: httpx.Response) -> PulsarError:
     return PulsarError(API_ERROR, f"Bluesky API error (HTTP {resp.status_code})", detail=detail)
 
 
-def _htu(url: str) -> str:
+def htu(url: str) -> str:
     """``url`` without query and fragment: what a DPoP proof names."""
     parts = urlsplit(url)
     return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
 
 
-def _origin(url: str) -> str:
+def origin(url: str) -> str:
     parts = urlsplit(url)
     return f"{parts.scheme}://{parts.netloc}"
 
@@ -134,7 +137,7 @@ def _error_name(resp: httpx.Response) -> str | None:
     return name if isinstance(name, str) else None
 
 
-def _wants_nonce(resp: httpx.Response) -> bool:
+def wants_nonce(resp: httpx.Response) -> bool:
     """The server refused the request for want of a (fresh) DPoP nonce, and sent one."""
     if resp.status_code not in (400, 401) or not resp.headers.get("DPoP-Nonce"):
         return False
@@ -172,6 +175,7 @@ class BlueskyClient:
         self._http = httpx.AsyncClient(transport=transport, timeout=timeout)
         self._refresh_lock = asyncio.Lock()
         self._nonces: dict[str, str] = {}
+        self._signers: dict[str, DpopProof] = {}  # by stored key
         self._pinned = False
         self._binding: str | None = None
 
@@ -223,16 +227,37 @@ class BlueskyClient:
             bundle = self._held(await self.refresh(bundle))
         return bundle
 
-    def _dpop(self, method: str, url: str, access_token: str | None) -> dict[str, str]:
-        if self._proof is None:
-            return {}
-        nonce = self._nonces.get(_origin(url))
-        return {"DPoP": self._proof(method, _htu(url), nonce=nonce, access_token=access_token)}
+    def _signer(self, bundle: TokenBundle) -> DpopProof | None:
+        """What signs ``bundle``'s proofs: the injected one, else its stored key."""
+        if self._proof is not None or bundle.dpop_key is None:
+            return self._proof
+        signer = self._signers.get(bundle.dpop_key)
+        if signer is None:
+            try:
+                signer = Es256Proof.from_stored(bundle.dpop_key)
+            except ValueError as exc:
+                raise PulsarError(
+                    UNSUPPORTED,
+                    "the DPoP key stored with this Bluesky login is unusable and nothing was "
+                    f"sent; {self.store.reauth_hint()}",
+                ) from exc
+            self._signers[bundle.dpop_key] = signer
+        return signer
 
-    def _authorization(self, method: str, url: str, bundle: TokenBundle) -> dict[str, str]:
+    def _dpop(
+        self, signer: DpopProof | None, method: str, url: str, access_token: str | None
+    ) -> dict[str, str]:
+        if signer is None:
+            return {}
+        nonce = self._nonces.get(origin(url))
+        return {"DPoP": signer(method, htu(url), nonce=nonce, access_token=access_token)}
+
+    def _authorization(
+        self, signer: DpopProof | None, method: str, url: str, bundle: TokenBundle
+    ) -> dict[str, str]:
         if bundle.token_type.lower() != "dpop":
             return {"Authorization": f"Bearer {bundle.access_token}"}
-        if self._proof is None:
+        if signer is None:
             raise PulsarError(
                 UNSUPPORTED,
                 "this Bluesky login is DPoP-bound and pulsar was given no DPoP key to sign "
@@ -240,13 +265,13 @@ class BlueskyClient:
             )
         return {
             "Authorization": f"DPoP {bundle.access_token}",
-            **self._dpop(method, url, bundle.access_token),
+            **self._dpop(signer, method, url, bundle.access_token),
         }
 
     def _remember_nonce(self, url: str, resp: httpx.Response) -> None:
         nonce = resp.headers.get("DPoP-Nonce")
         if nonce:
-            self._nonces[_origin(url)] = nonce
+            self._nonces[origin(url)] = nonce
 
     async def refresh(self, bundle: TokenBundle) -> TokenBundle:
         """Replace ``bundle`` (expiring, or refused) with a working one.
@@ -305,6 +330,8 @@ class BlueskyClient:
             if fresh.refresh_token is None:
                 fresh.refresh_token = current.refresh_token
             fresh.binding_id = current.binding_id
+            fresh.dpop_key, fresh.service = current.dpop_key, current.service
+            fresh.token_url = current.token_url
             try:
                 await asyncio.to_thread(self.store.save, fresh, expected_previous=current)
             except CredentialConflict:
@@ -318,14 +345,16 @@ class BlueskyClient:
             "refresh_token": bundle.refresh_token,
             "client_id": bundle.client_id,
         }
+        token_url = bundle.token_url or self.token_url
+        signer = self._signer(bundle)
         nonced = False  # repeated once, for a fresh DPoP nonce
         while True:
             headers = {
                 "Content-Type": "application/x-www-form-urlencoded",
-                **self._dpop("POST", self.token_url, None),
+                **self._dpop(signer, "POST", token_url, None),
             }
             try:
-                resp = await self._http.post(self.token_url, data=form, headers=headers)
+                resp = await self._http.post(token_url, data=form, headers=headers)
             except NOT_SENT_ERRORS as exc:
                 raise PulsarError(
                     API_ERROR,
@@ -341,8 +370,8 @@ class BlueskyClient:
                     retryable=True,
                     detail={"outcome": "unknown"},
                 ) from exc
-            self._remember_nonce(self.token_url, resp)
-            if nonced or self._proof is None or not _wants_nonce(resp):
+            self._remember_nonce(token_url, resp)
+            if nonced or signer is None or not wants_nonce(resp):
                 return resp
             nonced = True
 
@@ -356,12 +385,13 @@ class BlueskyClient:
         non_idempotent: bool = False,
         **kwargs: Any,
     ) -> httpx.Response:
-        url = f"{self.service}/xrpc/{nsid}"
         extra = dict(kwargs.pop("headers", {}) or {})
         refreshed = nonced = False
         while True:
             bundle = await self._current()
-            headers = {**extra, **self._authorization(method, url, bundle)}
+            url = f"{(bundle.service or self.service).rstrip('/')}/xrpc/{nsid}"
+            signer = self._signer(bundle)
+            headers = {**extra, **self._authorization(signer, method, url, bundle)}
             try:
                 resp = await self._http.request(method, url, headers=headers, **kwargs)
             except NOT_SENT_ERRORS as exc:
@@ -380,7 +410,7 @@ class BlueskyClient:
                     API_ERROR, f"Bluesky request failed: {name}", retryable=True
                 ) from exc
             self._remember_nonce(url, resp)
-            if not nonced and self._proof is not None and _wants_nonce(resp):
+            if not nonced and signer is not None and wants_nonce(resp):
                 nonced = True
                 continue
             if _token_rejected(resp):
@@ -395,7 +425,7 @@ class BlueskyClient:
                 continue
             if resp.status_code >= 500 and non_idempotent:
                 raise OutcomeUnknown(
-                    f"Bluesky answered HTTP {resp.status_code}", detail=_error_body(resp)
+                    f"Bluesky answered HTTP {resp.status_code}", detail=error_detail(resp)
                 )
             if resp.status_code >= 400:
                 raise map_http_error(resp)

@@ -26,6 +26,9 @@ roots = ["~/workspace/constellation/marketing"]   # default: none, path uploads 
 
 [dispatch]                             # where `pulsar.dispatch` looks for plans
 plans = ["x-updates/**/*.yaml", "engagement/**/*.yaml"]   # default: none, dispatch idle
+
+[oauth.bsky]                           # Bluesky logins: a hosted client-metadata document
+client_id = "https://<host>/client-metadata.json"   # default: the loopback client
 ```
 
 The flat ``[prices]`` keys of the first config format (``plain_post_usd``,
@@ -48,6 +51,10 @@ plugin runs in, never absolute, never ``~`` and never through ``..``: the
 dispatcher reads plans only from there, and only from paths that stay inside
 the workspace. Without them it publishes nothing.
 
+``[oauth.bsky] client_id`` is the https URL of the client-metadata document
+Bluesky logins name as their OAuth client. Without it they use the loopback
+development client; publishing the document is a human's job.
+
 Numbers are checked at load: finite (TOML's ``nan`` and ``inf``
 are refused), within the ``MAX_*`` bounds below, integers where integers are
 meant. The file itself must not be a symlink, another user's, or writable by
@@ -64,6 +71,7 @@ from dataclasses import dataclass, field
 from datetime import time
 from pathlib import Path, PurePosixPath
 from typing import Any
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pulsar.app.core.account import AccountConfig, normalize_alias
@@ -103,6 +111,8 @@ class Settings:
     policy: PolicyConfig = field(default_factory=PolicyConfig)
     # Workspace-relative globs naming the plan files dispatch may publish; empty means none.
     dispatch_plans: tuple[str, ...] = ()
+    # (provider, OAuth client id) a login uses, sorted; Bluesky's only.
+    oauth_client_ids: tuple[tuple[str, str], ...] = ()
 
     def prices_for(self, provider: str) -> Prices:
         return dict(self.provider_prices).get(provider, FREE)
@@ -114,6 +124,10 @@ class Settings:
 
     def account_config(self, alias: str) -> AccountConfig | None:
         return next((a for a in self.accounts if a.alias == alias), None)
+
+    def client_id_for(self, provider: str) -> str | None:
+        """The OAuth client id ``[oauth.<provider>]`` names, if any."""
+        return dict(self.oauth_client_ids).get(provider)
 
 
 class _Invalid(Exception):
@@ -287,6 +301,40 @@ def _parse_accounts(data: dict[str, Any]) -> tuple[AccountConfig, ...]:
     return tuple(sorted(out, key=lambda a: a.alias))
 
 
+# The providers whose login takes its client id from config.toml. X's app id is
+# given to `pulsar auth login --client-id` and remembered.
+OAUTH_PROVIDERS = frozenset({"bsky"})
+
+
+def _parse_oauth(data: dict[str, Any]) -> tuple[tuple[str, str], ...]:
+    section = _table(data, "oauth", OAUTH_PROVIDERS, "oauth")
+    out: list[tuple[str, str]] = []
+    for provider in sorted(section):
+        where = f"oauth.{provider}.client_id"
+        body = _table(section, provider, {"client_id"}, f"oauth.{provider}")
+        raw = body.get("client_id")
+        if raw is None:
+            continue
+        try:
+            parts = urlsplit(raw) if isinstance(raw, str) else None
+        except ValueError:
+            parts = None
+        if (
+            parts is None
+            or parts.scheme != "https"
+            or not parts.hostname
+            or parts.path in ("", "/")
+            or parts.fragment
+        ):
+            raise _fail(
+                f"{where} must be the https URL of a client-metadata document "
+                "(with a path, without a fragment)",
+                where,
+            )
+        out.append((provider, raw))
+    return tuple(out)
+
+
 def _parse_quiet(raw: object) -> tuple[time, time] | None:
     if raw is None:
         return None
@@ -343,7 +391,8 @@ def _parse_policy(data: dict[str, Any]) -> PolicyConfig:
 
 
 def _parse(data: dict[str, Any], user_home: Path | None) -> Settings:
-    unknown = set(data) - {"default_account", "accounts", "prices", "policy", "media", "dispatch"}
+    known = {"default_account", "accounts", "prices", "policy", "media", "dispatch", "oauth"}
+    unknown = set(data) - known
     if unknown:
         raise _fail(f"unknown keys: {sorted(unknown)}")
     default_account = data.get("default_account")
@@ -356,6 +405,7 @@ def _parse(data: dict[str, Any], user_home: Path | None) -> Settings:
         accounts=_parse_accounts(data),
         policy=_parse_policy(data),
         dispatch_plans=_parse_dispatch(data),
+        oauth_client_ids=_parse_oauth(data),
     )
 
 

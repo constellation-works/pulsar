@@ -36,7 +36,7 @@ src/pulsar/
 │       ├── publishing/  plan, publisher, policy, media        ─▶ ledger, account, channels
 │       ├── account/     aliases, registry, store, clients    ─▶ channels
 │       ├── ledger/      the ledger: writes, reads, approvals and their usage
-│       └── channels/    contract (Channel, posts, prices, media limits), credentials, x/, bluesky/
+│       └── channels/    contract (Channel, AuthFlow, ...), credentials, loopback, x/, bluesky/
 └── internal/            leaf utilities anyone may use; they use nothing above them
     ├── errors/          codes, exceptions
     ├── fs/              files, paths, jsonx
@@ -51,8 +51,8 @@ The rules, which `tests/test_layers.py` checks on every `make check`:
   other two (`serve`, `orbit-tool`).
 - **`app`**'s own modules consume `core` and join it into the verbs. Only `runtime.py` and
   `facade.py` name the implementations (`SqliteLedger`, `FernetFileStore`, `XChannel`,
-  `XClient`, `BlueskyChannel`, `BlueskyClient`); everything else types against the protocols
-  (`App`, `Runtime`, `Ledger`, `CredentialStore`, `Channel`, `XApi`).
+  `XClient`, `BlueskyChannel`, `BlueskyClient`, `BlueskyLogin`); everything else types against
+  the protocols (`App`, `Runtime`, `Ledger`, `CredentialStore`, `Channel`, `AuthFlow`, `XApi`).
 - **A provider** is one package under `app/core/channels/` that stands on the contract alone.
   Outside it, only `runtime.py` (the provider -> channel factory) names it; X's login, health
   check and single-post tools predate the rule and are the listed exceptions.

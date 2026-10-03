@@ -275,3 +275,31 @@ def test_bad_policy_and_account_config_is_refused(paths, body):
     with pytest.raises(PulsarError) as exc:
         load_settings(paths)
     assert exc.value.code == "invalid_config"
+
+
+def test_a_bluesky_client_metadata_url_is_configured(paths):
+    hosted = "https://example.org/pulsar/client-metadata.json"
+    _config(paths, f'[oauth.bsky]\nclient_id = "{hosted}"\n')
+    s = load_settings(paths)
+    assert s.client_id_for("bsky") == hosted
+    assert s.client_id_for("x") is None
+    assert Settings().client_id_for("bsky") is None, "default: the loopback client"
+
+
+@pytest.mark.parametrize(
+    "body, key",
+    [
+        ('[oauth.bsky]\nclient_id = "http://example.org/meta.json"\n', "oauth.bsky.client_id"),
+        ('[oauth.bsky]\nclient_id = "https://example.org"\n', "oauth.bsky.client_id"),
+        ('[oauth.bsky]\nclient_id = "https://example.org/m.json#x"\n', "oauth.bsky.client_id"),
+        ("[oauth.bsky]\nclient_id = 1\n", "oauth.bsky.client_id"),
+        ('[oauth.x]\nclient_id = "https://example.org/m.json"\n', None),
+        ('[oauth.bsky]\nredirect_uri = "http://127.0.0.1/"\n', None),
+    ],
+)
+def test_a_client_id_atproto_would_refuse_is_refused_at_load(paths, body, key):
+    _config(paths, body)
+    with pytest.raises(PulsarError) as exc:
+        load_settings(paths)
+    assert exc.value.code == "invalid_config"
+    assert exc.value.detail.get("key") == key

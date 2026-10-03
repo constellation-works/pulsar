@@ -11,7 +11,7 @@ summary: Per-provider auth flows (Bluesky's login next), metrics, and how varian
 tags: [channels, providers, bluesky, mastodon, linkedin, metrics]
 paths: ["src/pulsar/app/core/channels/contract.py", "src/pulsar/app/core/channels/**"]
 related_features: [accounts, publishing]
-related_artifacts: [ORB-13031]
+related_artifacts: [ORB-13031, ORB-13729]
 ---
 
 # Channels — Vision
@@ -25,11 +25,10 @@ channel itself is, in [2_design.md](./2_design.md).
    facets, reply references and media embeds all moved into `create`, and media ids became
    blob CIDs the channel keeps until then. What is left open is whether a provider's media
    should outlive one channel instance (a resumed publish uploads again).
-2. **What does `AuthFlow` need?** Bluesky's login (OAuth with PAR, PKCE and DPoP) is the
-   next task: it must store the DPoP key, PDS URL and token endpoint with the bundle and wire
-   `Es256Proof` into the factory. Mastodon needs
+2. **What does `AuthFlow` need?** Bluesky's login ([ORB-13729]) fits `authorize` returning a
+   bundle (with its DPoP key, PDS URL and token endpoint) and an identity. Mastodon needs
    per-instance dynamic client registration; LinkedIn needs a confidential client secret, which
-   pulsar would have to hold like a token. The protocol's `begin`/`complete` may not be enough.
+   pulsar would have to hold like a token. One `authorize` call may not be enough for them.
 3. **Should channels report metrics?** Marketing's results-review auto-task wants impressions
    and engagement. `Capabilities.metrics` exists but is false everywhere; reads were declared out
    of pulsar's scope, so this needs a decision, not just code.
@@ -68,5 +67,6 @@ Failure semantics are part of the contract: every adapter must separate "did not
 ## Task References
 
 - [ORB-13031] — phase 5: Bluesky through the adapter boundary; left the login to a sibling task.
+- [ORB-13729] — the Bluesky login, the first `AuthFlow`.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

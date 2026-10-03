@@ -23,7 +23,10 @@ from .conftest import ALIAS, ROTATED_ACCESS, SECRETS, make_runtime, register
 from .media_samples import JPEG, MP4, PEM_KEY
 from .media_samples import PNG as PNG_1PX
 
-SECRET_PARAM = re.compile(r"(?i)token|secret|bearer|password|api[_-]?key|client[_-]?secret")
+# A token, key or secret by any name, the DPoP key a Bluesky login stores included.
+SECRET_PARAM = re.compile(
+    r"(?i)token|secret|bearer|password|api[_-]?key|client[_-]?secret|dpop|private[_-]?key"
+)
 
 pytestmark = pytest.mark.anyio
 

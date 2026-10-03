@@ -412,6 +412,46 @@ def test_a_corrupt_bundle_is_unreadable_not_auth_expired(store, authed, paths, r
     assert exc.value.code == "credentials_unreadable" and "corrupt" in exc.value.message
 
 
+def _decrypt(paths, store) -> dict:
+    key = paths.key_file.read_bytes().strip()
+    return json.loads(Fernet(key).decrypt(store.token_file.read_bytes()))
+
+
+def test_a_dpop_bundle_keeps_its_key_pds_and_token_endpoint_encrypted(paths, bundle):
+    store = FernetFileStore.for_account(paths, "bsky:constworks.bsky.social")
+    dpop = dataclasses.replace(
+        bundle,
+        token_type="DPoP",
+        dpop_key="k" * 43,
+        service="https://pds.example.test",
+        token_url="https://auth.example.test/oauth/token",
+    )
+    store.save(dpop)
+    assert store.load() == dpop
+    assert b"k" * 43 not in store.token_file.read_bytes()
+
+
+def test_a_bundle_without_dpop_fields_is_stored_as_before_them(store, bundle, paths):
+    """An X bundle stays readable by a pulsar that predates the DPoP fields."""
+    store.save(bundle)
+    assert set(_decrypt(paths, store)) == {
+        "access_token",
+        "refresh_token",
+        "expires_at",
+        "scope",
+        "client_id",
+        "token_type",
+        "binding_id",
+    }
+
+
+def test_a_mistyped_dpop_field_is_unreadable(store, authed, paths):
+    _encrypt(paths, store, json.dumps({**dataclasses.asdict(authed), "dpop_key": 7}).encode())
+    with pytest.raises(PulsarError) as exc:
+        store.load()
+    assert exc.value.code == "credentials_unreadable"
+
+
 def test_credential_conflict_is_a_retryable_internal_error():
     err = CredentialConflict()
     assert err.code == "internal" and err.retryable is True
