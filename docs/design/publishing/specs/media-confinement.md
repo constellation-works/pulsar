@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: media confinement — roots, regular files, bounded reads, content-typed uploads"
-last_validated: 2026-09-27
+last_validated: 2026-10-03
 ---
 
 # Spec: Media Confinement
@@ -47,11 +47,18 @@ its patterns.
 - A `mime` argument, or without one the file extension, that disagrees with the content is
   `invalid_media` with `detail: {declared, sniffed}`. The returned `mime` is always the sniffed
   one. The same rules apply to `base64` payloads.
+- Extension claims use a case-insensitive final-suffix lookup in Python's loaded MIME
+  table, without initializing `mimetypes` or reading a host MIME database. Known unsupported
+  types are refused; an unknown or absent suffix leaves the type to content sniffing. This
+  applies to plan validation and path uploads on every surface and needs no extra sandbox
+  grants. Compressed suffixes are not peeled: the media bytes must prove an accepted type.
 - Limits (X): images 5 MiB, video 100 MiB (a local cap; X also checks the account's
   entitlement).
 
 ## After Loading
 
 - The bytes go through the secret scanner.
+- Media SHA-256 and approval digests continue to bind the original bytes; changing only
+  MIME lookup neither transforms media nor changes a valid plan's digest.
 - Errors name paths and types, never file contents.
 - The ledger row records MIME, byte count, processing state and the media id; never the bytes.

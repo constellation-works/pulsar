@@ -5,13 +5,15 @@ refusals through the MCP tool and asserts no request reaches X.
 """
 
 import base64
+import builtins
+import mimetypes
 import os
 from pathlib import Path
 
 import pytest
 
 from pulsar.app.core.channels.contract import MAX_IMAGE_BYTES, MAX_VIDEO_BYTES
-from pulsar.app.core.publishing import load_media, media, sniff_mime
+from pulsar.app.core.publishing import Plan, load_media, media, sniff_mime
 from pulsar.internal.errors import PulsarError
 
 from .media_samples import GIF, JPEG, MP4, PEM_KEY, PNG, QUICKTIME, WEBP
@@ -63,6 +65,64 @@ def test_valid_media_under_a_root_is_accepted(root, name, data, mime):
     b64 = base64.b64encode(data).decode()
     assert load_media(None, b64, mime, roots=[]) == (data, mime)
     assert load_media(None, b64, None, roots=[]) == (data, mime), "mime is sniffed when omitted"
+
+
+@pytest.mark.parametrize(
+    ("name", "data", "mime"),
+    [
+        ("clip.mp4", MP4, "video/mp4"),
+        ("clip.MP4", MP4, "video/mp4"),
+        ("pic.png", PNG, "image/png"),
+        ("pic.jpg", JPEG, "image/jpeg"),
+        ("pic.JPEG", JPEG, "image/jpeg"),
+        ("pic.jpe", JPEG, "image/jpeg"),
+        ("pic.gif", GIF, "image/gif"),
+        ("pic.webp", WEBP, "image/webp"),
+        ("noext", MP4, "video/mp4"),
+    ],
+)
+def test_media_loading_needs_no_host_mime_database(root, monkeypatch, name, data, mime):
+    """A cold MIME lookup must work when the sandbox denies host database reads."""
+    database = root / "mime.types"
+    database.write_text("video/mp4 mp4\n")
+    (root / name).write_bytes(data)
+    monkeypatch.setattr(mimetypes, "knownfiles", [str(database)])
+    monkeypatch.setattr(mimetypes, "inited", False)
+    monkeypatch.setattr(mimetypes, "_db", None)
+
+    def denied_open(*_args, **_kwargs):
+        raise PermissionError("host MIME databases are outside the sandbox grants")
+
+    monkeypatch.setattr(builtins, "open", denied_open)
+    assert load_media(name, None, None, roots=[root], base=root) == (data, mime)
+
+
+def test_mp4_suffix_claims_and_digest(root):
+    clip = root / "clip.mp4"
+    clip.write_bytes(MP4)
+    loaded = media.load_ref("clip.mp4", "A local video", roots=[root], base=root)
+    assert loaded.data == MP4 and loaded.mime == "video/mp4" and loaded.alt == "A local video"
+    assert loaded.sha256 == "8c94e9eea979204952be1caf7be95aeb91090a21f7afcde097795c6cdadebcb5"
+    plan = Plan.from_mapping(
+        {
+            "account": "x:constworks",
+            "text": "A local video",
+            "media": [{"path": "clip.mp4", "alt": loaded.alt}],
+        }
+    )
+    assert plan.digest(lambda _ref: loaded.sha256) == (
+        "sha256:3c0d5f97c6aa4a665ca27637e39c1ad5eaf5ee460b14bbee1ff4e95b8e1c56a2"
+    )
+    clip.write_bytes(MP4 + b"changed")
+    assert media.load_ref("clip.mp4", loaded.alt, roots=[root], base=root).sha256 != loaded.sha256
+    (root / "mismatch.png").write_bytes(MP4)
+    err = _refused("mismatch.png", None, None, roots=[root], base=root)
+    assert err.detail == {"declared": "image/png", "sniffed": "video/mp4"}
+    (root / "unsupported.txt").write_bytes(MP4)
+    assert (
+        "unsupported media type text/plain"
+        in _refused("unsupported.txt", None, None, roots=[root], base=root).message
+    )
 
 
 def test_private_key_declared_png_outside_roots_is_refused_before_reading(

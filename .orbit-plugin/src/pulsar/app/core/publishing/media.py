@@ -19,7 +19,7 @@ secrets match none of its patterns. The defences here are, in order:
    must be the inode that was checked, and its size is checked against the
    limit *before* any byte is read; the read itself is bounded.
 3. **Magic bytes are authoritative.** The content must be a PNG, JPEG, GIF,
-   WebP or MP4. A declared ``mime`` (or, without one, the extension's guess)
+   WebP or MP4. A declared ``mime`` (or, without one, the extension's claim)
    that disagrees with the sniffed type is refused rather than trusted.
 4. The existing **secret scan** over the bytes, as a last net.
 
@@ -83,10 +83,13 @@ def sniff_mime(head: bytes) -> str | None:
 
 
 def _claimed_mime(mime: str | None, name: str | None) -> str | None:
-    """What the caller says the media is: the declared ``mime``, else the extension's guess."""
+    """The declared ``mime``, else a suffix lookup without loading host MIME databases."""
     claimed = mime.strip().lower() if mime else None
     if not claimed and name:
-        claimed = mimetypes.guess_type(name)[0]
+        # guess_type() lazily opens host databases such as /etc/mime.types,
+        # outside the plugin's filesystem grants. The loaded suffix table
+        # needs no I/O; content sniffing remains authoritative.
+        claimed = mimetypes.types_map.get(Path(name).suffix.lower())
     if claimed and claimed not in SUPPORTED_MIME_TYPES:
         raise PulsarError(
             INVALID_MEDIA,
