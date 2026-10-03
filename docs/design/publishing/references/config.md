@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Reference: config.toml keys"
-last_validated: 2026-09-26
+last_validated: 2026-10-03
 ---
 
 # Reference: `config.toml`
@@ -39,6 +39,9 @@ roots = ["~/workspace/constellation/marketing"]   # default: none (path uploads 
 
 [dispatch]                           # the plans `pulsar.dispatch` may publish
 plans = ["x-updates/**/*.yaml", "engagement/**/*.yaml"]   # default: none (dispatch idle)
+
+[oauth.bsky]                         # the OAuth client Bluesky logins name
+client_id = "https://<host>/client-metadata.json"   # default: the loopback client
 ```
 
 | Key | Default | Where it is enforced |
@@ -50,6 +53,7 @@ plans = ["x-updates/**/*.yaml", "engagement/**/*.yaml"]   # default: none (dispa
 | `policy.*` | as above, no quiet hours | [specs/policy.md](../specs/policy.md) |
 | `media.roots` | none | [specs/media-confinement.md](../specs/media-confinement.md) |
 | `dispatch.plans` | none: dispatch publishes nothing | [Engagement — Design §5](../../engagement/2_design.md#5-scheduled-dispatch) |
+| `oauth.bsky.client_id` | the loopback development client | [Accounts — Design §2](../../accounts/2_design.md#2-login) |
 
 Numbers must be finite (TOML's `nan` and `inf` are refused) and within these bounds, which exist
 to catch a typo at load rather than let it through a budget:
@@ -68,5 +72,9 @@ spell the path out. `~name` is not expanded.
 `dispatch.plans` is a list of at most 20 glob patterns relative to the workspace the Orbit
 plugin runs in. A pattern that is absolute, starts with `~`, has a `..` component or a
 backslash is `invalid_config`; the plan location is configuration, never a tool argument.
+
+`oauth.bsky.client_id` is the https URL (with a path, no fragment) of a client-metadata
+document a human published; pulsar never hosts or publishes one. X takes no `[oauth]` key: its
+app id is given to `pulsar auth login` as `--client-id` and remembered.
 
 `pulsar serve` prints the effective media roots to stderr at startup.

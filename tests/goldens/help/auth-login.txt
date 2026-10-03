@@ -1,7 +1,7 @@
 usage: pulsar auth login [-h] [--format MODE] [--json] [--account ACCOUNT] [--client-id CLIENT_ID]
                          [--no-browser]
 
-bind an account: OAuth 2.0 PKCE in a browser, then verify the handle with X
+bind an account: OAuth in a browser, then verify the handle with its provider
 
 options:
   -h, --help            show this help message and exit
@@ -11,10 +11,12 @@ options:
   --account ACCOUNT     the account to bind (an alias, provider:handle such as x:<handle>);
                         default: default_account in config.toml, else the only bound account
   --client-id CLIENT_ID
-                        the X app's OAuth 2.0 client id; default: the one remembered from the last
-                        login
+                        X: the app's OAuth 2.0 client id; Bluesky: a client-metadata URL. Default:
+                        [oauth.<provider>] in config.toml, else the last login's, else Bluesky's
+                        loopback client
   --no-browser          print the authorization URL on stderr instead of opening a browser
 
 Examples:
   pulsar auth login --account x:<handle> --client-id <CLIENT_ID>
   pulsar auth login --account x:<handle> --no-browser   # over SSH
+  pulsar auth login --account bsky:<handle>

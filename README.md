@@ -33,8 +33,19 @@ pulsar auth status            # add --live to prove the refresh works
 ```
 
 pulsar checks with X that the token belongs to `@<handle>` before storing it, encrypted,
-in the pulsar home (`PULSAR_HOME`, default `~/.config/pulsar`). Bluesky accounts
-(`bsky:<handle>`) publish through the same plans; their login is not built yet.
+in the pulsar home (`PULSAR_HOME`, default `~/.config/pulsar`).
+
+A Bluesky account needs no app registration; the same callback is used:
+
+```sh
+pulsar auth login --account bsky:<handle>
+```
+
+pulsar resolves the handle to its PDS, signs in through atproto OAuth (PAR, PKCE, DPoP), and
+stores the tokens with their DPoP key only once the token's DID resolves back to the handle.
+It uses the loopback development client unless `[oauth.bsky] client_id` in `config.toml`
+names a hosted client-metadata document; publishing that document is a human step
+([Accounts — Design §2](docs/design/accounts/2_design.md#2-login)).
 
 ## Configure
 

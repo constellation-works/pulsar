@@ -1,8 +1,10 @@
-"""Bluesky (AT Protocol): the XRPC client, its DPoP hook, text rules, capabilities."""
+"""Bluesky (AT Protocol): the XRPC client, its DPoP hook, the OAuth login, text rules,
+capabilities."""
 
 from __future__ import annotations
 
 from .adapter import BlueskyChannel, check_post_uri, fingerprint, parse_post_uri, post_url
+from .auth import BlueskyLogin, check_client_id, loopback_client_id
 from .client import REFRESH_AHEAD_SECONDS, BlueskyClient
 from .config import BSKY_SERVICE, BSKY_TOKEN_URL, PROVIDER
 from .dpop import Es256Proof
@@ -16,6 +18,10 @@ __all__ = [
     "fingerprint",
     "parse_post_uri",
     "post_url",
+    # auth
+    "BlueskyLogin",
+    "check_client_id",
+    "loopback_client_id",
     # client
     "REFRESH_AHEAD_SECONDS",
     "BlueskyClient",

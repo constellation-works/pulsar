@@ -8,7 +8,9 @@ from pathlib import Path
 
 import pytest
 
+from pulsar.app import runtime as runtime_module
 from pulsar.app.core.account import AccountRegistry
+from pulsar.app.core.channels.bluesky import BlueskyLogin
 from pulsar.app.core.channels.x import auth as x_auth
 from pulsar.app.core.ledger import SCHEMA_VERSION, SqliteLedger
 from pulsar.app.facade import LocalApp
@@ -17,6 +19,9 @@ from pulsar.cli.main import build_parser, run
 from pulsar.main import main as entry_point
 
 from .conftest import ALIAS, SECRETS, register
+from .fake_atproto import Browser, FakeAtproto
+from .fake_bsky import DID as BSKY_DID
+from .fake_bsky import HANDLE as BSKY_HANDLE
 
 FIXTURE = Path(__file__).parent / "fixtures" / "posted.jsonl"
 GOLDENS = Path(__file__).parent / "goldens" / "help"
@@ -263,6 +268,54 @@ def test_login_refuses_a_token_for_another_handle_and_stores_nothing(
     assert not store.token_file.exists()
     assert AccountRegistry(paths).accounts() == {}
     assert not paths.client_file.exists(), "a refused login leaves nothing behind"
+
+
+@pytest.fixture
+def bsky_login(monkeypatch):
+    """The Bluesky login on the fake atproto network, the human approving in the fake browser."""
+    fake = FakeAtproto()
+    browser = Browser(fake)
+
+    class Login(BlueskyLogin):
+        def authorize(self, handle, client_id, *, open_browser, notify):
+            def shown(message):
+                browser.notify(message)
+                notify(message)
+
+            return super().authorize(handle, client_id, open_browser=open_browser, notify=shown)
+
+    monkeypatch.setattr(
+        runtime_module,
+        "BlueskyLogin",
+        lambda transport=None: Login(transport=fake.transport(), callback=browser.redirect),
+    )
+    return fake
+
+
+def test_a_bluesky_login_needs_no_client_id(paths, bsky_login, capsys):
+    alias = f"bsky:{BSKY_HANDLE}"
+    code, out, err = _run(capsys, ["auth", "login", "--account", alias, "--no-browser"])
+    assert code == 0, err
+    body = json.loads(out)
+    assert body["alias"] == alias and body["verified"] is True
+    assert body["account"] == {"user_id": BSKY_DID, "username": BSKY_HANDLE}
+    assert "https://auth.example.test/oauth/authorize?" in err, "the consent URL is on stderr"
+    [par] = bsky_login.pars.values()
+    assert par["client_id"].startswith("http://localhost?"), "the loopback client by default"
+    stored = AccountRegistry(paths).store(alias).load()
+    assert not any(s in out + err for s in (*SECRETS, stored.dpop_key))
+
+
+def test_a_bluesky_login_uses_the_configured_client_metadata(paths, bsky_login, capsys):
+    hosted = "https://example.org/pulsar/client-metadata.json"
+    paths.ensure()
+    paths.settings_file.write_text(f'[oauth.bsky]\nclient_id = "{hosted}"\n')
+    os.chmod(paths.settings_file, 0o644)
+    alias = f"bsky:{BSKY_HANDLE}"
+    code, _, err = _run(capsys, ["auth", "login", "--account", alias, "--no-browser"])
+    assert code == 0, err
+    [par] = bsky_login.pars.values()
+    assert par["client_id"] == hosted
 
 
 def test_login_needs_an_account(paths, fake_login, capsys):

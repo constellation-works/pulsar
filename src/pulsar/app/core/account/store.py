@@ -1,4 +1,4 @@
-"""Where the X token bundle lives, and what that storage does and does not protect.
+"""Where an account's token bundle lives, and what that storage does and does not protect.
 
 ``CredentialStore`` (``channels.credentials``) is the interface the rest of
 pulsar codes against. ``FernetFileStore`` is today's implementation: a Fernet ciphertext
@@ -6,6 +6,10 @@ pulsar codes against. ``FernetFileStore`` is today's implementation: a Fernet ci
 pulsar home. Orbit's host-held secrets (ORB-13009) are meant to drop in
 behind the same protocol, which is why ``save`` already takes an
 ``expected_previous`` bundle for compare-and-swap rotation.
+
+The bundle is the tokens and, for a DPoP-bound (Bluesky) login, the private
+key they are bound to: one ciphertext, so the key is kept exactly like the
+tokens.
 
 What the file store protects against: the bundle showing up in plaintext in
 a backup, a ``cat`` or ``grep`` over the home directory, a stray ``git add``,
@@ -82,6 +86,9 @@ from pulsar.internal.fs import (
 from pulsar.internal.guard import register_live_secret
 
 _BUNDLE_FIELDS = frozenset(f.name for f in dataclasses.fields(TokenBundle))
+# Written only when set, so a bundle without them (any X bundle) stays readable
+# by a pulsar from before they existed.
+_DPOP_FIELDS = ("dpop_key", "service", "token_url")
 
 
 def _is_str(value: object, *, optional: bool = False) -> bool:
@@ -100,6 +107,7 @@ def _bundle_from_json(fields: dict[str, Any]) -> TokenBundle | None:
         and _is_str(fields.get("client_id"))
         and _is_str(fields.get("token_type", "bearer"))
         and _is_str(fields.get("binding_id"), optional=True)
+        and all(_is_str(fields.get(name), optional=True) for name in _DPOP_FIELDS)
     )
     return TokenBundle(**fields) if ok else None
 
@@ -111,9 +119,18 @@ def home_command(home: Path, command: str) -> str:
 
 
 def _register(bundle: TokenBundle) -> None:
-    """Mask this bundle's tokens in every log line and stored text."""
+    """Mask this bundle's tokens and DPoP key in every log line and stored text."""
     register_live_secret(bundle.access_token)
     register_live_secret(bundle.refresh_token)
+    register_live_secret(bundle.dpop_key)
+
+
+def _bundle_json(bundle: TokenBundle) -> bytes:
+    fields = asdict(bundle)
+    for name in _DPOP_FIELDS:
+        if fields[name] is None:
+            del fields[name]
+    return json.dumps(fields).encode()
 
 
 def login_command(home: Path, alias: str | None) -> str:
@@ -269,7 +286,7 @@ class FernetFileStore:
         if expected_previous is not None and self.load() != expected_previous:
             raise CredentialConflict()
         _register(bundle)
-        blob = self._fernet(create=True).encrypt(json.dumps(asdict(bundle)).encode())
+        blob = self._fernet(create=True).encrypt(_bundle_json(bundle))
         write_private_atomic(self.token_file, blob)
 
     def rebind(

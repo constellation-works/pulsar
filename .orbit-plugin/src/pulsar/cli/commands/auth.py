@@ -14,6 +14,7 @@ def register(commands: toolkit.Commands) -> None:
         help="bind, check and log out the accounts on this host",
         group="Accounts",
         epilog="Examples:\n  pulsar auth login --account x:<handle> --no-browser\n"
+        "  pulsar auth login --account bsky:<handle>\n"
         "  pulsar auth status --live",
     )
     auth.usage = "pulsar auth [OPTIONS] COMMAND ..."
@@ -23,16 +24,18 @@ def register(commands: toolkit.Commands) -> None:
     p_login = sub.add(
         "login",
         group="Commands",
-        help="bind an account: OAuth 2.0 PKCE in a browser, then verify the handle with X",
+        help="bind an account: OAuth in a browser, then verify the handle with its provider",
         epilog="Examples:\n  pulsar auth login --account x:<handle> --client-id <CLIENT_ID>\n"
-        "  pulsar auth login --account x:<handle> --no-browser   # over SSH",
+        "  pulsar auth login --account x:<handle> --no-browser   # over SSH\n"
+        "  pulsar auth login --account bsky:<handle>",
     )
     p_login.add_argument(
         "--account", help=f"the account to bind ({toolkit.ACCOUNT_HELP}); {toolkit.ACCOUNT_DEFAULT}"
     )
     p_login.add_argument(
         "--client-id",
-        help="the X app's OAuth 2.0 client id; default: the one remembered from the last login",
+        help="X: the app's OAuth 2.0 client id; Bluesky: a client-metadata URL. Default: "
+        "[oauth.<provider>] in config.toml, else the last login's, else Bluesky's loopback client",
     )
     p_login.add_argument(
         "--no-browser",
@@ -54,7 +57,8 @@ def register(commands: toolkit.Commands) -> None:
     status_mode.add_argument(
         "--live",
         action="store_true",
-        help="prove each binding: force a token refresh (rotates the pair), then GET /users/me",
+        help="prove each binding: force a token refresh (rotates the pair), then ask the "
+        "provider who the token belongs to",
     )
     status_mode.add_argument(
         "--offline", action="store_true", help="deprecated, no effect: the default is offline"
@@ -98,7 +102,7 @@ def _login(args: argparse.Namespace, ctx: toolkit.Context) -> int:
         raise toolkit.UsageError(
             "--account is required: the account to bind, e.g. --account x:<handle>"
         )
-    client_id = args.client_id or ctx.app.remembered_client_id()
+    client_id = args.client_id or ctx.app.login_client_id(alias)
     if not client_id:
         raise toolkit.UsageError(
             "--client-id is required the first time: the X app's OAuth 2.0 client id"

@@ -9,6 +9,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Bluesky login.** `pulsar auth login --account bsky:<handle>` signs in through atproto
+  OAuth (PAR, PKCE S256, DPoP-bound tokens, `use_dpop_nonce` retries) and stores the tokens
+  and a per-account DPoP key, encrypted, only after the token's DID resolves back to the
+  handle. `auth status [--live]`, `auth logout`, refresh under the cross-process lock and
+  `pulsar.status` work as for X. The client is the loopback development client unless
+  `[oauth.bsky] client_id` names a hosted client-metadata document.
 - **x-updates auto-task.** The retired x-updates routine as a plugin auto-task, seeded
   disabled: it drafts approval-gated plans for new constellation-works releases, newly
   public repositories and notable merged pull requests, skipping what the ledger (imported

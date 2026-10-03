@@ -11,7 +11,7 @@ summary: The Channel protocol's failure semantics, the provider -> channel facto
 tags: [channels, providers, x, bluesky, adapter, fingerprint, facets, dpop]
 paths: ["src/pulsar/app/core/channels/contract.py", "src/pulsar/app/core/channels/x/**", "src/pulsar/app/core/channels/bluesky/**", "src/pulsar/app/runtime.py"]
 related_features: [publishing, accounts]
-related_artifacts: [ORB-13006, ORB-13028, ORB-13031, ORB-13207, ORB-13285]
+related_artifacts: [ORB-13006, ORB-13028, ORB-13031, ORB-13207, ORB-13285, ORB-13729]
 ---
 
 # Channels — Design
@@ -50,8 +50,14 @@ reads work.
   request left, or a success response without a readable id;
 - a failure before the request left (connect error, pool timeout) is `api_error`, retryable.
 
-`AuthFlow` (`begin`, `complete`) is declared for per-provider logins; X's login predates it and
-is still module functions in [app/core/channels/x/auth.py](../../../src/pulsar/app/core/channels/x/auth.py).
+`AuthFlow` is a provider's human login: `authorize(handle, client_id, …)` runs consent in a
+browser and the token exchange and returns an `Authorized` (the bundle, the identity the
+provider gives for the new token, the client id and redirect URI), storing nothing; the app
+checks the identity and binds ([Accounts — Design §2](../accounts/2_design.md#2-login)).
+`default_client_id` is the client a login uses when the operator names none. Bluesky's login
+implements it; X's predates it and is still module functions in
+[app/core/channels/x/auth.py](../../../src/pulsar/app/core/channels/x/auth.py). Both use the
+loopback listener in [channels/loopback.py](../../../src/pulsar/app/core/channels/loopback.py).
 
 [tests/test_channel_contract.py](../../../tests/test_channel_contract.py) runs one suite over every
 channel on its fake transport: offline checks, a thread with media and alt text, a quote,
@@ -59,7 +65,8 @@ delete, reconcile after a lost reply, `whoami` and both reads.
 
 **The provider -> channel factory.** An alias names its provider (`x:…`, `bsky:…`).
 [app/runtime.py](../../../src/pulsar/app/runtime.py) `client_for` builds the account's client for
-that provider and `channel` binds it as a `Channel`; any other provider is `unsupported`.
+that provider and `channel` binds it as a `Channel`, and `login_flow` returns its `AuthFlow`; any
+other provider is `unsupported`.
 Identity checks call the channel's `whoami`. Nothing else outside a provider's package names
 it, except X's own login, health check, single-post tools and `import-posted`, which predate
 the rule; `tests/test_layers.py` keeps that list closed. The single-post tools
@@ -173,12 +180,14 @@ answers 401 or `ExpiredToken`/`InvalidToken`, under the same lock and compare-an
 X; a refused refresh is `auth_expired`. Like `XClient`, a client is pinned to the binding its
 identity check was for (`account_mismatch` otherwise).
 
-A bundle whose `token_type` is `DPoP` needs a proof signer: the client takes one by injection
-(a `DpopProof`; [bluesky/dpop.py](../../../src/pulsar/app/core/channels/bluesky/dpop.py)
-`Es256Proof` signs RFC 9449 proofs with a P-256 key). Each request, the token refresh
+A bundle whose `token_type` is `DPoP` needs a proof signer: the client builds one from the key
+the login stored in the bundle (or takes one by injection, a `DpopProof`;
+[bluesky/dpop.py](../../../src/pulsar/app/core/channels/bluesky/dpop.py) `Es256Proof` signs
+RFC 9449 proofs with a P-256 key). Requests go to the PDS and refreshes to the token endpoint
+the bundle names; `bsky.social` is the default for a bundle that names none. Each request, the token refresh
 included, carries a fresh proof with the method, URL, the access token's hash and the server's
 latest nonce; a `use_dpop_nonce` answer is retried once with the new nonce. A DPoP bundle
-without a signer is `unsupported` before anything is sent.
+without a usable key is `unsupported` before anything is sent.
 
 Errors map like X's: 429 `rate_limited` (retryable), 404 or `RecordNotFound` `not_found`, 413
 or `BlobTooLarge` `invalid_media`, 403 `forbidden`, the rest `api_error`, with the PDS's
@@ -205,13 +214,8 @@ post's URI.
 
 ## 12. Concerns & Honest Limitations
 
-- **Bluesky has no login yet.** Its channel runs on a credential bundle someone else stored;
-  the atproto OAuth login (PAR, PKCE, DPoP) is a sibling task. Until it stores the DPoP key,
-  the PDS URL and the token endpoint, the factory builds every Bluesky client for
-  `bsky.social` without a proof, so a DPoP-bound bundle is `unsupported` before anything is
-  sent.
-- **`AuthFlow` is unimplemented.** Both providers fit the contract unchanged, which the second
-  adapter was meant to test; the login path is still X-specific CLI code.
+- **X's login is not an `AuthFlow`.** Bluesky's login implements the protocol; X's predates
+  it and `app/login.py` still calls it directly.
 - **Graphemes are approximated.** pulsar's segmentation omits the Indic conjunct rule, so it
   can count more graphemes than Bluesky does and refuse a post Bluesky would take, never the
   reverse. Facet detection follows the Bluesky app's rules, not a spec; a link it misses posts
@@ -233,5 +237,6 @@ post's URI.
 - [ORB-13031] — added the Bluesky channel, the contract suite and the provider -> channel factory.
 - [ORB-13207] — bounded chunked media upload before finalize.
 - [ORB-13285] — set a conservative upload rate and pass the Orbit deadline to the client.
+- [ORB-13729] — made `AuthFlow` Bluesky's login and let the client sign with the stored DPoP key.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

@@ -18,14 +18,18 @@ from typing import Any
 
 import httpx
 
-from pulsar.app.core.account import AccountRegistry, load_client_id
-from pulsar.app.core.channels.x import PROVIDER
+from pulsar.app.core.account import (
+    AccountRegistry,
+    alias_provider,
+    canonical_alias,
+    load_client_id,
+)
 from pulsar.internal.errors import PulsarError
 from pulsar.internal.fs import Paths
 
 from . import approvals, health, ops
 from .interfaces import Report
-from .login import login
+from .login import default_client_id, login
 from .runtime import LocalRuntime
 from .settings import Settings, load_settings
 
@@ -80,9 +84,17 @@ class LocalApp:
         """``default_account`` from config.toml."""
         return load_settings(self.paths).default_account
 
-    def remembered_client_id(self) -> str | None:
-        """The X app client id remembered from the last login."""
-        return load_client_id(self.paths, PROVIDER)
+    def login_client_id(self, alias: str) -> str | None:
+        """The OAuth client id a login of ``alias`` uses when the human names none:
+        its provider's ``[oauth.<provider>] client_id`` in config.toml, else the one
+        remembered from that provider's last login, else the provider's default
+        (Bluesky's loopback development client; X has none)."""
+        provider = alias_provider(canonical_alias(alias))
+        return (
+            load_settings(self.paths).client_id_for(provider)
+            or load_client_id(self.paths, provider)
+            or default_client_id(provider)
+        )
 
     def migrate_legacy_quietly(self) -> str | None:
         """First-use migration of a phase 1 home before an account write. A
@@ -97,11 +109,11 @@ class LocalApp:
         return None
 
     def login(self, alias: str, client_id: str, *, open_browser: bool) -> Report:
-        """Bind ``alias``: OAuth 2.0 PKCE in a browser, then verify the handle."""
+        """Bind ``alias``: OAuth in a browser, then verify the handle with its provider."""
         account = login(
             self.paths, load_settings(self.paths), alias, client_id, open_browser=open_browser
         )
-        # login() asked X with the new token before storing it, so this is live proof.
+        # login() asked the provider about the new token before storing it: live proof.
         return {
             "alias": account.alias,
             "account": {"user_id": account.provider_user_id, "username": account.handle},

@@ -20,15 +20,19 @@ Reads (``mentions``, ``own_posts``) are paid too: they return at most
 What they return goes to the caller; nothing of it is stored.
 
 ``AuthFlow`` is separate because logins are human-only and differ per
-provider (X: OAuth 2.0 PKCE on a loopback; Mastodon: per-instance app
-registration; Bluesky: DPoP/PAR; LinkedIn: a client secret).
+provider (X: OAuth 2.0 PKCE on a loopback; Bluesky: atproto OAuth with PAR,
+PKCE and DPoP; Mastodon: per-instance app registration; LinkedIn: a client
+secret). Bluesky's implements it; X's login predates it.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
+
+from .credentials import TokenBundle
 
 # -- media: the types and size ceilings pulsar loads at all; a channel's
 # ``MediaCapabilities`` may narrow them.
@@ -256,18 +260,30 @@ class Channel(Protocol):
 
 
 @dataclass(frozen=True)
-class AuthStart:
-    url: str  # where the human approves
-    state: str  # opaque; round-trips through the callback
+class Authorized:
+    """What a provider's login hands back; nothing of it is stored yet."""
+
+    bundle: TokenBundle
+    # Whom the provider says the bundle belongs to, asked about the new token
+    # itself; ``handle`` is "" when the provider names none it could verify.
+    identity: Identity
+    client_id: str
+    redirect_uri: str
 
 
 class AuthFlow(Protocol):
-    """Human-only account binding. Never exposed as a tool."""
+    """Human-only account binding. Never exposed as a tool, and it stores
+    nothing: the app checks ``identity`` against the alias, then binds."""
 
     provider: str
 
-    def begin(self) -> AuthStart: ...
+    def default_client_id(self) -> str:
+        """The OAuth client id a login uses when the operator names none."""
+        ...
 
-    def complete(self, start: AuthStart, callback: dict[str, list[str]]) -> Identity:
-        """Exchange the callback for credentials, store them, return who was bound."""
+    def authorize(
+        self, handle: str, client_id: str, *, open_browser: bool, notify: Callable[[str], None]
+    ) -> Authorized:
+        """Consent in a browser as ``handle`` (shown through ``notify``), then the
+        token exchange and the identity lookup."""
         ...

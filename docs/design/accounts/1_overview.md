@@ -1,7 +1,7 @@
 ---
 title: Accounts — Overview
 owner: claude
-last_updated: 2026-09-26
+last_updated: 2026-10-03
 last_validated: 2026-09-26
 status: Accepted
 feature: accounts
@@ -9,9 +9,9 @@ doc_role: overview
 type: design
 summary: How pulsar binds provider accounts to a host, stores their tokens, and proves which handle a write will post as.
 tags: [accounts, auth, oauth, credentials]
-paths: ["src/pulsar/app/core/account/registry.py", "src/pulsar/app/core/account/store.py", "src/pulsar/app/core/account/clients.py", "src/pulsar/app/core/channels/credentials.py", "src/pulsar/app/login.py", "src/pulsar/internal/fs/paths.py", "src/pulsar/internal/fs/files.py", "src/pulsar/app/core/channels/x/auth.py", "src/pulsar/app/core/channels/x/client.py"]
+paths: ["src/pulsar/app/core/account/registry.py", "src/pulsar/app/core/account/store.py", "src/pulsar/app/core/account/clients.py", "src/pulsar/app/core/channels/credentials.py", "src/pulsar/app/login.py", "src/pulsar/internal/fs/paths.py", "src/pulsar/internal/fs/files.py", "src/pulsar/app/core/channels/x/auth.py", "src/pulsar/app/core/channels/x/client.py", "src/pulsar/app/core/channels/bluesky/auth.py"]
 related_features: [publishing, surfaces]
-related_artifacts: [ORB-12124, ORB-13027, ORB-13028, ORB-13039]
+related_artifacts: [ORB-12124, ORB-13027, ORB-13028, ORB-13039, ORB-13729]
 ---
 
 # Accounts — Overview
@@ -44,7 +44,8 @@ the alias names. No agent ever sees a token, and no tool can accept one.
 - **Registry.** `accounts.json`: one row per alias with provider user id, handle, scopes,
   status (`active`, `reauth_required`, `revoked`), `bound_at`, `binding_id`, `verified_at`. No
   secrets.
-- **Bundle.** One account's encrypted token pair, `accounts/<provider>--<handle>/tokens.enc`.
+- **Bundle.** One account's encrypted token pair, `accounts/<provider>--<handle>/tokens.enc`;
+  a Bluesky bundle also holds the DPoP key its tokens are bound to, its PDS and token endpoint.
 - **Binding.** One successful login, identified by `binding_id`; cached identity is only
   trusted for the binding it was fetched under.
 - **Expected handle.** Config pin (`[accounts."x:constworks"] expected_handle`) that the bound
@@ -60,7 +61,9 @@ the alias names. No agent ever sees a token, and no tool can accept one.
 | OAuth client ids (`client.json`) | [app/core/account/clients.py](../../../src/pulsar/app/core/account/clients.py) | [ORB-13028] |
 | Home layout, alias → directory slug | [internal/fs/paths.py](../../../src/pulsar/internal/fs/paths.py) | [ORB-13028] |
 | Owner-only files, atomic saves, `insecure_storage` | [internal/fs/files.py](../../../src/pulsar/internal/fs/files.py) | [ORB-13027] |
-| OAuth 2.0 PKCE consent and code exchange | [app/core/channels/x/auth.py](../../../src/pulsar/app/core/channels/x/auth.py) | [ORB-12124] |
+| X: OAuth 2.0 PKCE consent and code exchange | [app/core/channels/x/auth.py](../../../src/pulsar/app/core/channels/x/auth.py) | [ORB-12124] |
+| Bluesky: atproto OAuth (PAR, PKCE, DPoP), `sub` DID → handle | [app/core/channels/bluesky/auth.py](../../../src/pulsar/app/core/channels/bluesky/auth.py) | [ORB-13729] |
+| The loopback redirect listener | [app/core/channels/loopback.py](../../../src/pulsar/app/core/channels/loopback.py) | [ORB-13729] |
 | Login: identity check, then bind | [app/login.py](../../../src/pulsar/app/login.py) | [ORB-13028] |
 | Refresh under a per-account file lock | [app/core/channels/x/client.py](../../../src/pulsar/app/core/channels/x/client.py) | [ORB-13027] |
 | `pulsar auth login | status | logout | migrate` | [cli/commands/auth.py](../../../src/pulsar/cli/commands/auth.py) | [ORB-13027], [ORB-13028] |
@@ -71,5 +74,6 @@ the alias names. No agent ever sees a token, and no tool can accept one.
 - [ORB-13027] — hardened storage at rest, serialised refresh across processes, added `auth status --live`.
 - [ORB-13028] — introduced the account registry, aliases, verified logins and `expected_handle`.
 - [ORB-13039] — proposed: bind the post token to the looked-up identity, among other fixes.
+- [ORB-13729] — added the Bluesky login and moved the loopback listener out of X's package.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

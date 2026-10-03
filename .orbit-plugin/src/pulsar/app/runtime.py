@@ -8,8 +8,9 @@ cwd or ``$HOME`` itself.
 
 It is also the provider -> channel factory: ``client_for`` builds an
 account's client by the provider its alias names, and ``channel`` binds
-that client to the account as a ``Channel``. Everything else reaches a
-provider only through those two.
+that client to the account as a ``Channel``; ``login_flow`` is the
+provider's human login. Everything else reaches a provider only through
+those three.
 """
 
 from __future__ import annotations
@@ -37,8 +38,8 @@ from pulsar.app.core.account import (
     require_expected,
 )
 from pulsar.app.core.channels import bluesky, x
-from pulsar.app.core.channels.bluesky import BlueskyChannel, BlueskyClient
-from pulsar.app.core.channels.contract import Channel
+from pulsar.app.core.channels.bluesky import BlueskyChannel, BlueskyClient, BlueskyLogin
+from pulsar.app.core.channels.contract import AuthFlow, Channel
 from pulsar.app.core.channels.x import XChannel, XClient
 from pulsar.app.core.engagement import Reader
 from pulsar.app.core.ledger import SqliteLedger
@@ -97,6 +98,16 @@ def configure_logging(level: int = logging.WARNING) -> None:
 
 class _PulsarHandler(logging.StreamHandler):  # type: ignore[type-arg]
     """Marks the handler ``configure_logging`` installed, so it is installed once."""
+
+
+def login_flow(provider: str, *, transport: httpx.BaseTransport | None = None) -> AuthFlow:
+    """``provider``'s human login; ``unsupported`` for a provider pulsar cannot log in to.
+
+    X's login predates ``AuthFlow`` and is ``app.login``'s own.
+    """
+    if provider == bluesky.PROVIDER:
+        return BlueskyLogin(transport=transport)
+    raise PulsarError(UNSUPPORTED, f"pulsar has no login for provider {provider!r}")
 
 
 def default_paths(environ: Mapping[str, str], user_home: Path) -> Paths:
