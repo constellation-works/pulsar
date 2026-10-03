@@ -112,7 +112,9 @@ def test_collect_preserves_public_candidate_shapes_keys_and_window():
         response(
             {
                 "items": [
-                    pr(),
+                    pr(
+                        labels=[{"name": "feature"}, {"name": "user-facing"}], user={"login": "dev"}
+                    ),
                     pr("private"),
                     pr("archived"),
                     pr("foreign"),
@@ -148,7 +150,9 @@ def test_collect_preserves_public_candidate_shapes_keys_and_window():
         if candidate["kind"] == "release":
             fields.add("tag")
         elif candidate["kind"] == "pr":
-            fields.add("number")
+            fields.update({"number", "labels", "author"})
+            assert candidate["labels"] == ["feature", "user-facing"]
+            assert candidate["author"] == "dev"
         assert set(candidate) == fields
     paths = [urlsplit(path).path for path in fetcher.calls]
     assert paths == [
@@ -358,12 +362,60 @@ def test_redirects_are_not_followed():
     )
 
 
-def test_candidate_limit_reports_partial_instead_of_breaking_keys():
-    repos = [repo(f"repo{number}", created_at=RECENT, pushed_at=OLD) for number in range(101)]
-    fetcher = FakeGitHub(response(repos[:100], Link='<x>; rel="next"'), response(repos[100:]))
+def test_busy_week_scan_completes_before_editorial_filtering():
+    prs = [pr(number=number) for number in range(1, 151)]
+    fetcher = FakeGitHub(
+        response([repo(created_at=RECENT)]),
+        response([release(), release(tag_name="v2")]),
+        response(
+            {"items": prs[:100], "total_count": 150, "incomplete_results": False},
+            Link='<https://untrusted.invalid>; rel="next"',
+        ),
+        response({"items": prs[100:], "total_count": 150, "incomplete_results": False}),
+        response([event("orbit"), event(created_at=OLD)]),
+    )
     out = collect(fetcher)
-    assert out["partial"] is True and out["error"]["code"] == "candidate_limit"
-    assert len(out["candidates"]) == 100 and len(scan.keys(out["candidates"])) == 100
+    assert out["partial"] is False and out["error"] is None
+    assert out["window"] == {"start": "2026-09-26T10:00:00+00:00", "end": NOW.isoformat()}
+    assert out["requests"] == len(fetcher.calls) == 5 < scan.MAX_REQUESTS
+    assert not fetcher.replies
+    assert scan.keys(out["candidates"][:3]) == [
+        "repo:orbit",
+        "release:orbit:v1",
+        "release:orbit:v2",
+    ]
+    candidates = [c for c in out["candidates"] if c["kind"] == "pr"]
+    assert len(out["candidates"]) == 153 and len(candidates) == 150
+    assert [c["number"] for c in candidates] == list(range(1, 151))
+    assert all(c["labels"] == [] and "author" not in c for c in candidates)
+    assert urlsplit(fetcher.calls[3]).path == "search/issues"
+    assert parse_qs(urlsplit(fetcher.calls[3]).query)["page"] == ["2"]
+
+
+@pytest.mark.parametrize("mode", ["keys", "plan"])
+def test_lookup_accepts_100_candidates_and_refuses_more(mode, tmp_path):
+    candidates = [{"kind": "pr", "repo": "orbit", "number": n} for n in range(1, 102)]
+
+    def lookup(selected):
+        if mode == "keys":
+            return scan.keys(selected)
+        return scan.plan(
+            {
+                "candidates": selected,
+                "history": {"rows": [], "truncated": False},
+                "tasks": {"tasks": [], "total": 0, "truncated": False},
+                "date": "2026-10-03",
+            },
+            root=tmp_path,
+        )
+
+    result = lookup(candidates[:100])
+    if mode == "keys":
+        assert len(result) == 100
+    else:
+        assert len(result["drafts"]) == 3 and len(result["deferred"]) == 97
+    with pytest.raises(ValueError, match="at most 100 candidates; filter notability first"):
+        lookup(candidates)
 
 
 def test_scan_entrypoint_prints_partial_json_and_writes_nothing(monkeypatch, capsys, tmp_path):

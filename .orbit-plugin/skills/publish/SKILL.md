@@ -189,16 +189,24 @@ SKILL.md, run with `python3 -B` from the workspace root and JSON on stdin:
   merged-PR search query, and PublicEvents are paginated within 60 requests.
   Exhausted rate limits, HTTP/network failures, truncation and invalid responses
   stop collection. On `partial: true`, record the error and stop before drafting;
-  never call that outcome nothing new. Apply the existing notability rules to the
-  returned PRs before passing candidates to `keys`.
+  never call that outcome nothing new. The raw scan is bounded by requests and
+  completeness guards, with no 100-candidate cap. PRs include `labels` (label names)
+  and `author` (login, when present) for editorial review. Apply the existing
+  notability rules to the returned PRs before passing candidates to `keys`; keep
+  every release and newly public repository. Select at most 100 candidates,
+  releases and repositories first, then the newest notable PRs by `at` in the
+  remaining slots. Record overflow PRs for a later run. If releases and repositories
+  alone exceed 100, stop and record the lookup capacity blocker rather than discard them.
 - `keys` takes `{"candidates": [...]}` and returns the `keys` to look up. A
   candidate is `{"kind": "release", "repo", "tag"}`, `{"kind": "repo", "repo"}` or
   `{"kind": "pr", "repo", "number"}` (plus `title`, `url`, `at`), `repo` without
   the owner; its key is `release:<repo>:<tag>`, `repo:<name>` or `pr:<repo>:<n>`,
-  the keys the retired routine's imported history uses.
+  the keys the retired routine's imported history uses. `keys` accepts at most 100
+  editorially filtered candidates; use that same selected list for `plan`.
 - `plan` takes `{"candidates", "history", "tasks", "date"}`: `history` is
   `pulsar.history` with those `keys` (`truncated: false`), `tasks` the complete
   `orbit.task.list` envelope of `pulsar-x-update-posts` tasks with `description`.
+  `plan` also accepts at most 100 candidates and keeps the three-drafts-per-run cap.
   It returns `drafts` (each with `key` and `plan` path), `skipped` (in the ledger in
   any state, carried by a plan file under `x-updates/`, or named in backticks by an
   open task) and `deferred` (over the cap of three, oldest release first).

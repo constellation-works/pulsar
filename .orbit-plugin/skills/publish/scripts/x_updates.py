@@ -41,7 +41,7 @@ from urllib.parse import quote, urlencode
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 PLANS = Path("x-updates")
-MAX_CANDIDATES = 100  # pulsar.history looks up at most 100 keys
+MAX_CANDIDATES = 100  # editorial lookup/plan only; pulsar.history accepts at most 100 keys
 MAX_DRAFTS = 3
 KINDS = ("release", "repo", "pr")  # drafting order when over the cap
 _NAME = re.compile(r"[A-Za-z0-9._-]+")
@@ -229,8 +229,6 @@ def collect(
     def add(candidate: dict[str, Any]) -> None:
         key = key_of(candidate)
         if key not in seen:
-            if len(candidates) == MAX_CANDIDATES:
-                raise PartialScan("candidate_limit", endpoint, limit=MAX_CANDIDATES)
             seen.add(key)
             candidates.append(candidate)
 
@@ -284,16 +282,18 @@ def collect(
             name = repo_url[len(prefix) :]
             merged = pr["pull_request"]["merged_at"]
             if within(merged):
-                add(
-                    {
-                        "kind": "pr",
-                        "repo": name,
-                        "number": pr["number"],
-                        "title": pr["title"],
-                        "url": pr["html_url"],
-                        "at": merged,
-                    }
-                )
+                candidate = {
+                    "kind": "pr",
+                    "repo": name,
+                    "number": pr["number"],
+                    "title": pr["title"],
+                    "url": pr["html_url"],
+                    "at": merged,
+                    "labels": [label["name"] for label in pr.get("labels", [])],
+                }
+                if author := (pr.get("user") or {}).get("login"):
+                    candidate["author"] = author
+                add(candidate)
         endpoint = f"orgs/{ORG}/events"
         count = 0
         for event in scan.pages(endpoint, per_page=100):
@@ -356,7 +356,10 @@ def key_of(candidate: dict[str, Any]) -> str:
 
 def keys(candidates: list[dict[str, Any]]) -> list[str]:
     if len(candidates) > MAX_CANDIDATES:
-        raise ValueError(f"at most {MAX_CANDIDATES} candidates; narrow the scan window")
+        raise ValueError(
+            f"at most {MAX_CANDIDATES} candidates; filter notability first, "
+            "then select releases and repos before the newest notable PRs"
+        )
     return list(dict.fromkeys(key_of(c) for c in candidates))
 
 
