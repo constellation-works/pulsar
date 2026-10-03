@@ -483,8 +483,10 @@ def test_an_auto_task_may_call_only_what_it_requires(path):
     # Definitions leave files for pipeline delivery and never instruct committing.
     cleaned = path.read_text().replace("uncommitted", "").replace("commit permalink", "")
     assert "commit" not in cleaned.lower()
-    # The account alarm delivers tool state; the others deliver files.
-    assert ("no-diff-expected" in template["tags"]) == (path.stem == "auth-health")
+    # The account alarm delivers tool state; drafting/reporting may deliver no files.
+    assert "no-diff-expected" in template["tags"], (
+        "ORB-13375: a documented no-file stop must survive Orbit's empty-stage gate"
+    )
     # Engager's publish task writes nothing (keeps no-diff-expected);
     # post-proposer's records receipts in content records (drops no-diff-expected).
     for spawned in re.findall(r"tags `\[([^\]]*)\]`", template["description"]):

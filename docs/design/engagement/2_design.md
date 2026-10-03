@@ -1,8 +1,8 @@
 ---
 title: Engagement — Design
 owner: claude
-last_updated: 2026-09-27
-last_validated: 2026-09-27
+last_updated: 2026-10-03
+last_validated: 2026-10-03
 status: Draft
 feature: engagement
 doc_role: design
@@ -11,7 +11,7 @@ summary: How a read is budgeted, made and recorded, how a mention is known to be
 tags: [engagement, reads, mentions, metrics, budget, ledger, approvals]
 paths: ["src/pulsar/app/core/engagement/**", "src/pulsar/app/approvals.py", "src/pulsar/app/core/ledger/approvals.py", "src/pulsar/cli/commands/approve.py", "src/pulsar/app/core/channels/contract.py", "src/pulsar/app/core/ledger/reads.py", "src/pulsar/app/core/ledger/queries.py"]
 related_features: [publishing, channels, surfaces]
-related_artifacts: [ORB-13030]
+related_artifacts: [ORB-13030, ORB-13375]
 ---
 
 # Engagement — Design
@@ -109,8 +109,11 @@ can hand it to the human.
 `spec.definitions.auto_tasks`. Orbit seeds them into a workspace's `.orbit/auto_tasks/` as
 `pulsar-<name>`, `enabled: false`, when the plugin is enabled there; a human reviews and
 switches each on. Each is `dedupe: skip_if_open`, and each minted task is tagged `pulsar`.
-Because each auto-task produces a diff (plan files or reports) and leaves them uncommitted
-for the pipeline to deliver to `agent-main`, `no-diff-expected` is omitted from their template tags.
+Each template also carries `no-diff-expected`, so Orbit accepts an empty stage when a run
+has no files to deliver. The engager can stop on an unhealthy account or find no replies
+worth drafting; the post-proposer can stop on an unhealthy account or at its queue cap.
+The tag only exempts an empty stage: any plan files or weekly report written are still
+left uncommitted for the pipeline to deliver to `agent-main`.
 The post-proposer's follow-up publishing task also produces a diff when recording receipts in
 content records, while the engager's follow-up task writes nothing and keeps `no-diff-expected`.
 
@@ -149,5 +152,6 @@ they exist.
 ## Task References
 
 - [ORB-13030] — phase 4: drafts, approvals, standing policies, dispatch; approvals land here.
+- [ORB-13375] — allow auto-task delivery on documented no-file paths while preserving file delivery.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
