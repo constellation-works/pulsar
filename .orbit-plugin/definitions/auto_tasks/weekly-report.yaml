@@ -30,6 +30,7 @@ template:
   tags:
   - pulsar
   - pulsar-weekly-report
+  - no-diff-expected
   required_tools:
   - pulsar.history
   - pulsar.metrics

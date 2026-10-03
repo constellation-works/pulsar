@@ -41,6 +41,7 @@ template:
   tags:
   - pulsar
   - pulsar-post-proposer
+  - no-diff-expected
   required_tools:
   - pulsar.metrics
   - pulsar.status

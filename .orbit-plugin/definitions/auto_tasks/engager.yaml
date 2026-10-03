@@ -44,6 +44,7 @@ template:
   tags:
   - pulsar
   - pulsar-engager
+  - no-diff-expected
   required_tools:
   - pulsar.engagements
   - pulsar.status
