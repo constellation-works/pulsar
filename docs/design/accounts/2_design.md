@@ -1,17 +1,17 @@
 ---
 title: Accounts — Design
 owner: claude
-last_updated: 2026-09-27
-last_validated: 2026-09-27
+last_updated: 2026-10-03
+last_validated: 2026-10-03
 status: Accepted
 feature: accounts
 doc_role: design
 type: design
-summary: Login with identity check, the registry, encrypted per-account bundles, locked refresh, legacy migration and the storage boundary.
+summary: Login with identity check, encrypted per-account bundles, locked refresh, migration, offline auth-health alarms and the storage boundary.
 tags: [accounts, auth, oauth, credentials, storage]
 paths: ["src/pulsar/app/core/account/registry.py", "src/pulsar/app/core/account/store.py", "src/pulsar/app/core/account/clients.py", "src/pulsar/app/core/channels/credentials.py", "src/pulsar/app/login.py", "src/pulsar/internal/fs/paths.py", "src/pulsar/internal/fs/files.py", "src/pulsar/app/core/channels/x/auth.py", "src/pulsar/app/core/channels/x/client.py", "src/pulsar/cli/commands/auth.py"]
 related_features: [publishing, surfaces]
-related_artifacts: [ORB-13008, ORB-13009, ORB-13027, ORB-13028, ORB-13039, ORB-13138, ORB-13279]
+related_artifacts: [ORB-13008, ORB-13009, ORB-13027, ORB-13028, ORB-13039, ORB-13138, ORB-13279, ORB-13725]
 ---
 
 # Accounts — Design
@@ -201,7 +201,44 @@ removes `whoami.json`; re-running after a crash at any step finishes the job.
 alias, `needs_alias`, `ignored`) without taking a lock or changing anything, for read-only
 commands.
 
-## 8. Concerns & Honest Limitations
+## 8. Offline Auth-health Alarm
+
+The plugin ships [auth-health.yaml](../../../.orbit-plugin/definitions/auto_tasks/auth-health.yaml)
+([ORB-13725]), seeded as `pulsar-auth-health`, disabled until a human enables it.
+Its daily schedule is `0 8 * * *` in Orbit's scheduler timezone. It requires exactly
+`pulsar.status`: one offline read of every account, with no refresh, live probe, login,
+publish or approval. The template carries `no-diff-expected`; it writes no files.
+Its evidence lives in the execution summary and follow-up task state.
+
+Healthy accounts raise nothing. For each unverified or unhealthy account the executor
+uses the publishing skill's [offline planner](../../../.orbit-plugin/skills/publish/scripts/auth_health.py)
+on the status output and a complete Orbit task-list envelope. The helper returns
+arguments for proposed human attention tasks, copying `alias`, `health`, `token_state`,
+`reason`, `reauth_required` and the account's exact returned `attention` text. An
+**unverified** account gets a medium-priority **Verify** task: the human runs the returned
+`PULSAR_HOME=<home> pulsar auth status --live --account <alias>` to exercise refresh and
+prove identity. **Re-authorization required** gets a high-priority **Re-authorize** task
+with the returned `PULSAR_HOME=<home> pulsar auth login --account <alias>`. Other unhealthy
+accounts get a **Repair** task with their returned attention; no remedy is invented.
+Only a human at a terminal on the posting host performs these commands.
+
+The scheduled check uses `dedupe: skip_if_open`. Follow-ups use the stable account tag
+`pulsar-auth-health:<alias>` and the listing tag `pulsar-auth-attention`. All non-terminal
+tasks count, including proposed, blocked and someday: daily reruns reuse the task ID
+instead of filing another. A verification task that now requires re-authorization is
+escalated by updating its title and priority and adding the current evidence as a
+comment; its existing description and status remain. Terminal tasks allow a new alarm.
+A truncated task list fails planning, so the executor must obtain a complete list
+before creating anything. Overall status attention about unresolved writes or legacy
+migration alone does not create an account alarm when account health is healthy.
+
+## 9. Concerns & Honest Limitations
+
+- **The alarm needs opt-in and an executor.** It ships disabled, observes only local state,
+  and leaves live verification and re-authorization to a human. Its planner deterministically
+  selects task arguments; the agent performs the Orbit task-tool calls. Open-task dedupe
+  uses a workspace-local snapshot, not an atomic create constraint; the scheduled check's
+  `skip_if_open` prevents overlapping scheduled checks, but simultaneous manual runs can race.
 
 - **Same-uid processes can decrypt.** The key sits beside the ciphertext. Encryption protects
   against the bundle leaking through backups, `grep` over the home, a stray commit or another
@@ -227,5 +264,6 @@ commands.
 - [ORB-13039] — the phase-1 review that found the unpinned post token.
 - [ORB-13138] — aligned storage, locks, errors and the login listener with the constellation standards.
 - [ORB-13279] — pinned a write's token to the binding whose identity was checked.
+- [ORB-13725] — added the disabled daily offline auth-health alarm and per-account human follow-ups.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

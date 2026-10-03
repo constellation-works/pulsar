@@ -1,0 +1,44 @@
+schemaVersion: 1
+name: auth-health
+description: 'Daily: inspect offline account health and file one human attention task per unhealthy or unverified account; never refreshes or logs in'
+enabled: false
+schedule:
+  cron: 0 8 * * *
+dedupe: skip_if_open
+template:
+  title: Check pulsar account auth health
+  description: |-
+    Check every registered account's offline health and raise human attention when an account is unverified or unhealthy. This task writes no files: its execution summary and follow-up tasks are the deliverable.
+
+    ## Boundary (non-negotiable)
+
+    - Call only `pulsar.status` among pulsar tools, once, with no account filter. Never refresh, log in, run a live status check, or execute any remedy from attention.
+    - Never publish or approve. Re-authorization and live verification are human acts at a terminal on the posting host.
+    - Preserve the exact attention text, including PULSAR_HOME and account. Do not infer that an expired access token requires login: unverified is different from reauth_required.
+    - Create no plans, reports, logs, or other files. Use tool state and the execution summary for evidence.
+
+    ## Steps
+
+    1. Call `pulsar.status` once. If it fails, report the error; do not invent account health. If every accounts entry has health healthy, report that no account follow-up is needed and stop. Other attention (for example unresolved writes) is outside this account alarm.
+    2. Read the installed pulsar-publish skill's Auth-health section. Locate scripts/auth_health.py relative to that SKILL.md. This shipped helper plans follow-ups without network access, file writes, or executing remedies.
+    3. Call `orbit.task.list` in this workspace with tag pulsar-auth-attention and fields [id, title, status, terminal, tags, priority]. Require a complete {tasks, total, truncated} envelope. If truncated is true, repeat the list with a limit covering total; if a complete list cannot be obtained, stop with a dedupe blocker and create no task. Include every status so blocked, someday, proposed, backlog, in-progress and review tasks all dedupe; terminal tasks do not.
+    4. Run `python3 -B <pulsar-publish skill directory>/scripts/auth_health.py`. Supply JSON on stdin with status set to the pulsar.status output and tasks set to the complete orbit.task.list envelope. Keep both in memory; do not write input or output files. If the helper fails, report the failure and create no task.
+    5. For each followups entry in the helper's JSON, call `orbit.task.add` with those arguments, your model provenance and this workspace. Add leaves the task proposed for a human; never promote or dispatch it. The stable tag pulsar-auth-health:<alias> dedupes across both unverified and reauth_required. Unverified gets a medium-priority Verify title and the returned auth status --live remedy; reauth_required gets a high-priority Re-authorize title and the returned pulsar auth login remedy. Other unhealthy accounts get a Repair title and their returned attention.
+    6. Apply each updates entry with `orbit.task.update`, your model provenance and this workspace. This escalates an existing verification task to high-priority re-authorization and adds current evidence as a comment, preserving its description and status. For skipped entries record the existing task IDs; never create a second task for that account while one is open.
+    7. Persist an execution summary listing each account's alias, health, token_state, reason and reauth_required, its exact attention when non-healthy, and each added, escalated or existing follow-up ID. All-healthy means no follow-up. Do not contact anyone or run human remedies.
+  acceptance_criteria:
+  - pulsar.status was called once offline; all-healthy accounts created no follow-up.
+  - Each unverified or unhealthy account has one proposed or existing human attention task carrying alias, health, token_state, reason, reauth_required and the exact returned attention remedy.
+  - Unverified uses a medium-priority Verify task; reauth_required uses a high-priority Re-authorize task, escalating the existing task when necessary without duplicating it.
+  - A complete task list and the shipped planner were used for per-account open-task dedupe; task IDs and evidence are recorded in the execution summary.
+  - No file was written and nothing was refreshed, logged in, published, approved, or sent to anyone.
+  task_type: chore
+  tags:
+  - pulsar
+  - pulsar-auth-health
+  - no-diff-expected
+  required_tools:
+  - pulsar.status
+  priority: medium
+  complexity: low
+  status: backlog
