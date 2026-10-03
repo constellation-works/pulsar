@@ -7,6 +7,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **x-updates busy-week scans.** Raw collection no longer stops at 100 candidates;
+  editorial filtering keeps releases and newly public repos ahead of the newest notable PRs
+  within the 100-candidate lookup limit. PR candidates include labels and author for review.
+
 ## [0.2.0] - 2026-10-03
 
 ### Added

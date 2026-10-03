@@ -11,7 +11,7 @@ summary: How a plan is normalised and digested, how the publisher admits, claims
 tags: [publishing, plan, ledger, idempotency, policy, reconcile]
 paths: ["src/pulsar/app/core/publishing/plan.py", "src/pulsar/app/core/publishing/publisher.py", "src/pulsar/app/core/ledger/**", "src/pulsar/app/core/publishing/policy.py", "src/pulsar/app/core/ledger/usage.py", "src/pulsar/internal/guard/scanner.py", "src/pulsar/app/core/publishing/media.py", "src/pulsar/app/importer.py", "src/pulsar/app/writelog.py"]
 related_features: [accounts, channels, surfaces]
-related_artifacts: [ORB-13027, ORB-13028, ORB-13030, ORB-13039, ORB-13726, ORB-13746, ORB-13775]
+related_artifacts: [ORB-13027, ORB-13028, ORB-13030, ORB-13039, ORB-13726, ORB-13746, ORB-13775, ORB-13779]
 ---
 
 # Publishing — Design
@@ -195,18 +195,24 @@ It drafts and never publishes, and keeps the routine's keys, so imported history
    reading or passing a token. Both use public organisation repositories (excluding archived
    ones), releases only for repos pushed in the window, one `is:public` merged-PR search
    query, and public organisation events. Pagination never follows server-supplied URLs.
-   The window is at most 7 days; candidate shapes and editorial notability rules stay the
-   same. The agent excludes dependency bumps, CI, docs-only changes, refactors, reverts,
-   automated sweeps and PRs already covered by a release candidate.
+   The window is at most 7 days. PR candidates retain label names (`labels`) and the
+   author's login (`author`, when present) for editorial review. Before lookup, the agent
+   excludes dependency bumps, CI, docs-only changes, refactors, reverts, automated sweeps
+   and PRs already covered by a release candidate, retaining every release and newly public repo.
    A scan returns its source, window, request count, candidates and `partial`/`error`.
    It caps requests at 60 and stops on exhausted limits (including HTTP 403/429 with
    `X-RateLimit-Remaining: 0`), HTTP/network failures, invalid metadata, incomplete search,
-   GitHub's 300-event ceiling, or more than 100 candidates. A partial scan records why
-   and drafts nothing; only a complete empty scan may report nothing new.
+   GitHub's 300-event ceiling, search results above 1000, or incomplete pagination.
+   Raw collection has no 100-candidate cap. A partial scan records why and drafts nothing;
+   only a complete empty scan may report nothing new.
 2. The skill helper [x_updates.py](../../../.orbit-plugin/skills/publish/scripts/x_updates.py)
-   turns each into its key (`keys`). `pulsar.history` with `keys` returns the rows held under
-   them, however old, imported ones included.
-3. The helper (`plan`) skips a key the ledger holds in any state, one a plan file under
+   turns at most 100 editorially filtered candidates into keys (`keys`), taking releases
+   and newly public repos first, then the newest notable PRs by `at` in the remaining slots.
+   Overflow PRs wait for a later run; if releases and repos alone exceed 100, the agent
+   records a lookup capacity blocker rather than discarding them. `pulsar.history` with
+   `keys` returns the rows held under them, however old, imported ones included.
+3. The helper (`plan`) uses the same selected list (at most 100) and skips a key the ledger
+   holds in any state, one a plan file under
    `x-updates/` carries (a delivered draft), and one an open `pulsar-x-update-posts` task names
    (a draft not yet delivered), and returns at most three drafts, releases first.
 4. The agent writes each as a plan with that `key` under `x-updates/YYYY-MM-DD/`, using the
@@ -258,5 +264,6 @@ and continues without changing its key. Such a receipt has no publication URL.
 - [ORB-13726] — plan `key`, `pulsar.history` `keys`, and the x-updates auto-task.
 - [ORB-13746] — made draft filenames injective and terminal receipts replay before policy checks.
 - [ORB-13775] — added unauthenticated public GitHub scanning and explicit partial-scan stops.
+- [ORB-13779] — separated raw scan bounds from the 100-candidate editorial lookup limit.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
