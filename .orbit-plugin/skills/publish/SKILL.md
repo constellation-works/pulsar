@@ -171,7 +171,8 @@ Only a human at a terminal performs the returned remedy.
 ## X-updates
 
 The plugin seeds `pulsar-x-updates` disabled. When a human enables it, its daily
-run scans constellation-works with `gh` (read-only, the last 7 days) for new
+run scans public constellation-works metadata read-only (authenticated `gh`, or
+unauthenticated public REST, the last 7 days) for new
 releases, newly public repositories and notable merged pull requests, and drafts
 at most three plan files under `x-updates/YYYY-MM-DD/`, each with its key, plus
 one proposed `pulsar-x-update-posts` task that a human promotes after approving.
@@ -180,6 +181,16 @@ Nothing new writes no file and creates no task.
 The auto-task uses [scripts/x_updates.py](./scripts/x_updates.py), relative to this
 SKILL.md, run with `python3 -B` from the workspace root and JSON on stdin:
 
+- `scan` takes `{}` (last 7 days) or `{"start": "<UTC timestamp>"}` for a narrower
+  window. It prefers `gh` when `gh auth status --hostname github.com` succeeds,
+  otherwise uses standard-library `urllib` without credentials at `api.github.com`.
+  It returns `source`, `window`, `requests`, `candidates`, `partial` and `error`.
+  Public non-archived repos, releases of repos pushed in the window, one public
+  merged-PR search query, and PublicEvents are paginated within 60 requests.
+  Exhausted rate limits, HTTP/network failures, truncation and invalid responses
+  stop collection. On `partial: true`, record the error and stop before drafting;
+  never call that outcome nothing new. Apply the existing notability rules to the
+  returned PRs before passing candidates to `keys`.
 - `keys` takes `{"candidates": [...]}` and returns the `keys` to look up. A
   candidate is `{"kind": "release", "repo", "tag"}`, `{"kind": "repo", "repo"}` or
   `{"kind": "pr", "repo", "number"}` (plus `title`, `url`, `at`), `repo` without
@@ -195,8 +206,8 @@ SKILL.md, run with `python3 -B` from the workspace root and JSON on stdin:
   keep distinct announcements in distinct files. Existing drafts are found by their `key`,
   so earlier filenames still dedupe.
 
-The helper calls no service and writes nothing; it reads only the plan files
-under `x-updates/`.
+The helper writes nothing. Only `scan` calls GitHub; `keys` and `plan` stay
+offline, and only `plan` reads the plan files under `x-updates/`.
 
 ## Credentials
 
