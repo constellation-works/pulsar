@@ -36,6 +36,9 @@ timezone = "UTC"                     # IANA zone for the day/month boundary and 
 
 [media]
 roots = ["~/workspace/constellation/marketing"]   # default: none (path uploads off)
+
+[dispatch]                           # the plans `pulsar.dispatch` may publish
+plans = ["x-updates/**/*.yaml", "engagement/**/*.yaml"]   # default: none (dispatch idle)
 ```
 
 | Key | Default | Where it is enforced |
@@ -46,6 +49,7 @@ roots = ["~/workspace/constellation/marketing"]   # default: none (path uploads 
 | `prices.<provider>.read_post_usd` | X: 0.005; others: 0 | [Engagement — Design §1](../../engagement/2_design.md#1-reads) |
 | `policy.*` | as above, no quiet hours | [specs/policy.md](../specs/policy.md) |
 | `media.roots` | none | [specs/media-confinement.md](../specs/media-confinement.md) |
+| `dispatch.plans` | none: dispatch publishes nothing | [Engagement — Design §5](../../engagement/2_design.md#5-scheduled-dispatch) |
 
 Numbers must be finite (TOML's `nan` and `inf` are refused) and within these bounds, which exist
 to catch a typo at load rather than let it through a budget:
@@ -60,5 +64,9 @@ to catch a typo at load rather than let it through a budget:
 `~` in a media root expands against the user's home that the surface resolved and passed down
 (`Paths.user_home`); a surface that passes none gets `invalid_config` for a `~` root and must
 spell the path out. `~name` is not expanded.
+
+`dispatch.plans` is a list of at most 20 glob patterns relative to the workspace the Orbit
+plugin runs in. A pattern that is absolute, starts with `~`, has a `..` component or a
+backslash is `invalid_config`; the plan location is configuration, never a tool argument.
 
 `pulsar serve` prints the effective media roots to stderr at startup.

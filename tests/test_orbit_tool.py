@@ -125,7 +125,8 @@ def test_conformance_golden(case, state, workspace):
 
 def test_manifest_declares_exactly_the_backend_tools():
     assert {t["name"] for t in MANIFEST["spec"]["tools"]} == set(orbit_tool.TOOLS)
-    paid = {"engagements", "metrics", "publish"}  # spend money: callable only when required
+    # Spend money: callable only when required.
+    paid = {"engagements", "metrics", "publish", "dispatch"}
     for tool in MANIFEST["spec"]["tools"]:
         kind = "mutating" if tool["name"] in paid else "read_only"
         assert tool["execution_kind"] == kind, tool["name"]
@@ -460,7 +461,12 @@ AUTO_TASKS = sorted((PLUGIN / "definitions" / "auto_tasks").glob("*.yaml"))
 
 
 def test_the_manifest_ships_the_auto_task_definitions():
-    assert MANIFEST["spec"]["definitions"] == {"auto_tasks": ["definitions/auto_tasks/*.yaml"]}
+    assert MANIFEST["spec"]["definitions"] == {
+        "activities": ["definitions/activities/*.yaml"],
+        "jobs": ["definitions/jobs/*.yaml"],
+        "routines": ["definitions/routines/*.yaml"],
+        "auto_tasks": ["definitions/auto_tasks/*.yaml"],
+    }
     assert [p.stem for p in AUTO_TASKS] == [
         "auth-health",
         "engager",

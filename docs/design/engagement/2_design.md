@@ -7,16 +7,16 @@ status: Draft
 feature: engagement
 doc_role: design
 type: design
-summary: How a read is budgeted, made and recorded, how a mention is known to be answered, and how a human approves a draft.
-tags: [engagement, reads, mentions, metrics, budget, ledger, approvals]
-paths: ["src/pulsar/app/core/engagement/**", "src/pulsar/app/approvals.py", "src/pulsar/app/core/ledger/approvals.py", "src/pulsar/cli/commands/approve.py", "src/pulsar/app/core/channels/contract.py", "src/pulsar/app/core/ledger/reads.py", "src/pulsar/app/core/ledger/queries.py"]
+summary: How a read is budgeted, made and recorded, how a mention is known to be answered, how a human approves a draft, and how scheduled dispatch publishes approved due plans.
+tags: [engagement, reads, mentions, metrics, budget, ledger, approvals, dispatch, routines]
+paths: ["src/pulsar/app/core/engagement/**", "src/pulsar/app/approvals.py", "src/pulsar/app/core/ledger/approvals.py", "src/pulsar/cli/commands/approve.py", "src/pulsar/app/core/channels/contract.py", "src/pulsar/app/core/ledger/reads.py", "src/pulsar/app/core/ledger/queries.py", "src/pulsar/app/plugin.py", ".orbit-plugin/definitions/**"]
 related_features: [publishing, channels, surfaces]
-related_artifacts: [ORB-13030, ORB-13375, ORB-13726]
+related_artifacts: [ORB-13030, ORB-13375, ORB-13726, ORB-13727]
 ---
 
 # Engagement — Design
 
-The engagement loop as built: reads through the `Reader`, and approvals of what an agent drafted. The provider side of each read is in
+The engagement loop as built: reads through the `Reader`, approvals of what an agent drafted, and the dispatcher that publishes approved plans at their slot. The provider side of each read is in
 [Channels — Design §7](../channels/2_design.md#7-reads); the ledger rows are in the
 [ledger spec](../publishing/specs/ledger.md#reads-reads).
 
@@ -91,6 +91,7 @@ it only from a task whose `required_tools` names it, and each records its caller
 | `pulsar.engagements` | `account`, `hours` 1–168 (24), `limit` 1–100 (20) | `Reader.mentions` over the last `hours`; returns each mention with `replied`, the cost, `complete`, and a `note` that the text is untrusted |
 | `pulsar.metrics` | `account`, `days` 1–30 (7), `limit` 1–100 (20) | `Reader.own_posts`; returns each post's metrics and their `totals` (a count no post reports is null) |
 | `pulsar.publish` | `source` (workspace plan file), `account`, `dry_run` | prepares every target account, then `preflight(require_approval=True)` for each, then publishes each with `require_approval=True` |
+| `pulsar.dispatch` | `max_publish` 1–10 (3), `dry_run` | reconciles unknown writes, then publishes the approved, due plans in the configured location ([§5](#5-scheduled-dispatch)) |
 
 `pulsar.publish` checks every account before it sends for any, so a plan missing one approval
 sends nothing. It takes no idempotency key argument and no caller: the plan's `key` when it
@@ -135,7 +136,72 @@ because the plugin reads `source` from the workspace root. The workspace's own g
 strategy, content-record template) decide the details; the definitions defer to them where
 they exist.
 
-## 5. Concerns & Honest Limitations
+## 5. Scheduled Dispatch
+
+An Orbit task runs when it is promoted, not at a plan's `not_before`. `pulsar.dispatch`
+([app/plugin.py](../../../src/pulsar/app/plugin.py) `dispatch`) publishes a plan at its slot
+without a model or a promotion, and only what a human already approved
+([decision](./4_decisions.md#scheduled-dispatch-publishes-approved-due-plans-and-ships-disabled)).
+
+**Where plans come from.** `[dispatch] plans` in the home's `config.toml`: glob patterns
+relative to the workspace, for example `["x-updates/**/*.yaml", "engagement/**/*.yaml"]`
+([config reference](../publishing/references/config.md)). A pattern that is absolute, starts
+with `~` or has a `..` component is `invalid_config`, and the tool takes no path, so the
+caller cannot point it elsewhere. A match under a dot-directory (`.git`, `.orbit` and its
+worktrees) is ignored, and each file is read through `read_source`, so a symlink out of the
+workspace is an error, not a plan. At most 200 files are looked at per call, in path order
+(`truncated` says when there were more). No patterns, no plans: the call only reconciles.
+
+**One call**, in order:
+
+1. **Reconcile.** For each account with an `unknown` or abandoned `submitting` row, what
+   `pulsar reconcile --account A` does (`reconciled[]`: the pending keys and the verdicts).
+2. **Publish.** For each plan file, every target account must pass, else the plan is
+   `skipped[]` with a `reason` (and `retry_after` where the refusal names one):
+
+   | Reason | When | Later call |
+   |---|---|---|
+   | `unscheduled` | the plan has no `not_before`; its publish task publishes it | never |
+   | `not_due` | `not_before` is later | at the slot |
+   | `published` | every account's key is published or skipped in the ledger | never |
+   | `in_flight` | a row is `submitting` or `unknown`, or another caller claimed it first | after reconcile |
+   | `failed` | a row is `failed` or `partial`; a human retries with `pulsar.publish` or `pulsar publish` | no |
+   | `approval_required` | no live approval of the current digest; the message has the approve command | after approval |
+   | `approval_stale` | an active approval recorded for this file's path is for another digest: it was edited after approval | after a new approval |
+   | `quiet_hours`, `budget_exceeded`, `daily_cap` | the policy refuses now | when the window moves |
+   | `tick_limit`, `deadline` | `max_publish` plans were published, or the call ran 40 s | next call |
+
+   The checks are `Publisher.preflight(require_approval=True)`, as for `pulsar.publish`.
+   A plan that passes is published to each account with
+   `Publisher.publish(require_approval=True)` under the plan's `key` (else the default key),
+   so the approval is consumed in the claim transaction. `published[]` carries each receipt
+   with its `source`. A plan that cannot be read or prepared is in `errors[]`.
+
+Dispatch never records, revokes or skips an approval; it publishes under exactly the rule
+`pulsar.publish` does, and a plan without `not_before` is never its to send.
+
+**Racing.** Two dispatch calls, or a call and a manual `pulsar publish`/`pulsar.publish`, use
+the same key for the same plan, so the ledger decides: the claim and `begin_item`'s
+compare-and-set let one caller send each post, and the other sees `outcome_unknown`
+(`in_flight`) or, once it is done, a replay. Tests race four processes and a manual publish on
+the fake transport and count one provider call per plan.
+
+**Bounds.** `max_publish` (default 3) plans per call; no reconcile or publish starts after
+40 s, and uploads stop at the publish cap (55 s), inside the backend's 60 s timeout.
+`dry_run` lists the pending keys and the plans a live call would publish (`ready[]`), and
+calls, records and consumes nothing.
+
+**The routine.** The plugin ships three definitions
+([definitions/](../../../.orbit-plugin/definitions/)): the activity `pulsar_dispatch`
+(`type: deterministic`, `action: plugin.tool_call`, `tool: pulsar.dispatch`,
+`max_publish: 3`, no prompt or model), the job `pulsar_dispatch_pipeline` (one step,
+`max_active_runs: 1`), and the routine `dispatch` (cron `*/5 * * * *`, `missed_run: skip`,
+`overlap: forbid`, `timeout_minutes: 5`). Orbit seeds the routine into the workspace's
+`.orbit/routines/` as `pulsar-dispatch`, `enabled: false`; the activity and job are a catalog
+layer. A human sets `[dispatch] plans` and enables it. Its writes are recorded with the caller
+the backend derives from the step's context (`orbit:<agent>`, else `orbit`; a routine has no task id).
+
+## 6. Concerns & Honest Limitations
 
 - **The read price is an estimate.** `read_post_usd` defaults to $0.005 a post until checked on
   the X developer portal; X may also bill the author records a mentions read expands.
@@ -155,10 +221,20 @@ they exist.
   relative media against the directory it runs in and the home's `[media] roots`; the plugin
   resolves them against the workspace. The command the plugin prints passes `--workspace`.
 
+- **Dispatch reconciles unattended.** A reconcile reads the account's timeline, billed per
+  post returned, on every call while an unknown row stays unsettled; it is not checked
+  against the budget first.
+- **Dispatch publishes whenever the slot has come.** A plan approved long after its
+  `not_before` goes out at the next tick, not at the original time; quiet hours are the only
+  window it keeps.
+- **A glob over a large tree is slow.** Patterns should start with the plan directory
+  (`x-updates/**`), not `**`, which walks every file under the workspace before filtering.
+
 ## Task References
 
 - [ORB-13030] — phase 4: drafts, approvals, standing policies, dispatch; approvals land here.
 - [ORB-13375] — allow auto-task delivery on documented no-file paths while preserving file delivery.
+- [ORB-13727] — scheduled dispatch: `pulsar.dispatch` and the `pulsar-dispatch` routine.
 - [ORB-13726] — the x-updates auto-task; `pulsar.publish` honours a plan's `key`.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

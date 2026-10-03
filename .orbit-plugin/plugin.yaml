@@ -93,11 +93,28 @@ spec:
       mcp_scope: workspace
       input_schema: { $ref: schemas/publish.request.json }
       output_schema: { $ref: schemas/publish.response.json }
+    - name: dispatch
+      description: >-
+        Publish every plan in the workspace that `[dispatch] plans` (globs in pulsar's
+        config.toml) names, a human approved with `pulsar approve`, and whose
+        `not_before` has come; and reconcile writes with an unknown outcome. Each plan
+        goes out as `publish` sends it, through the ledger claim, so a racing call never
+        posts it twice. Anything else is skipped with a reason. At most `max_publish`
+        plans per call; `dry_run` reports and sends nothing.
+      execution_kind: mutating
+      mcp_scope: workspace
+      input_schema: { $ref: schemas/dispatch.request.json }
+      output_schema: { $ref: schemas/dispatch.response.json }
 
   skills: [skills/publish]
 
   definitions:
-    # Seeded disabled into the workspace's .orbit/auto_tasks as pulsar-<name>.
+    # The dispatch routine's step and job: a catalog layer, not copied.
+    activities: [definitions/activities/*.yaml]
+    jobs: [definitions/jobs/*.yaml]
+    # Seeded disabled into the workspace's .orbit/routines and .orbit/auto_tasks
+    # as pulsar-<name>.
+    routines: [definitions/routines/*.yaml]
     auto_tasks: [definitions/auto_tasks/*.yaml]
 
   config:

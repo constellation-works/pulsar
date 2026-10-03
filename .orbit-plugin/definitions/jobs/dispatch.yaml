@@ -1,0 +1,12 @@
+# The job the pulsar-dispatch routine fires: one deterministic step.
+schemaVersion: 2
+kind: Job
+metadata:
+  name: pulsar_dispatch_pipeline
+spec:
+  state: enabled
+  kind: workflow
+  max_active_runs: 1
+  steps:
+    - id: dispatch
+      target: activity:pulsar_dispatch

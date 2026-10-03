@@ -18,8 +18,9 @@ only then may an agent publish it.
 | `pulsar.engagements` | read others' posts mentioning the account (`hours` 1–168, default 24; `limit` 1–100, default 20), each with `replied` |
 | `pulsar.metrics` | read the account's own posts (`days` 1–30, default 7; `limit`) with likes, replies, reposts, quotes, impressions and clicks, and `totals` |
 | `pulsar.publish` | publish a workspace plan file (`source`) a human approved; `dry_run: true` checks and sends nothing |
+| `pulsar.dispatch` | publish every approved plan whose `not_before` has come from the configured plan location, and reconcile unknown writes; the `pulsar-dispatch` routine calls it every 5 minutes once a human enables it |
 
-The first three are offline. The last three cost money (X bills each post a read
+The first three are offline. The last four cost money (X bills each post a read
 returns, and each post published), count against the same budget, and Orbit lets
 you call them only from a task whose `required_tools` names them.
 
@@ -88,6 +89,12 @@ before drafting, and never change a key to get past either.
    sends only if every account's digest is approved; an edited plan needs a new
    approval (a changed `not_before` does not). Calling it again replays the
    receipt and sends nothing.
+
+A plan with a `not_before` slot can instead wait for the `pulsar-dispatch` routine,
+if a human has enabled it and its directory is under `[dispatch] plans` in pulsar's
+config.toml: it publishes the plan, still only under the human's approval, at the
+first tick after the slot. A plan without `not_before` is never dispatched. Either way
+the ledger sends it once, so a publish task and the routine can both reach it.
 
 ## Error codes
 

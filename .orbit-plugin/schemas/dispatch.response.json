@@ -1,0 +1,344 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "dry_run",
+    "patterns",
+    "scanned",
+    "truncated",
+    "reconciled",
+    "published",
+    "ready",
+    "skipped",
+    "errors",
+    "note"
+  ],
+  "properties": {
+    "dry_run": {
+      "type": "boolean"
+    },
+    "patterns": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "The `[dispatch] plans` globs, relative to the workspace."
+    },
+    "scanned": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Plan files looked at."
+    },
+    "truncated": {
+      "type": "boolean",
+      "description": "More files matched than one call looks at."
+    },
+    "reconciled": {
+      "type": "array",
+      "description": "Per account with unknown or abandoned writes: their keys and what reconcile settled.",
+      "items": {
+        "type": "object",
+        "required": [
+          "account",
+          "pending",
+          "results",
+          "note"
+        ],
+        "properties": {
+          "account": {
+            "type": "string"
+          },
+          "pending": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "published": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "source",
+          "ok",
+          "account",
+          "digest",
+          "state",
+          "items",
+          "error"
+        ],
+        "properties": {
+          "source": {
+            "type": "string"
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "idempotency_key": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "account": {
+            "type": "string"
+          },
+          "digest": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "description": "The digest the row was published under; null when a plan's `key` replays a row imported from `posted.jsonl`, which kept no plan."
+          },
+          "replayed": {
+            "type": "boolean"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "idx",
+                "state"
+              ],
+              "properties": {
+                "idx": {
+                  "type": "integer"
+                },
+                "state": {
+                  "type": "string"
+                },
+                "post_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "url": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "error": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "code",
+                  "message",
+                  "retryable"
+                ],
+                "properties": {
+                  "ok": {
+                    "const": false
+                  },
+                  "code": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "retryable": {
+                    "type": "boolean"
+                  },
+                  "detail": {}
+                },
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "description": "Per plan and account sent this call: its receipt."
+    },
+    "ready": {
+      "type": "array",
+      "description": "A dry run: the plans a live call would publish.",
+      "items": {
+        "type": "object",
+        "required": [
+          "source",
+          "accounts"
+        ],
+        "properties": {
+          "source": {
+            "type": "string"
+          },
+          "accounts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "account",
+                "digest",
+                "idempotency_key"
+              ],
+              "properties": {
+                "account": {
+                  "type": "string"
+                },
+                "digest": {
+                  "type": "string",
+                  "pattern": "^sha256:[0-9a-f]{64}$"
+                },
+                "idempotency_key": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "skipped": {
+      "type": "array",
+      "description": "Plans not published, each with why; every reason but `failed` may clear for a later call.",
+      "items": {
+        "type": "object",
+        "required": [
+          "source",
+          "account",
+          "reason",
+          "message",
+          "retry_after"
+        ],
+        "properties": {
+          "source": {
+            "type": "string"
+          },
+          "account": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason": {
+            "enum": [
+              "unscheduled",
+              "not_due",
+              "published",
+              "in_flight",
+              "failed",
+              "approval_required",
+              "approval_stale",
+              "quiet_hours",
+              "budget_exceeded",
+              "daily_cap",
+              "outcome_unknown",
+              "tick_limit",
+              "deadline"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "retry_after": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "errors": {
+      "type": "array",
+      "description": "A plan that cannot be read or prepared, or an account that cannot be reached.",
+      "items": {
+        "type": "object",
+        "required": [
+          "source",
+          "account",
+          "error"
+        ],
+        "properties": {
+          "source": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "account": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "error": {
+            "type": "object",
+            "required": [
+              "code",
+              "message",
+              "retryable"
+            ],
+            "properties": {
+              "ok": {
+                "const": false
+              },
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "retryable": {
+                "type": "boolean"
+              },
+              "detail": {}
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "note": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "additionalProperties": false
+}
