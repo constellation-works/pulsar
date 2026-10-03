@@ -3,7 +3,7 @@ import stat
 
 import pytest
 
-from pulsar.app.core.channels.contract import Prices
+from pulsar.app.core.channels.contract import FREE, Prices
 from pulsar.app.settings import Settings, load_settings
 from pulsar.internal.errors import PulsarError
 from pulsar.internal.fs import Paths, append_private, write_private_atomic
@@ -29,6 +29,14 @@ def test_defaults_without_a_config_file(paths):
     assert s == Settings()
     assert s.prices.for_post(has_url=False) == 0.015
     assert s.prices.for_post(has_url=True) == 0.20
+    assert s.prices_for("bsky") == FREE, "Bluesky has no per-call price"
+
+
+def test_a_bluesky_price_table_starts_from_zero_not_x_prices(paths):
+    _config(paths, "[prices.bsky]\nurl_post_usd = 0.01\n")
+    s = load_settings(paths)
+    assert s.prices_for("bsky") == Prices(plain_post_usd=0.0, url_post_usd=0.01, read_post_usd=0.0)
+    assert s.prices_for("x") == Prices(), "naming Bluesky's prices leaves X's defaults"
 
 
 def test_prices_and_media_roots_from_config(paths, tmp_path):
@@ -232,7 +240,7 @@ roots = ["~/marketing"]
     assert s.default_account == "x:constworks"
     assert s.account_config("x:constworks").expected_handle == "constworks"
     assert s.prices_for("x") == Prices(plain_post_usd=0.02, url_post_usd=0.20)
-    assert s.prices_for("bsky") == Prices(0.0, 0.0)
+    assert s.prices_for("bsky") == FREE
     assert s.prices_for("mastodon") == Prices(0.0, 0.0, 0.0), "an unpriced provider is free"
     assert s.policy.daily_budget_usd == 0.5 and s.policy.monthly_budget_usd == 4.0
     assert s.policy.max_posts_per_day == 3

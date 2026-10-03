@@ -1,6 +1,7 @@
 """The credentials a channel is handed: the OAuth token bundle, the
-``CredentialStore`` it is kept behind, and the conflict a compare-and-swap save
-raises. A channel client refreshes through the store under its refresh lock;
+``CredentialStore`` it is kept behind, the conflict a compare-and-swap save
+raises, and ``ChannelClient``, what every provider's client offers over them.
+A channel client refreshes through the store under its refresh lock;
 ``account.store.FernetFileStore`` is the implementation the app builds.
 """
 
@@ -26,7 +27,7 @@ class TokenBundle:
     expires_at: float  # epoch seconds
     scope: str
     client_id: str
-    token_type: str = "bearer"
+    token_type: str = "bearer"  # "DPoP" for a token bound to a key (Bluesky)
     # Minted per login, carried across refreshes; None for bundles saved before it existed.
     binding_id: str | None = None
 
@@ -70,7 +71,7 @@ class CredentialConflict(PulsarError):
     def __init__(self) -> None:
         super().__init__(
             INTERNAL,
-            "CredentialConflict: the stored X credential changed during refresh (a writer "
+            "CredentialConflict: the stored credential changed during refresh (a writer "
             "bypassed the refresh lock); retrying the call uses the newer bundle",
             retryable=True,
         )
@@ -123,3 +124,17 @@ class CredentialStore(Protocol):
     def refresh_lock(self, timeout: float) -> AbstractAsyncContextManager[None]:
         """Exclusive across processes; not getting it within ``timeout`` is ``lock_timeout``."""
         ...
+
+
+class ChannelClient(Protocol):
+    """One account's authenticated client, whatever its provider: what the app
+    keeps per account, refreshes for a live health check, and closes."""
+
+    @property
+    def store(self) -> CredentialStore: ...
+
+    async def refresh(self, bundle: TokenBundle) -> TokenBundle:
+        """Replace ``bundle`` with a working one, under the store's refresh lock."""
+        ...
+
+    async def aclose(self) -> None: ...

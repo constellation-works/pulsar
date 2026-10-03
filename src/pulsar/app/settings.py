@@ -11,6 +11,9 @@ plain_post_usd = 0.015
 url_post_usd = 0.20
 read_post_usd = 0.005                  # per post a read returns (mentions, metrics)
 
+[prices.bsky]                          # Bluesky charges nothing: every key defaults to 0
+plain_post_usd = 0.0
+
 [policy]                               # enforced before any network call
 daily_budget_usd = 1.0                 # 0 stops all paid publishing
 monthly_budget_usd = 10.0
@@ -23,7 +26,9 @@ roots = ["~/workspace/constellation/marketing"]   # default: none, path uploads 
 ```
 
 The flat ``[prices]`` keys of the first config format (``plain_post_usd``,
-``url_post_usd`` directly under ``[prices]``) still mean X's prices.
+``url_post_usd`` directly under ``[prices]``) still mean X's prices. A
+provider's table starts from its defaults (``PROVIDER_DEFAULTS``: X's list
+prices, zero for Bluesky and any provider not named there).
 
 Nothing in here is a secret. Unknown keys are refused so a typo cannot
 silently fall back to a default.
@@ -54,13 +59,7 @@ from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pulsar.app.core.account import AccountConfig, normalize_alias
-from pulsar.app.core.channels.contract import (
-    DEFAULT_PLAIN_POST_USD,
-    DEFAULT_READ_POST_USD,
-    DEFAULT_URL_POST_USD,
-    FREE,
-    Prices,
-)
+from pulsar.app.core.channels.contract import FREE, Prices
 from pulsar.app.core.publishing import (
     DEFAULT_DAILY_BUDGET_USD,
     DEFAULT_MAX_POSTS_PER_DAY,
@@ -77,14 +76,17 @@ MAX_DAILY_BUDGET_USD = 10_000.0
 MAX_MONTHLY_BUDGET_USD = 100_000.0
 MAX_POSTS_PER_DAY = 10_000
 
+# Each provider's prices when config.toml names none. Bluesky has no per-call price.
+PROVIDER_DEFAULTS: tuple[tuple[str, Prices], ...] = (("bsky", FREE), ("x", Prices()))
+
 _QUIET_RE = re.compile(r"^\s*(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})\s*$")
 
 
 @dataclass(frozen=True)
 class Settings:
-    # (provider, prices), sorted. X has built-in defaults; a provider with no
-    # entry is priced at zero.
-    provider_prices: tuple[tuple[str, Prices], ...] = (("x", Prices()),)
+    # (provider, prices), sorted. Starts from PROVIDER_DEFAULTS; a provider
+    # with no entry is priced at zero.
+    provider_prices: tuple[tuple[str, Prices], ...] = PROVIDER_DEFAULTS
     # Empty means path uploads are off (base64 only).
     media_roots: tuple[Path, ...] = ()
     default_account: str | None = None
@@ -150,14 +152,14 @@ def _integer(section: dict[str, Any], key: str, default: int, where: str, maximu
 PRICE_KEYS = frozenset({"plain_post_usd", "url_post_usd", "read_post_usd"})
 
 
-def _prices(section: dict[str, Any], where: str) -> Prices:
+def _prices(section: dict[str, Any], where: str, defaults: Prices) -> Prices:
     return Prices(
         plain_post_usd=_number(
-            section, "plain_post_usd", DEFAULT_PLAIN_POST_USD, where, MAX_PRICE_USD
+            section, "plain_post_usd", defaults.plain_post_usd, where, MAX_PRICE_USD
         ),
-        url_post_usd=_number(section, "url_post_usd", DEFAULT_URL_POST_USD, where, MAX_PRICE_USD),
+        url_post_usd=_number(section, "url_post_usd", defaults.url_post_usd, where, MAX_PRICE_USD),
         read_post_usd=_number(
-            section, "read_post_usd", DEFAULT_READ_POST_USD, where, MAX_PRICE_USD
+            section, "read_post_usd", defaults.read_post_usd, where, MAX_PRICE_USD
         ),
     )
 
@@ -171,10 +173,12 @@ def _parse_prices(data: dict[str, Any]) -> tuple[tuple[str, Prices], ...]:
         raise _fail(f"unknown keys in [prices]: {sorted(unknown_flat)}")
     if flat and "x" in nested:
         raise _fail("give X's prices either flat under [prices] or in [prices.x], not both")
-    table: dict[str, Prices] = {"x": _prices(flat, "prices")}
+    defaults = dict(PROVIDER_DEFAULTS)
+    table = {**defaults, "x": _prices(flat, "prices", defaults["x"])}
     for provider in nested:
         sub = _table(section, provider, PRICE_KEYS, f"prices.{provider}")
-        table[provider.lower()] = _prices(sub, f"prices.{provider}")
+        name = provider.lower()
+        table[name] = _prices(sub, f"prices.{provider}", defaults.get(name, FREE))
     return tuple(sorted(table.items()))
 
 

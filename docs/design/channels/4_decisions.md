@@ -1,17 +1,17 @@
 ---
 title: Channels — Decisions
 owner: claude
-last_updated: 2026-09-26
-last_validated: 2026-09-26
+last_updated: 2026-10-03
+last_validated: 2026-10-03
 status: Accepted
 feature: channels
 doc_role: decisions
 type: design
-summary: Why the fingerprint ignores links and leading mentions, why only X's copy is unescaped, and why prices live in config.
-tags: [channels, x, fingerprint, pricing]
-paths: ["src/pulsar/app/core/channels/x/adapter.py", "src/pulsar/app/settings.py"]
+summary: Why the fingerprint ignores links and leading mentions, why only X's copy is unescaped, why prices live in config, and how Bluesky media and reconcile fit the contract.
+tags: [channels, x, bluesky, fingerprint, pricing, reconcile]
+paths: ["src/pulsar/app/core/channels/x/adapter.py", "src/pulsar/app/core/channels/bluesky/adapter.py", "src/pulsar/app/settings.py"]
 related_features: [publishing]
-related_artifacts: [ORB-13027, ORB-13028]
+related_artifacts: [ORB-13027, ORB-13028, ORB-13031]
 ---
 
 # Channels — Decisions
@@ -64,9 +64,55 @@ table is priced at zero.
 - Cost: a stale table silently mis-states cost in both directions; validate says
   "verify on the provider's portal" because nothing checks it.
 
+## A Bluesky media id is the blob's CID, kept by the channel
+
+**Recorded:** 2026-10-03 · [ORB-13031]
+**Code anchors:** `src/pulsar/app/core/channels/bluesky/adapter.py::BlueskyChannel.upload`, `src/pulsar/app/core/channels/bluesky/adapter.py::BlueskyChannel.create`
+
+### Context
+
+The contract's `upload` returns one string and `create` takes those strings back. X keeps an
+uploaded media object by id and takes alt text separately; Bluesky has no media object: a post
+embeds the whole blob (CID, MIME type, size) with its alt text inline.
+
+### Decision
+
+`upload` returns the blob's CID and the channel keeps the blob and its alt text for `create`.
+A media id the channel did not upload is `invalid_media` before anything is sent.
+
+### Consequences
+
+- The contract is unchanged, and the ledger records a provider's real id.
+- Cost: the ids are only good on the channel that uploaded them. The publisher uploads each
+  item's media just before creating it, so a publish never crosses channels; a resumed publish
+  uploads again, which Bluesky deduplicates by content.
+
+## Bluesky reconcile lists the account's records
+
+**Recorded:** 2026-10-03 · [ORB-13031]
+**Code anchors:** `src/pulsar/app/core/channels/bluesky/adapter.py::BlueskyChannel.recent_posts`
+
+### Context
+
+An AT Protocol record can be created with a caller-chosen key, which would let reconcile ask
+for one record by name. `Channel.create` gets no idempotency key or item index to derive a key
+from.
+
+### Decision
+
+`recent_posts` lists the account's own post records back to the claim's window, like X's
+timeline read, and reconcile matches them by fingerprint. Listing is free on Bluesky.
+
+### Consequences
+
+- Reconcile is the same code for both providers; the contract needs no new argument.
+- Cost: matching is by fingerprint, with the collisions X has (fewer: Bluesky does not
+  rewrite links), and is bounded to five pages of 100 records.
+
 ## Task References
 
 - [ORB-13027] — moved prices out of constants into config.
 - [ORB-13028] — added the fingerprint and reconcile.
+- [ORB-13031] — added the Bluesky channel: blob-CID media ids and record-listing reconcile.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

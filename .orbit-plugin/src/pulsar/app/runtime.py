@@ -5,6 +5,11 @@
 media paths start from) that the entry point (``pulsar.main``) read once and
 ``LocalApp`` hands down; nothing here or below reads the environment, the
 cwd or ``$HOME`` itself.
+
+It is also the provider -> channel factory: ``client_for`` builds an
+account's client by the provider its alias names, and ``channel`` binds
+that client to the account as a ``Channel``. Everything else reaches a
+provider only through those two.
 """
 
 from __future__ import annotations
@@ -31,7 +36,9 @@ from pulsar.app.core.account import (
     login_command,
     require_expected,
 )
-from pulsar.app.core.channels.contract import Identity
+from pulsar.app.core.channels import bluesky, x
+from pulsar.app.core.channels.bluesky import BlueskyChannel, BlueskyClient
+from pulsar.app.core.channels.contract import Channel
 from pulsar.app.core.channels.x import XChannel, XClient
 from pulsar.app.core.engagement import Reader
 from pulsar.app.core.ledger import SqliteLedger
@@ -55,6 +62,9 @@ CALLER_ENV = "PULSAR_CALLER"
 PLUGIN_STATE_ENV = "ORBIT_PLUGIN_STATE"
 
 log = logging.getLogger(__name__)
+
+# An account's client, by its provider.
+type Client = XClient | BlueskyClient
 
 
 class RedactingFilter(logging.Filter):
@@ -107,8 +117,8 @@ class LocalRuntime:
 
     Accounts are resolved per call, not at start-up: a login, logout or
     migration while the server runs takes effect on the next call. Each
-    account gets its own ``XClient`` over its own credential store, so
-    accounts refresh independently.
+    account gets its own client (``XClient``, ``BlueskyClient``) over its own
+    credential store, so accounts refresh independently.
 
     ``read_only`` is for the reports: the ledger is opened
     read-only and nothing is migrated, so a report changes nothing on disk.
@@ -143,7 +153,7 @@ class LocalRuntime:
         self.reader = Reader(ledger=self.ledger, settings=self.settings)
         self._transport = transport
         self._client_kwargs = client_kwargs
-        self._clients: dict[str, XClient] = {}
+        self._clients: dict[str, Client] = {}
         self._migrated = False
 
     async def __aenter__(self) -> LocalRuntime:
@@ -175,17 +185,26 @@ class LocalRuntime:
             self._migrated = True
         return self.registry.resolve(alias, self.settings)
 
-    def client_for(self, alias: str) -> XClient:
+    def client_for(self, alias: str) -> Client:
+        """``alias``'s client, built once per runtime for the provider the alias names.
+
+        ``unsupported`` for a provider pulsar has no channel for.
+        """
         client = self._clients.get(alias)
         if client is None:
-            client = XClient(
-                self.registry.store(alias), transport=self._transport, **self._client_kwargs
-            )
+            provider = alias_provider(alias)
+            store = self.registry.store(alias)
+            if provider == x.PROVIDER:
+                client = XClient(store, transport=self._transport, **self._client_kwargs)
+            elif provider == bluesky.PROVIDER:
+                client = BlueskyClient(store, transport=self._transport, **self._client_kwargs)
+            else:
+                raise PulsarError(UNSUPPORTED, f"no channel for provider {provider!r}")
             self._clients[alias] = client
         return client
 
     @property
-    def client(self) -> XClient:
+    def client(self) -> Client:
         """The default account's client."""
         return self.client_for(self.account().alias)
 
@@ -230,6 +249,8 @@ class LocalRuntime:
         that lands during it fails the lookup rather than recording the new
         login's identity under the old binding. The returned ``binding_id``
         is the binding the identity was checked for: ``writer`` sends with it.
+        The lookup is the channel's ``whoami``, so it asks whichever provider
+        the alias names.
         """
         # Registry and credential files are read under file locks: in a
         # thread, so a lock held by another process stalls this call only.
@@ -254,8 +275,8 @@ class LocalRuntime:
                     provider_user_id=trusted.provider_user_id,
                     binding_id=bundle.binding_id,
                 )
-            me = await client.pinned(bundle.binding_id).me()
-        found = Identity(provider_user_id=me["user_id"], handle=me["username"].lower())
+            pinned = client.pinned(bundle.binding_id)
+            found = await self.channel(name, user_id="", handle="", client=pinned).whoami()
         await asyncio.to_thread(self.registry.mark_verified, name, found, bundle.binding_id)
         return replace(
             account,
@@ -269,27 +290,43 @@ class LocalRuntime:
         return me(await self.identity(alias, live=live))
 
     async def writer(self, alias: str | None) -> tuple[Account, XClient, dict[str, str]]:
+        """The X account to write as with the single-request tools, its client and
+        ledger identity (``checked``). Every other write goes through ``bound``.
+
+        ``unsupported`` for an account of another provider.
+        """
+        account, client, found = await self.checked(alias)
+        if not isinstance(client, XClient):
+            raise PulsarError(
+                UNSUPPORTED,
+                f"{account.alias}: the single-post tools are X's; publish a plan instead",
+            )
+        return account, client, found
+
+    async def checked(self, alias: str | None) -> tuple[Account, Client, dict[str, str]]:
         """The account to write as, its client and ledger identity.
 
         ``account_mismatch`` when the bound handle is not the alias's or the
         configured ``expected_handle``: checked before every write. The client
         is pinned to the binding that check was for, so a re-login between the
-        check and the request sends nothing (``XClient.pinned``).
+        check and the request sends nothing (``XClient.pinned``,
+        ``BlueskyClient.pinned``).
         """
         account = await self.identity(alias)
         require_expected(account, self.settings)
-        return account, self.client_for(account.alias).pinned(account.binding_id), me(account)
+        client = self.client_for(account.alias).pinned(account.binding_id)
+        return account, client, me(account)
 
     # -- channels -------------------------------------------------------------
 
     def channel(
-        self, alias: str, *, user_id: str, handle: str, client: XClient | None = None
-    ) -> XChannel:
+        self, alias: str, *, user_id: str, handle: str, client: Client | None = None
+    ) -> Channel:
         """``alias``'s channel, over ``client`` (a pinned one, for writes) when given."""
-        provider = alias_provider(alias)
-        if provider != "x":
-            raise PulsarError(UNSUPPORTED, f"no channel for provider {provider!r} yet")
-        return XChannel(client or self.client_for(alias), user_id=user_id, handle=handle)
+        client = client or self.client_for(alias)
+        if isinstance(client, XClient):
+            return XChannel(client, user_id=user_id, handle=handle)
+        return BlueskyChannel(client, did=user_id, handle=handle)
 
     def offline_bound(self, alias: str) -> Bound:
         """``alias`` bound for offline validation: no credentials needed, no network."""
@@ -305,9 +342,9 @@ class LocalRuntime:
         )
 
     async def bound(self, alias: str | None) -> Bound:
-        """The account to publish as, identity checked (``writer``), with its channel
+        """The account to publish as, identity checked (``checked``), with its channel
         pinned to the checked binding."""
-        account, client, me = await self.writer(alias)
+        account, client, me = await self.checked(alias)
         return Bound(
             alias=account.alias,
             provider=account.provider,
