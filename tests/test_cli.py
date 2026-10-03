@@ -331,18 +331,6 @@ def test_auth_status_is_offline_and_reports_health(paths, bundle, fake_x, capsys
     assert json.loads(out)["accounts"][0]["health"] == "healthy"
 
 
-def test_offline_is_a_deprecated_no_op(paths, bundle, fake_x, capsys):
-    _verified(paths, bundle)
-    code, out, err = _run(capsys, ["auth", "status", "--offline"], transport=fake_x.transport())
-    assert code == 0 and fake_x.requests == [] and "deprecated" in err
-
-
-def test_live_and_offline_are_mutually_exclusive(paths):
-    with pytest.raises(SystemExit) as exc:
-        main(["auth", "status", "--live", "--offline"])
-    assert exc.value.code == 2
-
-
 def test_logout_needs_confirm(paths, bundle, store, capsys):
     _verified(paths, bundle)
     code, out, err = _run(capsys, ["auth", "logout", "--account", ALIAS])
@@ -474,10 +462,44 @@ def test_publish_labels_writes_with_pulsar_caller(paths, authed, fake_x, tmp_pat
     assert row.caller == "routine:release-notes"
 
 
-def test_yes_is_a_deprecated_alias_of_confirm(paths, authed, fake_x, tmp_path, capsys):
-    argv = ["publish", _plan(tmp_path), "--yes"]
-    code, out, err = _run(capsys, argv, transport=fake_x.transport())
-    assert code == 0 and json.loads(out)["published"] is True and "deprecated" in err
+@pytest.mark.parametrize("json_mode", [False, True])
+@pytest.mark.parametrize(
+    ("argv", "replacement"),
+    [
+        (["publish", "--yes"], "use --confirm"),
+        (["publish", "{plan}", "--yes"], "use --confirm"),
+        (["publish", "{plan}", "--confirm", "--yes"], "use --confirm"),
+        (["auth", "status", "--offline"], "use pulsar auth status (offline by default)"),
+        (["auth", "status", "--live", "--offline"], "use pulsar auth status (offline by default)"),
+        (["auth", "status", "--offline", "--live"], "use pulsar auth status (offline by default)"),
+    ],
+)
+def test_removed_flags_are_usage_errors_before_any_work(
+    paths, authed, fake_x, tmp_path, capsys, argv, replacement, json_mode
+):
+    plan = _plan(tmp_path)
+    argv = [arg.replace("{plan}", plan) for arg in argv]
+    before = {
+        p.relative_to(paths.home): p.read_bytes() for p in paths.home.rglob("*") if p.is_file()
+    }
+    with pytest.raises(SystemExit) as exc:
+        _run(capsys, argv, json_mode=json_mode, transport=fake_x.transport())
+    assert exc.value.code == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    if json_mode:
+        body = _error(captured.err)
+        assert body["code"] == "invalid_argument" and body["retryable"] is False
+        assert body["detail"]["usage"].startswith("usage: pulsar")
+        assert replacement in body["error"]
+    else:
+        assert captured.err.startswith("error: ") and "--help" in captured.err
+        assert replacement in captured.err
+    assert fake_x.requests == []
+    after = {
+        p.relative_to(paths.home): p.read_bytes() for p in paths.home.rglob("*") if p.is_file()
+    }
+    assert after == before, "a removed flag must not write or migrate the home"
 
 
 def test_reconcile_with_nothing_unresolved(paths, authed, fake_x, capsys):

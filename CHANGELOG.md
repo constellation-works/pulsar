@@ -7,14 +7,24 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-03
+
 ### Added
 
+- **Bluesky channel.** Plans publish posts and threads, replies, quotes and images with
+  alt text to `bsky:<handle>` accounts through the same publisher, approvals, ledger and
+  policy as X. Provider checks include grapheme lengths, rich-text link facets and media
+  limits; identity, delete, reconcile, mentions and own-post metrics use the channel boundary.
+  Multi-account plans can target X and Bluesky, with provider-specific variants.
 - **Bluesky login.** `pulsar auth login --account bsky:<handle>` signs in through atproto
   OAuth (PAR, PKCE S256, DPoP-bound tokens, `use_dpop_nonce` retries) and stores the tokens
   and a per-account DPoP key, encrypted, only after the token's DID resolves back to the
   handle. `auth status [--live]`, `auth logout`, refresh under the cross-process lock and
   `pulsar.status` work as for X. The client is the loopback development client unless
   `[oauth.bsky] client_id` names a hosted client-metadata document.
+- **auth-health auto-task.** A disabled daily offline check of all bound accounts proposes
+  deduplicated human attention tasks for unverified or unhealthy logins. It never refreshes,
+  logs in or publishes; the task carries the account's exact verify or re-authorize command.
 - **x-updates auto-task.** The retired x-updates routine as a plugin auto-task, seeded
   disabled: it drafts approval-gated plans for new constellation-works releases, newly
   public repositories and notable merged pull requests, skipping what the ledger (imported
@@ -23,6 +33,48 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `pulsar publish` and `pulsar.publish` publish under it, so a second draft of the same
   announcement replays or conflicts instead of posting again.
 - **`pulsar.history` `keys`.** Looks up the rows held under given idempotency keys.
+- **Scheduled dispatch.** `pulsar.dispatch` reconciles unknown writes and publishes only
+  approved, due plans found through `[dispatch] plans` workspace-relative globs, with a
+  bounded batch and an offline dry run. The deterministic `pulsar-dispatch` routine runs
+  every five minutes without a model; it is seeded disabled until a human enables it.
+
+### Changed
+
+- **Plugin layout.** The installable plugin now lives in `.orbit-plugin/`, with its manifest
+  at `.orbit-plugin/plugin.yaml`, launcher, schemas, skills, definitions and conformance
+  goldens. Root `src/`, `pyproject.toml` and `uv.lock` remain canonical; `make plugin`
+  refreshes the committed runtime copies. Orbit installs only that directory.
+- **Recorded engagement decisions.** Standing publishing policies remain declined until
+  caller identity can be attested; each agent draft still needs a human approval. Scheduled
+  dispatch ships disabled. Budget defaults remain $1/day, $10/month and five posts/day, with
+  no quiet window and the existing $0.005 estimated X read price pending human verification.
+- **Task delivery.** Orbit delivers task work as pull requests against `agent-main`.
+
+### Removed
+
+- `pulsar publish --yes` is a usage error (exit 2); use `--confirm`.
+- `pulsar auth status --offline` is a usage error (exit 2); use `pulsar auth status`,
+  which is offline by default. Both flags are hidden from help and refused before any work.
+
+### Fixed
+
+- **No-file auto-task delivery.** `engager`, `post-proposer` and `weekly-report` declare
+  `no-diff-expected`, so their documented paths that write no files can deliver task evidence.
+- **Plugin test isolation.** Package layout checks inspect tracked and non-ignored untracked
+  files, ignoring nested Orbit worktrees while still catching stray manifests in the checkout.
+- **Dependency security.** Updated the locked PyJWT dependency from 2.13.0 to 2.15.1 to
+  resolve the advisories reported by `make audit`.
+- **Conformance sandbox dependency sync.** `[tool.uv.workspace] members = []` makes the
+  generated plugin a standalone project, so uv does not read a parent project outside its
+  sandbox grants during `orbit plugin test`.
+- **Bluesky link facets.** Bare-domain detection uses an offline TLD list, avoiding links
+  on file names such as `config.toml` and `plugin.yaml` while preserving explicit URLs.
+- **Duplicate-image alt text.** Bluesky retains each occurrence's alt text when the same
+  image bytes appear more than once in a post.
+- **x-updates draft collisions.** Plan file names reversibly encode the entire key, so
+  distinct announcement keys cannot overwrite each other's drafts.
+- **Terminal-key replays.** Published and skipped keys replay without fresh approval or
+  budget/quiet-hours admission; conflict checks still apply, and no second post is sent.
 
 ## [0.1.0] - 2026-09-27
 
@@ -70,5 +122,6 @@ holding a credential.
 - `pulsar auth status --offline`: a no-op (`pulsar auth status` is offline by default).
   Accepted with a warning in 0.1.x; a usage error from the next minor release.
 
-[Unreleased]: https://github.com/constellation-works/pulsar/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/constellation-works/pulsar/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/constellation-works/pulsar/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/constellation-works/pulsar/releases/tag/v0.1.0

@@ -53,15 +53,18 @@ def register(commands: toolkit.Commands) -> None:
     p_status.add_argument(
         "--account", help=f"report only this account ({toolkit.ACCOUNT_HELP}); default: all"
     )
-    status_mode = p_status.add_mutually_exclusive_group()
-    status_mode.add_argument(
+    p_status.add_argument(
         "--live",
         action="store_true",
         help="prove each binding: force a token refresh (rotates the pair), then ask the "
         "provider who the token belongs to",
     )
-    status_mode.add_argument(
-        "--offline", action="store_true", help="deprecated, no effect: the default is offline"
+    p_status.add_argument(
+        "--offline",
+        action=toolkit.RemovedFlag,
+        nargs=0,
+        const="use pulsar auth status (offline by default)",
+        help=argparse.SUPPRESS,
     )
     p_status.set_defaults(func=_status)
 
@@ -112,10 +115,6 @@ def _login(args: argparse.Namespace, ctx: toolkit.Context) -> int:
 
 
 def _status(args: argparse.Namespace, ctx: toolkit.Context) -> int:
-    if args.offline:
-        toolkit.notice(
-            "--offline is deprecated and has no effect: the default makes no network call"
-        )
     out, code = asyncio.run(ctx.app.auth_status(account=args.account, live=args.live))
     if not out["accounts"]:
         toolkit.notice("no account is bound; a human runs `pulsar auth login --account x:<handle>`")
