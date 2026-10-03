@@ -14,6 +14,7 @@ import sys
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
 
 import jsonschema
 import pytest
@@ -819,9 +820,9 @@ def test_x_updates_skips_keys_in_the_ledger_or_already_drafted(
     }
     # Three at most, releases before repos before PRs, oldest first; the rest wait.
     assert [(d["key"], d["plan"]) for d in out["drafts"]] == [
-        ("repo:nebula", "x-updates/2026-10-03/repo-nebula.yaml"),
-        ("pr:orbit:41", "x-updates/2026-10-03/pr-orbit-41.yaml"),
-        ("pr:pulsar:7", "x-updates/2026-10-03/pr-pulsar-7.yaml"),
+        ("repo:nebula", "x-updates/2026-10-03/repo%3Anebula.yaml"),
+        ("pr:orbit:41", "x-updates/2026-10-03/pr%3Aorbit%3A41.yaml"),
+        ("pr:pulsar:7", "x-updates/2026-10-03/pr%3Apulsar%3A7.yaml"),
     ]
     assert out["drafts"][1]["title"] == "Faster drains"
     assert out["deferred"] == []
@@ -833,6 +834,43 @@ def test_x_updates_skips_keys_in_the_ledger_or_already_drafted(
     )  # fmt: skip
     assert [d["key"] for d in capped["drafts"]] == ["release:pulsar:v0.2.0"]
     assert capped["deferred"] == ["repo:nebula", "pr:orbit:41", "pr:pulsar:7"]
+
+
+@pytest.mark.parametrize(
+    "candidates",
+    [
+        [
+            {"kind": "release", "repo": "orbit-graph", "tag": "v1"},
+            {"kind": "release", "repo": "orbit", "tag": "graph-v1"},
+        ],
+        [
+            {"kind": "release", "repo": "orbit", "tag": "graph/v1"},
+            {"kind": "release", "repo": "orbit", "tag": "graph-v1"},
+        ],
+        [
+            {"kind": "release", "repo": "orbit", "tag": "graph:v1"},
+            {"kind": "release", "repo": "orbit", "tag": "graph%3Av1"},
+        ],
+    ],
+)
+def test_x_updates_plan_paths_preserve_distinct_keys(workspace, candidates):
+    request = {
+        "candidates": candidates,
+        "history": {"rows": [], "total": 0, "truncated": False},
+        "tasks": tasks_envelope([]),
+        "date": "2026-10-03",
+    }
+    out = x_updates("plan", request, workspace)
+    paths = [Path(d["plan"]) for d in out["drafts"]]
+    assert len(set(paths)) == len(candidates)
+    for path, draft in zip(paths, out["drafts"], strict=True):
+        assert path.parent == Path("x-updates/2026-10-03")
+        assert unquote(path.stem) == draft["key"]
+        (workspace / path).parent.mkdir(parents=True, exist_ok=True)
+        (workspace / path).write_text(f'key: "{draft["key"]}"\ntext: shipped\n')
+    again = x_updates("plan", request, workspace)
+    assert again["drafts"] == []
+    assert {s["key"] for s in again["skipped"]} == {d["key"] for d in out["drafts"]}
 
 
 def test_x_updates_with_nothing_new_drafts_nothing(state, home, bundle, workspace, fake_x):

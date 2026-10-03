@@ -72,9 +72,11 @@ plan file, so each is approved on its own.
 A plan for something that must be announced once (a release, say) names its
 idempotency key: `key: "release:<repo>:<tag>"`, with one `account`. The key is in
 the digest, so the approval covers it. Publishing a plan whose key the ledger
-already holds replays that receipt (an imported one included) or fails
+already holds replays that receipt (an imported or skipped one included) or fails
 `idempotency_conflict`; it never posts again. Ask `pulsar.history` with `keys`
 before drafting, and never change a key to get past either.
+A skipped receipt replays even during quiet hours or at a cap or budget limit; record it as
+already skipped, with its note and no URL, and continue to the next plan.
 
 ## Approve, then publish
 
@@ -176,6 +178,9 @@ SKILL.md, run with `python3 -B` from the workspace root and JSON on stdin:
   It returns `drafts` (each with `key` and `plan` path), `skipped` (in the ledger in
   any state, carried by a plan file under `x-updates/`, or named in backticks by an
   open task) and `deferred` (over the cap of three, oldest release first).
+  Write each draft at the returned `plan` path: its filename percent-encodes the full key to
+  keep distinct announcements in distinct files. Existing drafts are found by their `key`,
+  so earlier filenames still dedupe.
 
 The helper calls no service and writes nothing; it reads only the plan files
 under `x-updates/`.

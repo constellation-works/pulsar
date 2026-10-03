@@ -129,8 +129,18 @@ def test_facets_are_utf8_byte_ranges():
     ("text", "expected"),
     [
         ("see example.com/docs", [("link", "example.com/docs", "https://example.com/docs")]),
+        ("reads config.toml and plugin.yaml with Node.js", []),
+        ("example.com", [("link", "example.com", "https://example.com")]),
+        ("EXAMPLE.COM", [("link", "EXAMPLE.COM", "https://EXAMPLE.COM")]),
+        ("example.social", [("link", "example.social", "https://example.social")]),
+        ("example.uk", [("link", "example.uk", "https://example.uk")]),
+        ("https://config.toml", [("link", "https://config.toml", "https://config.toml")]),
+        (
+            "https://localhost/notes",
+            [("link", "https://localhost/notes", "https://localhost/notes")],
+        ),
         ("(https://x.org/a)", [("link", "https://x.org/a", "https://x.org/a")]),
-        ("Orbit v0.25 ships", []),  # no alphabetic TLD
+        ("Orbit v0.25 ships", []),  # no recognised TLD
         ("mail me@example.com", []),  # not after whitespace
         ("hi @alice", []),  # a handle has a domain
         ("#123 and #️⃣ and # alone", []),
@@ -240,6 +250,15 @@ async def test_a_quote_with_media_is_a_record_with_media_embed(channel, fake):
     assert embed["$type"] == "app.bsky.embed.recordWithMedia"
     assert embed["record"]["record"] == {"uri": quoted, "cid": fake.others[quoted]["cid"]}
     assert embed["media"]["images"][0]["alt"] == "a chart"
+
+
+async def test_identical_images_keep_each_attachments_alt_text(channel, fake):
+    ids = tuple([await channel.upload(_media("image/png", alt=alt)) for alt in ("first", "second")])
+    await channel.create("same image, two descriptions", media_ids=ids)
+    (record,) = fake.posts()
+    first, second = record["embed"]["images"]
+    assert first["image"] == second["image"], "identical bytes use the same provider blob"
+    assert [first["alt"], second["alt"]] == ["first", "second"]
 
 
 async def test_a_media_id_from_elsewhere_is_refused_before_sending(channel, fake):

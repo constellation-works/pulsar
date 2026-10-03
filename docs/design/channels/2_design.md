@@ -11,7 +11,7 @@ summary: The Channel protocol's failure semantics, the provider -> channel facto
 tags: [channels, providers, x, bluesky, adapter, fingerprint, facets, dpop]
 paths: ["src/pulsar/app/core/channels/contract.py", "src/pulsar/app/core/channels/x/**", "src/pulsar/app/core/channels/bluesky/**", "src/pulsar/app/runtime.py"]
 related_features: [publishing, accounts]
-related_artifacts: [ORB-13006, ORB-13028, ORB-13031, ORB-13207, ORB-13285, ORB-13729]
+related_artifacts: [ORB-13006, ORB-13028, ORB-13031, ORB-13207, ORB-13285, ORB-13729, ORB-13746]
 ---
 
 # Channels — Design
@@ -144,11 +144,15 @@ counts one) and 3000 UTF-8 bytes. Empty text and control characters are `invalid
 X. Posting is free: the default `[prices.bsky]` table is zero.
 
 Links, mentions and hashtags are not markup in the text but facets beside it, each a range of
-UTF-8 byte offsets. `detect_facets` finds `http(s)://` links and bare domains with an
-alphabetic TLD (sent as `https://`), dropping one trailing `.,;:!?` and an unbalanced `)`;
+UTF-8 byte offsets. `detect_facets` finds `http(s)://` links and bare domains with a
+TLD in the vendored IANA root-zone snapshot
+([bluesky/tlds.py](../../../src/pulsar/app/core/channels/bluesky/tlds.py), sent as `https://`),
+dropping one trailing `.,;:!?` and an unbalanced `)`;
 `@handle` mentions (a domain-shaped handle, lower-cased); and `#tag` or `＃tag` up to 64
 characters that are not all digits. `create` resolves each mention's handle to a DID; a handle
 that does not resolve stays plain text.
+Bare file names such as `config.toml`, `plugin.yaml` and `Node.js` have no link facet.
+Explicit `http(s)://` URLs do not require a recognised TLD. Detection is entirely offline.
 
 ## 9. Bluesky Posts and Media
 
@@ -162,13 +166,16 @@ that does not resolve stays plain text.
   `app.bsky.feed.getPosts`) and takes the root from the parent's own reply, if it has one. A
   target that does not exist is `not_found` and nothing is created.
 - **Quotes** are an `app.bsky.embed.record` embed; with media, `recordWithMedia`.
-- **Media.** `upload` sends the bytes with `com.atproto.repo.uploadBlob` and returns the blob's
-  CID as the media id; the channel keeps the blob and alt text for `create`, so a media id from
+- **Media.** `upload` sends the bytes with `com.atproto.repo.uploadBlob` and returns an opaque
+  id for that upload occurrence; the channel keeps the blob and alt text for `create`, so a media id from
   another channel or run is `invalid_media` before anything is sent. Up to four images
   (PNG, JPEG, GIF, WebP; 1,000,000 bytes each) with alt text up to 2000 graphemes, or one
   video (MP4, 100,000,000 bytes) alone with alt text up to 1000. Uploads have the deadline X's
   have (30 seconds plus bytes at 256 KiB/s, capped by the caller's); a video is attached as an
   `app.bsky.embed.video` blob, without the video service's transcoding step.
+  Two attachments with identical bytes share the provider's blob CID but retain their own
+  alt texts; a CID alone does not identify an attachment. Successful creation releases the
+  uploaded entries from the channel.
 - **Delete** takes the post's AT URI and deletes the record; deleting a missing record
   succeeds. A URI in another account's repository is `invalid_argument`.
 
@@ -220,6 +227,8 @@ post's URI.
   can count more graphemes than Bluesky does and refuse a post Bluesky would take, never the
   reverse. Facet detection follows the Bluesky app's rules, not a spec; a link it misses posts
   as plain text.
+- **TLD data is a snapshot.** Bare-domain links use the vendored IANA list (version
+  2026100200); a newly delegated TLD stays plain text until that list is refreshed.
 - **Fingerprint collisions.** Posts that differ only in links, leading mentions or whitespace
   collide. Reconcile compares one account's posts inside a claim's time window and never
   matches an id the ledger already holds, and a collision errs towards "published".
@@ -238,5 +247,6 @@ post's URI.
 - [ORB-13207] — bounded chunked media upload before finalize.
 - [ORB-13285] — set a conservative upload rate and pass the Orbit deadline to the client.
 - [ORB-13729] — made `AuthFlow` Bluesky's login and let the client sign with the stored DPoP key.
+- [ORB-13746] — checked bare-domain facets against IANA TLDs and preserved alt text per attachment.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

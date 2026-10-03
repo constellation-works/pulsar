@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from pulsar.app import plugin
+from pulsar.app.core.ledger import AccountRef, SqliteLedger
 from pulsar.cli.main import run as cli
 from pulsar.internal.errors import PulsarError
 from pulsar.internal.fs import Paths
@@ -262,8 +263,18 @@ def test_a_keyed_plan_drafted_and_published_twice_reaches_x_once(
     ]
 
 
-def test_a_keyed_plan_the_imported_history_holds_replays_without_posting(
-    state, home, workspace, fake_x
+@pytest.mark.parametrize(
+    "policy",
+    [
+        None,
+        "quiet_hours",
+        "max_posts_per_day = 0",
+        "daily_budget_usd = 0",
+        "monthly_budget_usd = 0",
+    ],
+)
+def test_a_keyed_plan_the_ledger_holds_replays_without_policy_admission_or_posting(
+    state, home, workspace, fake_x, policy
 ):
     posted = workspace.parent / "posted.jsonl"
     posted.write_text(
@@ -273,16 +284,39 @@ def test_a_keyed_plan_the_imported_history_holds_replays_without_posting(
         ' "note": "never post"}\n'
     )
     asyncio.run(make_app(home, transport=fake_x.transport()).import_posted(posted, confirm=True))
-    for key in ("release:orbit:v0.25.0", "repo:example"):
+    SqliteLedger(home).skip(
+        key="repo:manual",
+        provider="x",
+        account=AccountRef(alias=ALIAS, provider="x", user_id="1234567890", handle="constworks"),
+        caller="human",
+        note="do not announce",
+    )
+    if policy is not None:
+        if policy == "quiet_hours":
+            now = datetime.now(UTC)
+            start, end = now - timedelta(hours=1), now + timedelta(hours=1)
+            policy = f'quiet_hours = "{start:%H:%M}-{end:%H:%M}"'
+        home.settings_file.write_text(f"[policy]\n{policy}\n")
+        home.settings_file.chmod(0o600)
+    before = rows(home, "SELECT * FROM writes")
+    notes = {"repo:example": "never post", "repo:manual": "do not announce"}
+    for key in ("release:orbit:v0.25.0", "repo:example", "repo:manual"):
         source = draft(
             workspace, key.replace(":", "-"), UPDATE.replace("release:orbit:v0.26.0", key)
         )
         # No approval: a replay sends nothing, so it needs none.
+        dry = call(state, workspace, fake_x, "publish", {"source": source, "dry_run": True})
+        assert dry["ok"] and dry["output"]["published"] is False
         [result] = call(state, workspace, fake_x, "publish", {"source": source})["output"][
             "results"
         ]
-        assert result["replayed"] is True and result["idempotency_key"] == key
+        assert result["ok"] and result["replayed"] is True and result["idempotency_key"] == key
+        assert result["state"] == ("published" if key.startswith("release:") else "skipped")
+        if result["state"] == "skipped":
+            assert result["items"] == []
+            assert result["note"] == notes[key]
     assert fake_x.calls("POST") == []
+    assert rows(home, "SELECT * FROM writes") == before
 
 
 def test_publish_takes_no_key_or_approval_input(state, home, workspace, fake_x, reply):

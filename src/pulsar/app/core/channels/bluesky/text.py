@@ -10,7 +10,7 @@ one grapheme and refuse a post Bluesky would take, never the reverse.
 
 Links, mentions and hashtags are not markup in Bluesky: a post carries
 ``facets`` that point at them by UTF-8 byte offsets. ``detect_facets`` finds
-them the way the Bluesky app does (a URL or a bare domain with an alphabetic
+them the way the Bluesky app does (a URL or a bare domain with a recognised
 TLD, ``@handle.domain``, ``#tag``); a mention still needs its handle resolved
 to a DID, which ``create`` does.
 """
@@ -27,6 +27,7 @@ from pulsar.internal.guard import scan_for_secrets
 
 from ..contract import Prices
 from .config import MAX_POST_BYTES, MAX_POST_GRAPHEMES
+from .tlds import TLDS
 
 # -- graphemes ----------------------------------------------------------------
 
@@ -131,7 +132,7 @@ def grapheme_count(text: str) -> int:
 
 # -- facets -------------------------------------------------------------------
 
-# A URL, or a bare domain (checked for an alphabetic TLD below), after the
+# A URL, or a bare domain (checked against the offline TLD list below), after the
 # start, whitespace or "(" — the Bluesky app's detection.
 _LINK = re.compile(r"(?:^|(?<=[\s(]))(https?://\S+|[a-z][a-z0-9]*(?:\.[a-z0-9]+)+\S*)", re.I)
 _BARE_DOMAIN = re.compile(r"[a-z][a-z0-9]*(?:\.[a-z0-9]+)+", re.I)
@@ -165,7 +166,7 @@ def _links(text: str) -> list[tuple[int, int, FacetKind, str]]:
         if not span.lower().startswith(("http://", "https://")):
             domain = _BARE_DOMAIN.match(span)
             tld = domain.group(0).rsplit(".", 1)[-1] if domain else ""
-            if len(tld) < 2 or not tld.isalpha():
+            if tld.lower() not in TLDS:
                 continue
         if span[-1] in ".,;:!?":
             span = span[:-1]
