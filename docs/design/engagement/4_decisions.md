@@ -1,7 +1,7 @@
 ---
 title: Engagement — Decisions
 owner: claude
-last_updated: 2026-09-27
+last_updated: 2026-10-03
 last_validated: 2026-09-27
 status: Draft
 feature: engagement
@@ -11,7 +11,7 @@ summary: An agent's draft needs a human approval of its digest; reads share the 
 tags: [engagement, approvals, reads, budget]
 paths: ["src/pulsar/app/core/ledger/**", "src/pulsar/app/plugin.py"]
 related_features: [publishing, surfaces]
-related_artifacts: [ORB-13030]
+related_artifacts: [ORB-13030, ORB-13115, ORB-13727, ORB-13728]
 ---
 
 # Engagement — Decisions
@@ -44,6 +44,70 @@ digest). New publish paths for agent-drafted content follow the same rule.
 - The human approves bytes, not a task title: what they read is what goes out.
 - Cost: every draft needs a command run by a human before the task that publishes it is
   promoted, and an approval that expires unused means drafting or approving again.
+
+## Standing policies are declined until caller identity can be attested
+
+**Recorded:** 2026-10-03 · [ORB-13728]
+
+### Context
+
+A standing policy such as automatically thanking first-time mentioners would let an agent
+publish without a per-plan human approval. Agent-drafted plans always require that approval,
+and safely matching a standing policy to a caller needs host-attested identity from Orbit
+([ORB-13115]).
+
+### Decision
+
+Decline standing policies for now. Every agent-drafted plan continues to require a human
+approval. Revisit only after [ORB-13115] lands and Daniel reopens the decision.
+
+### Consequences
+
+- No agent can publish autonomously under a standing rule, even for a narrow class of replies.
+- Cost: repetitive, low-risk replies still wait for a human to approve each plan.
+
+## Scheduled dispatch publishes approved due plans and ships disabled
+
+**Recorded:** 2026-10-03 · [ORB-13728]
+
+### Context
+
+Orbit tasks run when promoted, while a plan's `not_before` slot may be later. Publishing at
+that slot should not require a human to promote the task at the right time, and unknown write
+rows still need reconciliation.
+
+### Decision
+
+Build a deterministic routine with no model that reconciles unknown rows and publishes plans
+only when they already have a human approval and are due (`not_before`). The routine ships
+seeded disabled; a human must enable it. Implementation is tracked by [ORB-13727].
+
+### Consequences
+
+- Dispatch cannot invent or approve content; each plan still needs its own human approval.
+- Cost: the routine does nothing until a human enables it, and it only dispatches work already
+  approved and due.
+
+## Budget, quiet hours, and read-price defaults remain as configured
+
+**Recorded:** 2026-10-03 · [ORB-13728]
+
+### Context
+
+The box currently uses a $1 daily budget, a $10 monthly budget, and a cap of five posts per
+day, with no quiet window configured. The configured `read_post_usd` value is still an
+estimate that has not been checked against the X developer portal.
+
+### Decision
+
+Keep the $1/day and $10/month budgets and the five-post daily cap; leave quiet hours
+unconfigured. Keep `read_post_usd` at the $0.005 estimate until a human checks the price in
+the X developer portal.
+
+### Consequences
+
+- The existing spend and post limits remain in force; no time-of-day restriction is added.
+- Cost: read charges may differ from the unverified estimate, and dispatch may run at any hour.
 
 ## Reads spend from the same budget as writes
 
@@ -94,5 +158,8 @@ a stored inbox.
 ## Task References
 
 - [ORB-13030] — phase 4: drafts, approvals, standing policies, dispatch; approvals land here.
+- [ORB-13115] — Orbit: add host-attested task and run identity to plugin context.
+- [ORB-13727] — implement scheduled dispatch for approved due plans, seeded disabled.
+- [ORB-13728] — record the 2026-10-03 engagement decisions.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

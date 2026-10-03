@@ -1,7 +1,7 @@
 ---
 title: Engagement — Vision
 owner: claude
-last_updated: 2026-09-27
+last_updated: 2026-10-03
 last_validated: 2026-09-27
 status: Draft
 feature: engagement
@@ -11,30 +11,34 @@ summary: Direct messages, scheduled publishing of approved drafts, host-attested
 tags: [engagement, dms, dispatch, approvals]
 paths: ["src/pulsar/app/plugin.py", ".orbit-plugin/definitions/auto_tasks/*.yaml"]
 related_features: [publishing, surfaces]
-related_artifacts: [ORB-13030, ORB-13115]
+related_artifacts: [ORB-13030, ORB-13115, ORB-13727, ORB-13728]
 ---
 
 # Engagement — Vision
 
-What the engagement loop may grow into. Nothing here is built.
+Most of the engagement loop's future questions remain open; scheduled publishing is decided
+and being built.
 
 ## 1. Open Questions
 
 1. **Direct messages.** DMs need the `dm.read` and `dm.write` scopes, so every bound account
    re-authorizes, and they carry private text pulsar would hand to an agent. Deferred until
    mentions and replies have run for a while.
-2. **Scheduled publishing.** A post's slot (`not_before`) is outside the digest, so an
-   approval survives a reschedule, but an Orbit task runs when it is promoted, not at the slot.
-   Today the human's promotion is the timing. A deterministic dispatch routine (no model)
-   publishing due, approved plans would free the human from promoting on the day.
+2. **Scheduled publishing — decided; being built.** A deterministic routine with no model
+   will reconcile unknown rows and publish plans only when they already have a human approval
+   and are due (`not_before`). It ships seeded disabled; a human must enable it. The
+   implementation is tracked by [ORB-13727].
 3. **Stronger approvals.** An approval is recorded by a terminal command run as the same Unix
    user an agent's shell runs as. Orbit could attest the approver (a dashboard click, a
    host-signed record), or approvals could need a passphrase an agent never sees.
-4. **Replies without a proposal task.** A standing policy (for example, "thank-you replies to
-   first-time mentioners, at most three a day") would let the engager publish without a
-   human in the loop. It needs a host-attested caller identity ([ORB-13115]).
-5. **The read price.** X bills reads per post returned; the default price in `config.toml` is
-   an estimate until checked against the developer portal.
+4. **Standing policies — declined for now.** A standing policy (for example, "thank-you
+   replies to first-time mentioners, at most three a day") would let the engager publish
+   without a per-plan human approval. It needs a host-attested caller identity ([ORB-13115]).
+   Revisit only after [ORB-13115] lands and Daniel reopens the decision recorded in
+   [ORB-13728].
+5. **The read price — default retained; verification open.** X bills reads per post returned.
+   Keep `read_post_usd` at the $0.005 estimate until a human checks it against the X developer
+   portal; the estimate remains unverified ([ORB-13728]).
 
 ## 2. Prior Work
 
@@ -53,8 +57,8 @@ content, is the two-person rule applied to publishing.
 
 - Approval bound to a digest and checked in the ledger's claim transaction, so a replay, a
   retry or a resumed thread is judged the same way as the first attempt.
-- The engagement loop is ordinary Orbit tasks and auto-tasks: no scheduler, queue or inbox of
-  pulsar's own.
+- The engagement loop is ordinary Orbit tasks and auto-tasks plus a deterministic dispatch
+  routine; it has no separate queue or inbox of pulsar's own.
 
 ## 4. References
 
@@ -71,5 +75,7 @@ content, is the two-person rule applied to publishing.
 
 - [ORB-13030] — phase 4: drafts, approvals, standing policies, dispatch.
 - [ORB-13115] — Orbit: host-attested task and run id in the plugin context (ws_orbit).
+- [ORB-13727] — implement scheduled dispatch for approved due plans, seeded disabled.
+- [ORB-13728] — record the 2026-10-03 engagement decisions.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
