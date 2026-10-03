@@ -1,8 +1,8 @@
 ---
 title: Accounts — Vision
 owner: claude
-last_updated: 2026-09-26
-last_validated: 2026-09-26
+last_updated: 2026-10-03
+last_validated: 2026-10-03
 status: Draft
 feature: accounts
 doc_role: vision
@@ -11,7 +11,7 @@ summary: Where credentials should live (host-held secrets), per-provider auth fl
 tags: [accounts, auth, credentials, secrets]
 paths: ["src/pulsar/app/core/account/store.py", "src/pulsar/app/core/channels/contract.py"]
 related_features: [channels, surfaces]
-related_artifacts: [ORB-13008, ORB-13009, ORB-13030, ORB-13031]
+related_artifacts: [ORB-13008, ORB-13009, ORB-13030, ORB-13031, ORB-13725]
 ---
 
 # Accounts — Vision
@@ -25,9 +25,13 @@ Where account storage and auth are heading. Nothing here is built unless
    compare-and-swap rotation (`spec.secrets`). If it lands, `FernetFileStore` is replaced by a
    `CredentialStore` over it and the key-beside-ciphertext limitation goes away. Until then the
    home moves into `{{plugin_state}}` once the host's Orbit carries [ORB-13008].
-2. **How is re-authorization noticed?** Today `auth_expired` surfaces only when a write fails.
-   Phase 4 ([ORB-13030]) plans a daily auth-health auto-task that files a task when an account
-   is `reauth_required`; what it may call (the offline default only, or a paid `--live` probe) is open.
+2. **Should auth-health ever probe live?** [ORB-13725], split from phase 4 ([ORB-13030]),
+   ships a disabled daily offline alarm that files one human task per unverified or unhealthy
+   account. It distinguishes a live verification remedy from re-authorization and dedupes
+   open tasks; [2_design.md](./2_design.md#8-offline-auth-health-alarm) describes it.
+   An automatic live probe would rotate credentials and spend on identity reads; whether
+   that ever merits separate human authorization remains open. Today's alarm calls only
+   `pulsar.status` and never performs a remedy.
 3. **Is a device-code or remote-callback login worth it?** SSH forwarding works for one
    operator; it does not scale to several people binding accounts.
 4. **Should the registry record who bound an account?** Today it records when and which
@@ -69,7 +73,8 @@ whatever token they were given.
 
 - [ORB-13008] — Orbit: private plugin state directories (ws_orbit).
 - [ORB-13009] — Orbit: host-held secrets with compare-and-swap rotation (ws_orbit).
-- [ORB-13030] — phase 4: plans the auth-health auto-task.
+- [ORB-13030] — phase 4: proposed the account alarm, split into [ORB-13725].
 - [ORB-13031] — phase 5: the second provider, whose auth flow differs.
+- [ORB-13725] — shipped the disabled daily offline auth-health alarm with deduped human tasks.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

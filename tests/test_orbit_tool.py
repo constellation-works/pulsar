@@ -9,6 +9,9 @@ import io
 import json
 import os
 import re
+import subprocess
+import sys
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -455,7 +458,12 @@ AUTO_TASKS = sorted((PLUGIN / "definitions" / "auto_tasks").glob("*.yaml"))
 
 def test_the_manifest_ships_the_auto_task_definitions():
     assert MANIFEST["spec"]["definitions"] == {"auto_tasks": ["definitions/auto_tasks/*.yaml"]}
-    assert [p.stem for p in AUTO_TASKS] == ["engager", "post-proposer", "weekly-report"]
+    assert [p.stem for p in AUTO_TASKS] == [
+        "auth-health",
+        "engager",
+        "post-proposer",
+        "weekly-report",
+    ]
 
 
 @pytest.mark.parametrize("path", AUTO_TASKS, ids=[p.stem for p in AUTO_TASKS])
@@ -475,8 +483,8 @@ def test_an_auto_task_may_call_only_what_it_requires(path):
     # Definitions leave files for pipeline delivery and never instruct committing.
     cleaned = path.read_text().replace("uncommitted", "").replace("commit permalink", "")
     assert "commit" not in cleaned.lower()
-    # no-diff-expected is absent from templates producing a diff.
-    assert "no-diff-expected" not in template["tags"]
+    # The account alarm delivers tool state; the others deliver files.
+    assert ("no-diff-expected" in template["tags"]) == (path.stem == "auth-health")
     # Engager's publish task writes nothing (keeps no-diff-expected);
     # post-proposer's records receipts in content records (drops no-diff-expected).
     for spawned in re.findall(r"tags `\[([^\]]*)\]`", template["description"]):
@@ -485,3 +493,164 @@ def test_an_auto_task_may_call_only_what_it_requires(path):
             assert "no-diff-expected" not in tags
         elif path.stem == "engager":
             assert "no-diff-expected" in tags
+
+
+AUTH_HEALTH = PLUGIN / "definitions" / "auto_tasks" / "auth-health.yaml"
+AUTH_PLANNER = PLUGIN / "skills" / "publish" / "scripts" / "auth_health.py"
+
+
+def test_auth_health_definition_is_a_disabled_daily_offline_alarm():
+    definition = yaml.safe_load(AUTH_HEALTH.read_text())
+    assert definition["enabled"] is False
+    assert definition["schedule"] == {"cron": "0 8 * * *"}
+    assert definition["dedupe"] == "skip_if_open"
+    assert definition["template"]["required_tools"] == ["pulsar.status"]
+    assert "no-diff-expected" in definition["template"]["tags"]
+    # Exercise the same shipped helper the executor is directed to use.
+    assert "scripts/auth_health.py" in definition["template"]["description"]
+    assert AUTH_PLANNER.is_file()
+
+
+def auth_health_plan(status, workspace, tasks=None):
+    listed = [] if tasks is None else tasks
+    result = subprocess.run(
+        [sys.executable, "-B", str(AUTH_PLANNER)],
+        input=json.dumps(
+            {"status": status, "tasks": {"tasks": listed, "total": len(listed), "truncated": False}}
+        ),
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=workspace,
+    )
+    assert not any(secret in result.stdout for secret in SECRETS)
+    return json.loads(result.stdout)
+
+
+@pytest.mark.parametrize("health", ["healthy", "unverified", "reauth_required"])
+def test_auth_health_plans_human_followups_from_offline_status(
+    state, home, bundle, workspace, fake_x, health
+):
+    register(
+        home,
+        replace(bundle, expires_at=0) if health == "unverified" else bundle,
+        ALIAS,
+        handle="constworks",
+        provider_user_id="1",
+        status="reauth_required" if health == "reauth_required" else "active",
+    )
+    before = {p: p.stat().st_mtime_ns for p in state.rglob("*")}
+    status = run(state, workspace, "status", transport=fake_x.transport())["output"]
+    result = auth_health_plan(status, workspace)
+    assert result["updates"] == result["skipped"] == []
+    if health == "healthy":
+        assert result["followups"] == []
+    else:
+        [followup] = result["followups"]
+        [account] = status["accounts"]
+        assert ALIAS in followup["title"]
+        assert status["attention"][0] in followup["description"]
+        for key in ("alias", "health", "token_state", "reason", "reauth_required"):
+            assert f"- {key}: {json.dumps(account[key])}" in followup["description"]
+        if health == "unverified":
+            assert account["token_state"] == "expired" and account["reauth_required"] is False
+            assert "unverified" in followup["title"]
+            assert followup["priority"] == "medium"
+            assert f"auth status --live --account {ALIAS}" in followup["description"]
+            assert "pulsar auth login" not in followup["description"]
+        else:
+            assert "reauth_required" in followup["title"]
+            assert followup["priority"] == "high"
+            assert f"pulsar auth login --account {ALIAS}" in followup["description"]
+        assert f"PULSAR_HOME={home.home}" in followup["description"]
+        assert f"pulsar-auth-health:{ALIAS}" in followup["tags"]
+        assert "no-diff-expected" in followup["tags"]
+        assert followup["required_tools"] == ["pulsar.status"]
+        assert "status" not in followup, "orbit.task.add leaves a follow-up proposed"
+    assert fake_x.requests == [], "the alarm must never call X"
+    assert {p: p.stat().st_mtime_ns for p in state.rglob("*")} == before
+    assert list(workspace.iterdir()) == [], "the alarm delivers no files"
+
+
+@pytest.mark.parametrize(
+    "status", ["proposed", "backlog", "in-progress", "review", "blocked", "someday"]
+)
+def test_auth_health_rerun_dedupes_an_open_reauth_task(state, home, bundle, workspace, status):
+    register(home, bundle, ALIAS, status="reauth_required")
+    observed = run(state, workspace, "status")["output"]
+    [created] = auth_health_plan(observed, workspace)["followups"]
+    existing = {**created, "id": "fixture-reauth", "status": status, "terminal": False}
+    result = auth_health_plan(observed, workspace, [existing])
+    assert result == {
+        "followups": [],
+        "updates": [],
+        "skipped": [{"alias": ALIAS, "task_ids": ["fixture-reauth"]}],
+    }
+
+
+def test_auth_health_escalates_verification_without_creating_a_second_task(
+    state, home, bundle, workspace
+):
+    register(home, replace(bundle, expires_at=0), ALIAS)
+    [verification] = auth_health_plan(run(state, workspace, "status")["output"], workspace)[
+        "followups"
+    ]
+    existing = {**verification, "id": "fixture-verify", "status": "proposed", "terminal": False}
+    register(home, bundle, ALIAS, status="reauth_required")
+    observed = run(state, workspace, "status")["output"]
+    result = auth_health_plan(observed, workspace, [existing])
+    assert result["followups"] == []
+    [update] = result["updates"]
+    assert update["id"] == existing["id"] and update["priority"] == "high"
+    assert "reauth_required" in update["title"]
+    assert observed["attention"][0] in update["comment"]
+    assert "description" not in update and "status" not in update
+
+
+@pytest.mark.parametrize("terminal_status", ["done", "rejected"])
+def test_auth_health_closed_tasks_do_not_suppress_a_new_alarm(
+    state, home, bundle, workspace, terminal_status
+):
+    register(home, bundle, ALIAS, status="reauth_required")
+    observed = run(state, workspace, "status")["output"]
+    [created] = auth_health_plan(observed, workspace)["followups"]
+    closed = {**created, "id": "fixture-closed", "status": terminal_status, "terminal": True}
+    assert auth_health_plan(observed, workspace, [closed])["followups"] == [created]
+
+
+def test_auth_health_dedupe_is_per_account_and_ignores_non_auth_attention(
+    state, home, bundle, workspace
+):
+    register(home, bundle, ALIAS, status="reauth_required")
+    other = "x:other"
+    register(home, bundle, other)  # unverified, independently needs attention
+    observed = run(state, workspace, "status")["output"]
+    created = auth_health_plan(observed, workspace)["followups"]
+    assert len(created) == 2
+    existing = {**created[0], "id": "fixture-first", "terminal": False}
+    [remaining] = auth_health_plan(observed, workspace, [existing])["followups"]
+    assert f"pulsar-auth-health:{other}" in remaining["tags"]
+    # Overall healthy can be false for a write issue while account health is healthy.
+    register(home, bundle, ALIAS, handle="constworks", provider_user_id="1")
+    status = run(state, workspace, "status", {"account": ALIAS})["output"]
+    status["healthy"] = False
+    status["attention"] = [f"{ALIAS}: 1 write(s) with an unknown outcome"]
+    assert auth_health_plan(status, workspace)["followups"] == []
+
+
+def test_auth_health_refuses_truncated_task_lists(workspace):
+    result = subprocess.run(
+        [sys.executable, "-B", str(AUTH_PLANNER)],
+        input=json.dumps(
+            {
+                "status": {"accounts": [], "attention": []},
+                "tasks": {"tasks": [], "total": 1, "truncated": True},
+            }
+        ),
+        capture_output=True,
+        text=True,
+        cwd=workspace,
+    )
+    assert result.returncode != 0
+    assert "complete task list is required" in result.stderr
+    assert result.stdout == ""

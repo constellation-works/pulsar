@@ -104,6 +104,41 @@ storage or config problem a human must fix, follow
 installing pulsar, creating the X app, binding an account and connecting the
 plugin and MCP server, one checked step at a time.
 
+## Auth-health
+
+The plugin seeds `pulsar-auth-health` disabled. When a human enables it, its daily
+offline `pulsar.status` check files a proposed human attention task per unverified
+or unhealthy account. It writes no files and never runs a live check or login.
+The exact command in `attention` names the correct home and account.
+
+The auto-task uses [scripts/auth_health.py](./scripts/auth_health.py), relative to
+this SKILL.md. Run it with `python3 -B` and JSON on stdin (keep the input in memory):
+
+```json
+{"status": "<pulsar.status output object>", "tasks": "<complete orbit.task.list envelope>"}
+```
+
+`tasks` must contain `tasks`, `total` and `truncated: false`; each task includes
+`id`, `title`, `status`, `terminal`, `tags` and `priority`. List this workspace's
+tasks tagged `pulsar-auth-attention` across every status, increasing the limit
+to cover `total` if needed. An incomplete list is a blocker, never permission
+to file duplicate tasks.
+
+The helper returns `followups` (arguments for `orbit.task.add`), `updates`
+(arguments for `orbit.task.update`) and `skipped` (existing account task IDs).
+Supply your model provenance and workspace to the task tools. New tasks stay
+proposed for a human. All healthy produces empty lists; unverified produces a
+medium-priority Verify task; `reauth_required` produces a high-priority
+Re-authorize task. The stable `pulsar-auth-health:<alias>` tag suppresses new
+tasks while one is open, including blocked or someday. If verification becomes
+re-authorization, update the open task's title and priority and add current
+evidence as a comment. A terminal task permits a fresh alarm.
+
+The helper copies `health`, `token_state`, `reason`, `reauth_required` and the
+account's exact attention; it reads no files or credentials and calls no
+service. The agent records follow-up IDs and evidence in the execution summary.
+Only a human at a terminal performs the returned remedy.
+
 ## Credentials
 
 No pulsar tool accepts or returns a token, key or secret, and none ever will.
