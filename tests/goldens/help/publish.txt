@@ -1,5 +1,5 @@
 usage: pulsar publish [-h] [--format MODE] [--json] [--account ACCOUNT]
-                      [--idempotency-key IDEMPOTENCY_KEY] [--caller CALLER] [--confirm] [--yes]
+                      [--idempotency-key IDEMPOTENCY_KEY] [--caller CALLER] [--confirm]
                       plan
 
 publish a plan through the ledger and policy; validates only without --confirm
@@ -20,7 +20,6 @@ options:
   --caller CALLER       audit label recorded in the ledger; default: $PULSAR_CALLER, else pulsar-
                         cli
   --confirm             actually publish (costs money)
-  --yes                 deprecated alias of --confirm
 
 Examples:
   pulsar publish plan.yaml            # what would post, and its cost

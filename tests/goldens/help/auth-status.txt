@@ -1,4 +1,4 @@
-usage: pulsar auth status [-h] [--format MODE] [--json] [--account ACCOUNT] [--live | --offline]
+usage: pulsar auth status [-h] [--format MODE] [--json] [--account ACCOUNT] [--live]
 
 each bound account and its health, from local state (no network)
 
@@ -11,6 +11,5 @@ options:
                      default: all
   --live             prove each binding: force a token refresh (rotates the pair), then ask the
                      provider who the token belongs to
-  --offline          deprecated, no effect: the default is offline
 
 Exit 0 only when every reported account is healthy.

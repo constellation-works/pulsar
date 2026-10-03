@@ -11,7 +11,7 @@ summary: X and Bluesky logins with identity check, encrypted per-account bundles
 tags: [accounts, auth, oauth, credentials, storage, bluesky, dpop]
 paths: ["src/pulsar/app/core/account/registry.py", "src/pulsar/app/core/account/store.py", "src/pulsar/app/core/account/clients.py", "src/pulsar/app/core/channels/credentials.py", "src/pulsar/app/core/channels/loopback.py", "src/pulsar/app/login.py", "src/pulsar/internal/fs/paths.py", "src/pulsar/internal/fs/files.py", "src/pulsar/app/core/channels/x/auth.py", "src/pulsar/app/core/channels/x/client.py", "src/pulsar/app/core/channels/bluesky/auth.py", "src/pulsar/app/core/channels/bluesky/client.py", "src/pulsar/cli/commands/auth.py"]
 related_features: [publishing, surfaces]
-related_artifacts: [ORB-13008, ORB-13009, ORB-13027, ORB-13028, ORB-13031, ORB-13039, ORB-13138, ORB-13279, ORB-13725, ORB-13729]
+related_artifacts: [ORB-13008, ORB-13009, ORB-13027, ORB-13028, ORB-13031, ORB-13039, ORB-13138, ORB-13279, ORB-13725, ORB-13729, ORB-13730]
 ---
 
 # Accounts — Design
@@ -165,7 +165,8 @@ account is `healthy`.
 - **`--live`.** The proof: rotates the token pair through the account's refresh lock, fetches
   the identity from the provider and rewrites the registry row. One identity read per account
   (X `/users/me`, Bluesky `com.atproto.server.getSession` on the account's PDS).
-- **`--offline`** is a deprecated no-op (the default is offline) and warns on stderr.
+- **`--offline`** was removed in 0.2.0. It exits 2 with a usage error naming
+  `auth status` as its replacement (offline by default), before any command runs.
 
 Cached identity is tagged with the `binding_id` it was fetched under, so after a re-login it
 is ignored until `/users/me` has been asked again, even if a lookup started before the
@@ -341,5 +342,6 @@ migration alone does not create an account alarm when account health is healthy.
 - [ORB-13279] — pinned a write's token to the binding whose identity was checked.
 - [ORB-13725] — added the disabled daily offline auth-health alarm and per-account human follow-ups.
 - [ORB-13729] — added the Bluesky login (atproto OAuth with PAR, PKCE and DPoP) and its stored DPoP key.
+- [ORB-13730] — retired `auth status --offline` with replacement guidance in 0.2.0.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

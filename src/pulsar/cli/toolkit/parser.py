@@ -19,6 +19,19 @@ ACCOUNT_HELP = "an alias, provider:handle such as x:<handle>"
 ACCOUNT_DEFAULT = "default: default_account in config.toml, else the only bound account"
 
 
+class RemovedFlag(argparse.Action):
+    """Keep a removed flag recognizable so the usage error names its replacement."""
+
+    def __call__(
+        self,
+        parser: argparse.ArgumentParser,
+        namespace: argparse.Namespace,
+        values: Any,
+        option_string: str | None = None,
+    ) -> NoReturn:
+        parser.error(f"{option_string} was removed in 0.2.0; {self.const}")
+
+
 class CommandParser(argparse.ArgumentParser):
     """argparse that raises ``ParseError`` instead of printing and exiting,
     and whose help lists subcommands under ``command_groups``. Subparsers

@@ -2,7 +2,7 @@
 title: Surfaces — Design
 owner: claude
 last_updated: 2026-10-03
-last_validated: 2026-09-26
+last_validated: 2026-10-03
 status: Accepted
 feature: surfaces
 doc_role: design
@@ -11,7 +11,7 @@ summary: The MCP tools and the caller boundary, the operator CLI, and how the Or
 tags: [surfaces, mcp, cli, orbit-plugin]
 paths: ["src/pulsar/**", ".orbit-plugin/**"]
 related_features: [publishing, accounts]
-related_artifacts: [ORB-13029, ORB-13032, ORB-13114, ORB-13115, ORB-13138, ORB-13727, ORB-13751]
+related_artifacts: [ORB-13029, ORB-13032, ORB-13114, ORB-13115, ORB-13138, ORB-13727, ORB-13730, ORB-13751]
 ---
 
 # Surfaces — Design
@@ -96,7 +96,7 @@ beneath them, `src/pulsar/cli/toolkit/` holds what they are written against: `co
     `label: value` lines, with no escapes and no truncation.
   - `json` prints the payload as one document; these documents are the machine contract
     (goldens in `tests/goldens/cli`).
-  - Notices go to stderr in every mode: an empty result, a deprecated flag, the payload's
+  - Notices go to stderr in every mode: an empty result, the payload's
     `note`, an account's remedy.
 - **Errors.** Nothing on stdout.
   - On stderr, `error: <message>`; in JSON mode, one object `{error, code, retryable,
@@ -105,6 +105,9 @@ beneath them, `src/pulsar/cli/toolkit/` holds what they are written against: `co
     `detail.usage`) when the arguments or `PULSAR_FORMAT` ask for JSON.
   - Exit codes: 0 success; 1 when the command failed or reported something not healthy or
     not settled; 2 for a usage error.
+  - From 0.2.0, `publish --yes` and `auth status --offline` are usage errors naming
+    their replacements: `--confirm` and `auth status` (offline by default). They are
+    hidden from help and refused during parsing, before any command runs.
   - An unexpected exception is `internal`. A closed stdout (`pulsar history | head -1`)
     exits 0.
 - **Effects.** The reports (`status`, `history`, `validate`, `auth status`) read the home
@@ -123,7 +126,7 @@ beneath them, `src/pulsar/cli/toolkit/` holds what they are written against: `co
 | `pulsar status [--account A]` | none | budget and cap use, quiet hours, unresolved keys |
 | `pulsar history [--account A] [--limit N]` | none | newest ledger rows with items; `total` and `truncated` (`--limit` 1–100, refused outside) |
 | `pulsar validate PLAN.yaml [--account A]` | none | the publisher's report; needs no credentials |
-| `pulsar publish PLAN.yaml [--account A] [--idempotency-key K] [--caller C] --confirm` | posts | prepares every account's plan, then publishes; without `--confirm` it makes every offline check the live run makes (key, caller, schedule, budget, cap) and sends nothing (`--yes` is a deprecated alias) |
+| `pulsar publish PLAN.yaml [--account A] [--idempotency-key K] [--caller C] --confirm` | posts | prepares every account's plan, then publishes; without `--confirm` it makes every offline check the live run makes (key, caller, schedule, budget, cap) and sends nothing |
 | `pulsar approve PLAN.yaml [--account A] [--workspace DIR] [--ttl 72h]` | none | prints every post in full, the cost and each account's digest to stderr, then records an approval once the human types the digest's first 8 characters; a stdin that is not a terminal is `interactive_only` and records nothing; refuses a plan changed since it was shown ([Engagement §2](../engagement/2_design.md#2-approvals)) |
 | `pulsar approvals [--account A] [--limit N]` | none | approvals newest first, each with its state |
 | `pulsar revoke ID` | none | revokes an approval; what was published under it stays |
@@ -234,6 +237,7 @@ no request schema has a credential-shaped property.
 - [ORB-13115] — Orbit: task and run id in the plugin context (ws_orbit).
 - [ORB-13138] — aligned the surfaces with the constellation standards.
 - [ORB-13727] — added `pulsar.dispatch` and the `pulsar-dispatch` routine.
+- [ORB-13730] — retired the deprecated CLI flags with usage errors in 0.2.0.
 - [ORB-13630] — moved the plugin to `.orbit-plugin/` with a checked generated runtime copy.
 - [ORB-13751] — bounded uv project discovery to the plugin root so sandboxed cold syncs succeed.
 

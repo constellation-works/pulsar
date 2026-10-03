@@ -15,7 +15,7 @@ stores what it reads.
 Python 3.12+ and [uv](https://docs.astral.sh/uv/).
 
 ```sh
-uv tool install git+https://github.com/constellation-works/pulsar@v0.1.0
+uv tool install git+https://github.com/constellation-works/pulsar@v0.2.0
 ```
 
 This puts `pulsar` on your PATH. From a checkout instead, `uv sync` and prefix each command
@@ -82,12 +82,12 @@ posts:
 `variants: {bsky: {posts: [...]}}` gives one provider its own posts.
 
 As an Orbit plugin (`pulsar.status`, `validate`, `history`; and, from tasks that require
-them, `engagements`, `metrics` and `publish`, which publishes only what a human approved with
-`pulsar approve`), install from an export of the release tag, in a clone:
+them, `engagements`, `metrics`, `publish` and `dispatch`, which publish only what a human
+approved with `pulsar approve`), install from an export of the release tag, in a clone:
 
 ```sh
-mkdir /tmp/pulsar-plugin-v0.1.0 && git archive v0.1.0 | tar -x -C /tmp/pulsar-plugin-v0.1.0
-orbit plugin add /tmp/pulsar-plugin-v0.1.0 --enable --grant 'fs={{workspace}},{{plugin_state}}' --grant network
+mkdir /tmp/pulsar-plugin-v0.2.0 && git archive v0.2.0 | tar -x -C /tmp/pulsar-plugin-v0.2.0
+orbit plugin add /tmp/pulsar-plugin-v0.2.0 --enable --grant 'fs={{workspace}},{{plugin_state}}' --grant network
 orbit pulsar status
 ```
 
@@ -100,6 +100,11 @@ The plugin's home is `~/.orbit/state/plugins/pulsar/home`; point the CLI at it w
 (daily offline account check), `engager` (daily mention summary and reply drafts),
 `post-proposer` (weekly post drafts from metrics), `weekly-report` and `x-updates` (drafts
 for new constellation-works releases, repos and PRs, each under a key that posts once).
+
+It also seeds the disabled `pulsar-dispatch` routine: every five minutes, with no model,
+it reconciles unknown writes and publishes approved plans whose `not_before` has come.
+Set `[dispatch] plans = ["x-updates/**/*.yaml", "engagement/**/*.yaml"]` in the plugin's
+`config.toml`, approve the plans with `pulsar approve`, then enable the routine in Orbit.
 
 ## Documentation
 

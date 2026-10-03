@@ -46,7 +46,13 @@ def register(commands: toolkit.Commands) -> None:
         help=f"audit label recorded in the ledger; default: $PULSAR_CALLER, else {CLI_CALLER}",
     )
     p_pub.add_argument("--confirm", action="store_true", help="actually publish (costs money)")
-    p_pub.add_argument("--yes", action="store_true", help="deprecated alias of --confirm")
+    p_pub.add_argument(
+        "--yes",
+        action=toolkit.RemovedFlag,
+        nargs=0,
+        const="use --confirm",
+        help=argparse.SUPPRESS,
+    )
     p_pub.set_defaults(func=_publish)
 
 
@@ -59,8 +65,6 @@ def _validate(args: argparse.Namespace, ctx: toolkit.Context) -> int:
 
 
 def _publish(args: argparse.Namespace, ctx: toolkit.Context) -> int:
-    if args.yes:
-        toolkit.notice("--yes is deprecated; use --confirm")
     return toolkit.emit(
         asyncio.run(
             ctx.app.publish(
@@ -68,7 +72,7 @@ def _publish(args: argparse.Namespace, ctx: toolkit.Context) -> int:
                 account=args.account,
                 idempotency_key=args.idempotency_key,
                 caller=args.caller,
-                confirm=args.confirm or args.yes,
+                confirm=args.confirm,
             )
         ),
         ctx,

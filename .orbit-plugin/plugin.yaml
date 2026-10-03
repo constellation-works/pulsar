@@ -2,9 +2,9 @@ schemaVersion: 2
 kind: Plugin
 metadata:
   name: pulsar
-  version: 0.1.0
+  version: 0.2.0
   description: >-
-    Publish to social accounts (X today) through one ledger: plan digests, human
+    Publish to X and Bluesky accounts through one ledger: plan digests, human
     approvals, budgets, idempotent retries and reconcile; read the account's mentions
     and post metrics for engagement. Credentials stay in the plugin's state.
   homepage: https://github.com/constellation-works/pulsar

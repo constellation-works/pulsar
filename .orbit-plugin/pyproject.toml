@@ -1,7 +1,7 @@
 [project]
 name = "pulsar"
-version = "0.1.0"
-description = "X (Twitter) write connector — MCP server that posts as a human-authorized X account"
+version = "0.2.0"
+description = "Social write connector — publish to human-authorized X and Bluesky accounts"
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "MIT" }

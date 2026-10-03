@@ -18,7 +18,14 @@ from .errors import (
     print_error,
     print_usage_error,
 )
-from .parser import ACCOUNT_DEFAULT, ACCOUNT_HELP, CommandParser, Commands, global_options
+from .parser import (
+    ACCOUNT_DEFAULT,
+    ACCOUNT_HELP,
+    CommandParser,
+    Commands,
+    RemovedFlag,
+    global_options,
+)
 from .render import ModeConflict, json_requested, resolve_mode, resolve_terminal
 
 __all__ = [
@@ -41,6 +48,7 @@ __all__ = [
     "ACCOUNT_HELP",
     "CommandParser",
     "Commands",
+    "RemovedFlag",
     "global_options",
     # render
     "ModeConflict",

@@ -282,3 +282,45 @@ tests:
       skipped: []
       errors: []
       note: 'no plan location is configured: set [dispatch] plans (workspace-relative globs) in config.toml in the pulsar home'
+- name: validate_a_020_release_plan_for_x_and_bluesky
+  tool: validate
+  input:
+    plan:
+      accounts:
+      - x:constworks
+      - bsky:constworks.bsky.social
+      text: 'pulsar 0.2.0 is out: https://example.com/notes'
+  expect:
+    output:
+      valid: true
+      accounts:
+      - account: bsky:constworks.bsky.social
+        provider: bsky
+        digest: sha256:9c064988a027dc2ebc359f4f9db91d948bfccda039d0f9c66c781eb007e5cd2d
+        estimated_cost_usd: 0.0
+        reply_to: null
+        quote: null
+        not_before: null
+        posts:
+        - text: 'pulsar 0.2.0 is out: https://example.com/notes'
+          length: 46
+          max_length: 300
+          has_url: true
+          estimated_cost_usd: 0.0
+          media: []
+        pricing_note: from the configured price table; verify on the provider's portal
+      - account: x:constworks
+        provider: x
+        digest: sha256:9c064988a027dc2ebc359f4f9db91d948bfccda039d0f9c66c781eb007e5cd2d
+        estimated_cost_usd: 0.2
+        reply_to: null
+        quote: null
+        not_before: null
+        posts:
+        - text: 'pulsar 0.2.0 is out: https://example.com/notes'
+          length: 44
+          max_length: 280
+          has_url: true
+          estimated_cost_usd: 0.2
+          media: []
+        pricing_note: from the configured price table; verify on the provider's portal
