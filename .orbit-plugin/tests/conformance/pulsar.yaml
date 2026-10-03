@@ -11,6 +11,7 @@ tests:
     output:
       default_account: null
       healthy: false
+      ready: false
       attention:
       - no account is bound (`pulsar auth login --account x:<handle>`)
       accounts: []

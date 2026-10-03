@@ -11,7 +11,7 @@ summary: The MCP tools and the caller boundary, the operator CLI, and how the Or
 tags: [surfaces, mcp, cli, orbit-plugin]
 paths: ["src/pulsar/**", ".orbit-plugin/**"]
 related_features: [publishing, accounts]
-related_artifacts: [ORB-13029, ORB-13032, ORB-13114, ORB-13115, ORB-13138, ORB-13727, ORB-13730, ORB-13751]
+related_artifacts: [ORB-13029, ORB-13032, ORB-13114, ORB-13115, ORB-13138, ORB-13727, ORB-13730, ORB-13751, ORB-13772]
 ---
 
 # Surfaces — Design
@@ -144,13 +144,32 @@ money:
 
 | Tool | CLI | Output |
 |---|---|---|
-| `pulsar.status` | `orbit pulsar status` | per account: `health` (`healthy`, `unverified`, `unhealthy`, offline), budget and cap use, unresolved writes, last publication; `healthy` and `attention` |
+| `pulsar.status` | `orbit pulsar status` | per account: `health` (`healthy`, `unverified`, `unhealthy`, offline), budget and cap use, unresolved writes, last publication; `healthy`, `ready`, `attention`, effective `default_account` |
 | `pulsar.validate` | `orbit pulsar validate PLAN.yaml` | inline `plan` or workspace `source`; `{valid: true, accounts}` (for a `source`, each with its `approve_command`) or `{valid: false, error}` |
 | `pulsar.history` | `orbit pulsar history` | newest ledger rows flattened for a table (`limit` 1–100), with `total` and `truncated`; `keys` (1–100) returns the rows held under those idempotency keys instead, however old |
 | `pulsar.engagements` | — | others' posts mentioning the account (`hours` 1–168, `limit` 1–100), each with `replied`; a paid read |
 | `pulsar.metrics` | — | the account's own posts (`days` 1–30, `limit` 1–100) with their metrics and `totals`; a paid read |
 | `pulsar.publish` | — | publishes a workspace plan `source` under a human approval of each account's digest; `dry_run` checks only |
 | `pulsar.dispatch` | — | reconciles unknown writes, then publishes the approved, due plans `[dispatch] plans` matches (`max_publish` 1–10); `dry_run` reports only |
+
+`status.ready` gates the explicit `account`, else the effective `default_account`:
+the configured default, else the sole non-revoked bound account. With zero or several
+bound accounts and no configured default, `default_account` stays null and `ready` is
+false; account-less validate and publish still return their existing account-selection
+errors. Filtering status by `account` does not change the reported default.
+`ready` is false for an unhealthy selected account, its unresolved writes, or any legacy
+credentials awaiting migration. An unrelated account's health or unresolved writes do
+not block the selected account. `healthy` still summarises every reported account with
+no attention, and `health` remains three-valued. Unverified health can be `ready: true`:
+the first authorized live call settles identity or token refresh. This is local evidence,
+not proof that refresh will succeed, and no approval, budget, cap or quiet-hours check is
+bypassed. An unregistered configured default cannot be ready.
+
+The engager, post-proposer, weekly-report and x-updates templates and the publishing
+skill gate on `ready` and stop with the returned error and attention if a later live
+call fails with `auth_expired` or `reauth_required`. The auth-health helper suppresses
+only routine expiry with a stored refresh token and matching cached identity; other
+unverified reasons still raise human attention ([Accounts §8](../accounts/2_design.md#8-offline-auth-health-alarm)).
 
 The first three are `execution_kind: read_only` and read the home without writing to it. The
 last four are `mutating`, so Orbit lets an agent call them only from a task whose
@@ -240,5 +259,6 @@ no request schema has a credential-shaped property.
 - [ORB-13730] — retired the deprecated CLI flags with usage errors in 0.2.0.
 - [ORB-13630] — moved the plugin to `.orbit-plugin/` with a checked generated runtime copy.
 - [ORB-13751] — bounded uv project discovery to the plugin root so sandboxed cold syncs succeed.
+- [ORB-13772] — added the selected-account readiness gate and effective default and migrated scheduled callers and the publishing skill.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

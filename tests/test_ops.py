@@ -56,10 +56,38 @@ async def test_validate_needs_no_credentials(paths, tmp_path):
     assert code == 0 and out["accounts"][0]["account"] == ALIAS
 
 
-async def test_validate_binds_a_plan_without_accounts_to_the_default(paths, authed, tmp_path):
+async def test_validate_binds_a_plan_without_accounts_to_the_sole_account(paths, authed, tmp_path):
+    assert not paths.settings_file.exists()
     bare = await make_app(paths).validate(_plan(tmp_path, 'text: "hello"'))
     named = await make_app(paths).validate(_plan(tmp_path, 'account: x:constworks\ntext: "hello"'))
+    assert bare[0]["accounts"][0]["account"] == ALIAS
     assert bare[0]["accounts"][0]["digest"] == named[0]["accounts"][0]["digest"]
+
+
+async def test_publish_binds_an_accountless_plan_to_the_sole_account(
+    paths, authed, fake_x, tmp_path
+):
+    assert not paths.settings_file.exists()
+    out, code = await make_app(paths, transport=fake_x.transport()).publish(
+        _plan(tmp_path, 'text: "hello"'), confirm=True
+    )
+    assert code == 0 and out["results"][0]["account"] == ALIAS
+    assert len(fake_x.calls("POST", "/tweets")) == 1
+
+
+@pytest.mark.parametrize("count,expected", [(0, "auth_expired"), (2, "invalid_argument")])
+@pytest.mark.parametrize("operation", ["validate", "publish"])
+async def test_accountless_plans_still_refuse_zero_or_several_accounts(
+    paths, bundle, fake_x, tmp_path, count, expected, operation
+):
+    if count:
+        register(paths, bundle, ALIAS)
+        register(paths, bundle, "x:other")
+    app = make_app(paths, transport=fake_x.transport())
+    with pytest.raises(PulsarError) as exc:
+        await getattr(app, operation)(_plan(tmp_path, 'text: "hello"'))
+    assert exc.value.code == expected
+    assert fake_x.requests == []
 
 
 async def test_validate_refuses_an_account_outside_the_plan(paths, authed, tmp_path):

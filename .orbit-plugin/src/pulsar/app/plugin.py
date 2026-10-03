@@ -84,7 +84,10 @@ async def status(rt: Runtime, *, account: str | None) -> Output:
     """Accounts, token health, budget use, unresolved writes, last publication.
 
     Token health comes from local state (``unverified`` when that cannot
-    settle it); nothing is migrated or written.
+    settle it); nothing is migrated or written. ``ready`` gates the selected
+    account (explicit, else effective default): unverified health can be
+    settled by the first live call, but known failures and unresolved writes
+    block it. Legacy credentials block every account until migration.
     """
     home = rt.paths.home
     auth, _ = await auth_report(rt, account=account)
@@ -127,9 +130,21 @@ async def status(rt: Runtime, *, account: str | None) -> Output:
     if auth["legacy"] is not None:
         remedy = auth["legacy"]["message"] or f"run `{home_command(home, 'migrate --confirm')}`"
         attention.append(f"legacy credentials: {remedy}")
+    selected = (
+        accounts[0]
+        if account is not None
+        else next((row for row in accounts if row["alias"] == auth["default_account"]), None)
+    )
+    ready = (
+        selected is not None
+        and selected["health"] != "unhealthy"
+        and not selected["unresolved"]
+        and auth["legacy"] is None
+    )
     return {
         "default_account": auth["default_account"],
         "healthy": not attention,
+        "ready": ready,
         "attention": attention,
         "accounts": accounts,
     }

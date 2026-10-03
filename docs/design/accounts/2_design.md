@@ -11,7 +11,7 @@ summary: X and Bluesky logins with identity check, encrypted per-account bundles
 tags: [accounts, auth, oauth, credentials, storage, bluesky, dpop]
 paths: ["src/pulsar/app/core/account/registry.py", "src/pulsar/app/core/account/store.py", "src/pulsar/app/core/account/clients.py", "src/pulsar/app/core/channels/credentials.py", "src/pulsar/app/core/channels/loopback.py", "src/pulsar/app/login.py", "src/pulsar/internal/fs/paths.py", "src/pulsar/internal/fs/files.py", "src/pulsar/app/core/channels/x/auth.py", "src/pulsar/app/core/channels/x/client.py", "src/pulsar/app/core/channels/bluesky/auth.py", "src/pulsar/app/core/channels/bluesky/client.py", "src/pulsar/cli/commands/auth.py"]
 related_features: [publishing, surfaces]
-related_artifacts: [ORB-13008, ORB-13009, ORB-13027, ORB-13028, ORB-13031, ORB-13039, ORB-13138, ORB-13279, ORB-13725, ORB-13729, ORB-13730]
+related_artifacts: [ORB-13008, ORB-13009, ORB-13027, ORB-13028, ORB-13031, ORB-13039, ORB-13138, ORB-13279, ORB-13725, ORB-13729, ORB-13730, ORB-13772]
 ---
 
 # Accounts — Design
@@ -129,6 +129,10 @@ Bluesky login, else the loopback client.
 A call that names no `account` acts as `default_account`, else as the only bound (not revoked)
 account. With several bound and no default it is `invalid_argument`; an unregistered alias is
 `unknown_account` with `detail.known`.
+With none bound it is `auth_expired`. Account-less plans resolve to this same account
+in validate and publish, so their digest includes the selected alias. Status reports this
+effective default without creating or changing `config.toml`; revoked rows do not count
+toward the sole-account fallback.
 
 Before every write the bound handle must equal the alias's handle and, when set,
 `expected_handle` ([account/registry.py](../../../src/pulsar/app/core/account/registry.py) `check_handle`,
@@ -171,6 +175,15 @@ account is `healthy`.
 Cached identity is tagged with the `binding_id` it was fetched under, so after a re-login it
 is ignored until `/users/me` has been asked again, even if a lookup started before the
 re-login finishes after it.
+
+The Orbit tool also reports `ready`, an offline gate for its explicit `account`, else the
+effective default. It is false when no account can be selected, the selected account is
+unhealthy or has unresolved writes, or legacy credentials await migration. Unverified
+health may proceed: the first authorized live call verifies identity or refreshes the token
+under the existing lock. `healthy` still requires healthy accounts with no attention;
+routine access-token expiry can therefore return `healthy: false` and `ready: true`.
+Readiness does not prove a refresh will succeed or admit a publish past approval or policy.
+Callers stop and record a later `auth_expired` or `reauth_required` error for human attention.
 
 ## 5. Refresh
 
@@ -274,12 +287,20 @@ Its daily schedule is `0 8 * * *` in Orbit's scheduler timezone. It requires exa
 publish or approval. The template carries `no-diff-expected`; it writes no files.
 Its evidence lives in the execution summary and follow-up task state.
 
-Healthy accounts raise nothing. For each unverified or unhealthy account the executor
+Healthy accounts and routine access-token expiry raise nothing. Routine expiry requires
+an active, authorized account with `reauth_required: false`, `token_state: expired` and
+the exact reason `the access token has expired and the refresh was not exercised`.
+That reason is emitted only with a matching identity cached for the stored binding;
+token expiry alone does not suppress an alarm. The next authorized live call handles
+refresh, so the alarm never exercises it or files a verification task for this state.
+
+For each other unverified or unhealthy account the executor
 uses the publishing skill's [offline planner](../../../.orbit-plugin/skills/publish/scripts/auth_health.py)
 on the status output and a complete Orbit task-list envelope. The helper returns
 arguments for proposed human attention tasks, copying `alias`, `health`, `token_state`,
 `reason`, `reauth_required` and the account's exact returned `attention` text. An
-**unverified** account gets a medium-priority **Verify** task: the human runs the returned
+**unverified** account (including no cached identity or a failed live check) gets a
+medium-priority **Verify** task: the human runs the returned
 `PULSAR_HOME=<home> pulsar auth status --live --account <alias>` to exercise refresh and
 prove identity. **Re-authorization required** gets a high-priority **Re-authorize** task
 with the returned `PULSAR_HOME=<home> pulsar auth login --account <alias>`. Other unhealthy
@@ -343,5 +364,6 @@ migration alone does not create an account alarm when account health is healthy.
 - [ORB-13725] — added the disabled daily offline auth-health alarm and per-account human follow-ups.
 - [ORB-13729] — added the Bluesky login (atproto OAuth with PAR, PKCE and DPoP) and its stored DPoP key.
 - [ORB-13730] — retired `auth status --offline` with replacement guidance in 0.2.0.
+- [ORB-13772] — separated offline readiness from health, reported the effective sole-account default, and suppressed routine-expiry alarms.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

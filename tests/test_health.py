@@ -87,6 +87,14 @@ async def test_every_entry_has_every_key(paths, bundle, fake_x):
     assert set(out) == {"home", "client_id", "default_account", "legacy", "accounts"}
 
 
+async def test_auth_status_reports_the_effective_default_without_writing_config(paths, bundle):
+    _verified(paths, bundle)
+    register(paths, None, "x:revoked", status="revoked")
+    out, _ = await make_app(paths).auth_status()
+    assert out["default_account"] == ALIAS
+    assert not paths.settings_file.exists(), "the sole-account fallback is only a report"
+
+
 async def test_the_default_report_writes_nothing(paths, bundle):
     _verified(paths, bundle, status="reauth_required")
     before = _snapshot(paths.home)

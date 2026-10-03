@@ -21,8 +21,11 @@ import pytest
 import yaml
 
 from pulsar.app import ops, plugin
+from pulsar.app.core.account import FernetFileStore
+from pulsar.app.core.ledger import SqliteLedger
 from pulsar.app.facade import LocalApp
 from pulsar.app.runtime import default_paths
+from pulsar.internal.errors import OutcomeUnknown
 from pulsar.internal.fs import Paths
 from pulsar.main import main as pulsar_main
 from pulsar.orbit import backend as orbit_tool
@@ -31,6 +34,7 @@ from .conftest import ALIAS, SECRETS, make_app, register
 from .fake_bsky import DID as BSKY_DID
 from .fake_bsky import HANDLE as BSKY_HANDLE
 from .media_samples import PNG
+from .test_ledger import claim_plan
 from .test_server import SECRET_PARAM
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -297,6 +301,7 @@ def test_status_reports_a_bound_account_without_its_credentials(state, home, bun
     assert account["posts"] == {"used": 0, "cap": 5, "remaining": 5}
     assert account["unresolved"] == [] and account["last_published"] is None
     assert out["healthy"] is True and out["attention"] == []
+    assert out["ready"] is True and out["default_account"] == ALIAS
 
 
 def test_status_reports_a_bluesky_account_like_an_x_one_without_its_key(
@@ -326,6 +331,7 @@ def test_status_asks_for_a_login_when_the_token_is_gone(state, home, workspace):
     register(home, None, ALIAS)
     out = run(state, workspace, "status")["output"]
     assert out["healthy"] is False
+    assert out["ready"] is False
     assert out["attention"] == [
         f"{ALIAS}: re-authorization required (`PULSAR_HOME={home.home} pulsar auth login "
         f"--account {ALIAS}`)"
@@ -340,7 +346,139 @@ def test_status_says_when_offline_health_is_unverified(state, home, bundle, work
     [account] = out["accounts"]
     assert account["health"] == "unverified" and account["healthy"] is False
     assert out["healthy"] is False
+    assert out["ready"] is True, "the first authorized live call can verify identity"
     assert "--live" in out["attention"][0]
+
+
+def test_routine_expiry_is_ready_but_not_healthy_and_never_refreshes(
+    state, home, bundle, workspace, fake_x
+):
+    register(home, replace(bundle, expires_at=0), ALIAS, handle="constworks", provider_user_id="1")
+    before = {p: p.stat().st_mtime_ns for p in home.home.rglob("*")}
+    out = run(state, workspace, "status", transport=fake_x.transport())["output"]
+    [entry] = out["accounts"]
+    assert entry["health"] == "unverified" and entry["token_state"] == "expired"
+    assert entry["reauth_required"] is False
+    assert out["ready"] is True and out["healthy"] is False
+    assert out["default_account"] == ALIAS and out["attention"]
+    assert fake_x.requests == []
+    assert {p: p.stat().st_mtime_ns for p in home.home.rglob("*")} == before
+
+
+@pytest.mark.parametrize(
+    "failure", ["reauth_required", "revoked", "no_refresh", "mismatch", "unreadable"]
+)
+def test_ready_blocks_known_auth_failures(state, home, bundle, workspace, fake_x, failure):
+    store = register(
+        home,
+        replace(bundle, refresh_token="") if failure == "no_refresh" else bundle,
+        ALIAS,
+        handle="someone-else" if failure == "mismatch" else "constworks",
+        provider_user_id="1",
+        status=failure if failure in ("reauth_required", "revoked") else "active",
+    )
+    if failure == "unreadable":
+        store.token_file.write_bytes(b"corrupt fixture ciphertext")
+    out = run(state, workspace, "status", {"account": ALIAS}, transport=fake_x.transport())[
+        "output"
+    ]
+    assert out["ready"] is False and out["healthy"] is False
+    assert out["accounts"][0]["health"] == "unhealthy"
+    assert fake_x.requests == []
+
+
+def test_ready_blocks_unresolved_writes_for_the_selected_account(state, home, bundle, workspace):
+    register(home, bundle, ALIAS, handle="constworks", provider_user_id="1")
+    ledger = SqliteLedger(home)
+    claim_plan(ledger, "lost", n=1)
+    ledger.begin_item("lost", 0)
+    ledger.item_unknown("lost", 0, OutcomeUnknown("ReadTimeout"))
+    ledger.finish("lost")
+    out = run(state, workspace, "status")["output"]
+    assert out["ready"] is False and out["healthy"] is False
+    assert out["accounts"][0]["health"] == "healthy"
+    assert out["accounts"][0]["unresolved"] == ["lost"]
+
+
+def test_ready_blocks_legacy_credentials_even_with_a_healthy_default(
+    state, home, bundle, workspace
+):
+    register(home, bundle, ALIAS, handle="constworks", provider_user_id="1")
+    FernetFileStore(home).save(bundle)
+    out = run(state, workspace, "status")["output"]
+    assert out["accounts"][0]["health"] == "healthy"
+    assert out["ready"] is False and out["healthy"] is False
+    assert any(note.startswith("legacy credentials:") for note in out["attention"])
+    assert home.token_file.exists(), "status never migrates"
+
+
+@pytest.mark.parametrize("count,default", [(0, None), (1, ALIAS), (2, None)])
+def test_status_reports_the_effective_default(state, home, bundle, workspace, count, default):
+    for alias in [ALIAS, "x:other"][:count]:
+        register(home, bundle, alias, handle=alias.split(":")[1], provider_user_id="1")
+    out = run(state, workspace, "status")["output"]
+    assert out["default_account"] == default
+    assert out["ready"] is (count == 1)
+    assert not home.settings_file.exists()
+
+
+def test_ready_uses_the_configured_default_or_explicit_account(state, home, bundle, workspace):
+    register(
+        home, bundle, ALIAS, handle="constworks", provider_user_id="1", status="reauth_required"
+    )
+    register(home, bundle, "x:other", handle="other", provider_user_id="2")
+    ledger = SqliteLedger(home)
+    claim_plan(ledger, "lost", n=1)
+    ledger.begin_item("lost", 0)
+    ledger.item_unknown("lost", 0, OutcomeUnknown("ReadTimeout"))
+    ledger.finish("lost")
+    home.settings_file.write_text('default_account = "x:other"\n')
+    home.settings_file.chmod(0o600)
+    out = run(state, workspace, "status")["output"]
+    assert out["default_account"] == "x:other"
+    assert out["ready"] is True and out["healthy"] is False
+    selected = run(state, workspace, "status", {"account": "X:@ConstWorks"})["output"]
+    assert selected["ready"] is False and selected["default_account"] == "x:other"
+
+
+def test_accountless_plugin_plans_use_the_sole_account_and_still_need_approval(
+    state, home, bundle, workspace, fake_x
+):
+    register(home, bundle, ALIAS, handle="constworks", provider_user_id="1")
+    assert not home.settings_file.exists()
+    bare = run(state, workspace, "validate", {"plan": {"text": "hello"}})["output"]
+    named = run(state, workspace, "validate", {"plan": {"account": ALIAS, "text": "hello"}})[
+        "output"
+    ]
+    assert bare == named and bare["accounts"][0]["account"] == ALIAS
+    (workspace / "plan.yaml").write_text('text: "hello"\n')
+    response = run(
+        state,
+        workspace,
+        "publish",
+        {"source": "plan.yaml", "dry_run": True},
+        transport=fake_x.transport(),
+    )
+    assert response["error"]["code"] == "approval_required"
+    assert response["error"]["detail"]["account"] == ALIAS
+    assert response["error"]["detail"]["digest"] == bare["accounts"][0]["digest"]
+    assert fake_x.requests == []
+
+
+@pytest.mark.parametrize("count,expected", [(0, "auth_expired"), (2, "invalid_argument")])
+@pytest.mark.parametrize("tool", ["validate", "publish"])
+def test_accountless_plugin_plans_still_require_an_unambiguous_account(
+    state, home, bundle, workspace, fake_x, count, expected, tool
+):
+    for alias in [ALIAS, "x:other"][:count]:
+        register(home, bundle, alias)
+    (workspace / "plan.yaml").write_text('text: "hello"\n')
+    request = {"source": "plan.yaml"}
+    if tool == "publish":
+        request["dry_run"] = True
+    response = run(state, workspace, tool, request, transport=fake_x.transport())
+    assert response["error"]["code"] == expected
+    assert fake_x.requests == []
 
 
 def test_status_changes_nothing_on_disk(state, home, bundle, workspace):
@@ -539,6 +677,30 @@ AUTH_HEALTH = PLUGIN / "definitions" / "auto_tasks" / "auth-health.yaml"
 AUTH_PLANNER = PLUGIN / "skills" / "publish" / "scripts" / "auth_health.py"
 
 
+@pytest.mark.parametrize("name", ["engager", "post-proposer", "weekly-report", "x-updates"])
+def test_scheduled_callers_gate_on_ready_and_stop_on_live_auth_failure(name):
+    description = yaml.safe_load(
+        (PLUGIN / "definitions" / "auto_tasks" / f"{name}.yaml").read_text()
+    )["template"]["description"]
+    assert "`ready` is false" in description
+    assert "`healthy` is false" not in description
+    assert "`auth_expired` or `reauth_required`" in description
+    assert "stop and record its error and attention" in description
+
+
+def test_publish_skill_uses_ready_for_drafting_and_publishing():
+    skill = (PLUGIN / "skills" / "publish" / "SKILL.md").read_text()
+    assert (
+        "`ready` is false"
+        in skill.split("## Draft and validate")[1].split("## Approve, then publish")[0]
+    )
+    assert (
+        "`ready` is false" in skill.split("## Approve, then publish")[1].split("## Error codes")[0]
+    )
+    assert "`healthy` is false" not in skill
+    assert "`auth_expired` or `reauth_required`" in " ".join(skill.split())
+
+
 def test_auth_health_definition_is_a_disabled_daily_offline_alarm():
     definition = yaml.safe_load(AUTH_HEALTH.read_text())
     assert definition["enabled"] is False
@@ -567,15 +729,29 @@ def auth_health_plan(status, workspace, tasks=None):
     return json.loads(result.stdout)
 
 
-@pytest.mark.parametrize("health", ["healthy", "unverified", "reauth_required"])
+@pytest.mark.parametrize(
+    "health",
+    [
+        "healthy",
+        "routine_expiry",
+        "unverified",
+        "unverified_expired",
+        "reauth_required",
+        "mismatch",
+    ],
+)
 def test_auth_health_plans_human_followups_from_offline_status(
     state, home, bundle, workspace, fake_x, health
 ):
     register(
         home,
-        replace(bundle, expires_at=0) if health == "unverified" else bundle,
+        replace(bundle, expires_at=0)
+        if health in ("routine_expiry", "unverified_expired")
+        else bundle,
         ALIAS,
-        handle="constworks",
+        handle=None
+        if health in ("unverified", "unverified_expired")
+        else ("impostor" if health == "mismatch" else "constworks"),
         provider_user_id="1",
         status="reauth_required" if health == "reauth_required" else "active",
     )
@@ -583,7 +759,7 @@ def test_auth_health_plans_human_followups_from_offline_status(
     status = run(state, workspace, "status", transport=fake_x.transport())["output"]
     result = auth_health_plan(status, workspace)
     assert result["updates"] == result["skipped"] == []
-    if health == "healthy":
+    if health in ("healthy", "routine_expiry"):
         assert result["followups"] == []
     else:
         [followup] = result["followups"]
@@ -592,17 +768,21 @@ def test_auth_health_plans_human_followups_from_offline_status(
         assert status["attention"][0] in followup["description"]
         for key in ("alias", "health", "token_state", "reason", "reauth_required"):
             assert f"- {key}: {json.dumps(account[key])}" in followup["description"]
-        if health == "unverified":
-            assert account["token_state"] == "expired" and account["reauth_required"] is False
+        if health in ("unverified", "unverified_expired"):
+            assert account["reauth_required"] is False
+            assert account["reason"] == "no identity cached for the stored credentials"
             assert "unverified" in followup["title"]
             assert followup["priority"] == "medium"
             assert f"auth status --live --account {ALIAS}" in followup["description"]
             assert "pulsar auth login" not in followup["description"]
-        else:
+        elif health == "reauth_required":
             assert "reauth_required" in followup["title"]
             assert followup["priority"] == "high"
             assert f"pulsar auth login --account {ALIAS}" in followup["description"]
-        assert f"PULSAR_HOME={home.home}" in followup["description"]
+        else:
+            assert "Repair" in followup["title"] and followup["priority"] == "medium"
+        if health != "mismatch":  # Mismatches return a reason, not a terminal command.
+            assert f"PULSAR_HOME={home.home}" in followup["description"]
         assert f"pulsar-auth-health:{ALIAS}" in followup["tags"]
         assert "no-diff-expected" in followup["tags"]
         assert followup["required_tools"] == ["pulsar.status"]
@@ -610,6 +790,21 @@ def test_auth_health_plans_human_followups_from_offline_status(
     assert fake_x.requests == [], "the alarm must never call X"
     assert {p: p.stat().st_mtime_ns for p in state.rglob("*")} == before
     assert list(workspace.iterdir()) == [], "the alarm delivers no files"
+
+
+@pytest.mark.parametrize(
+    "reason", ["the live check could not run: rate limited", "another unverified reason"]
+)
+def test_auth_health_does_not_suppress_other_unverified_reasons_with_an_expired_token(
+    state, home, bundle, workspace, reason
+):
+    register(home, replace(bundle, expires_at=0), ALIAS, handle="constworks", provider_user_id="1")
+    status = run(state, workspace, "status")["output"]
+    status["accounts"][0]["reason"] = reason
+    status["attention"] = [f"{ALIAS}: not verified offline ({reason}); human verification needed"]
+    [followup] = auth_health_plan(status, workspace)["followups"]
+    assert "Verify" in followup["title"] and followup["priority"] == "medium"
+    assert reason in followup["description"]
 
 
 @pytest.mark.parametrize(
