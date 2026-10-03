@@ -11,7 +11,7 @@ summary: How a plan is normalised and digested, how the publisher admits, claims
 tags: [publishing, plan, ledger, idempotency, policy, reconcile]
 paths: ["src/pulsar/app/core/publishing/plan.py", "src/pulsar/app/core/publishing/publisher.py", "src/pulsar/app/core/ledger/**", "src/pulsar/app/core/publishing/policy.py", "src/pulsar/app/core/ledger/usage.py", "src/pulsar/internal/guard/scanner.py", "src/pulsar/app/core/publishing/media.py", "src/pulsar/app/importer.py", "src/pulsar/app/writelog.py"]
 related_features: [accounts, channels, surfaces]
-related_artifacts: [ORB-13027, ORB-13028, ORB-13030, ORB-13039, ORB-13726, ORB-13746]
+related_artifacts: [ORB-13027, ORB-13028, ORB-13030, ORB-13039, ORB-13726, ORB-13746, ORB-13775]
 ---
 
 # Publishing — Design
@@ -189,8 +189,20 @@ The routine itself is now the plugin's `x-updates` auto-task
 `pulsar-x-updates`, disabled; [Engagement — Design §4](../engagement/2_design.md#4-auto-tasks)).
 It drafts and never publishes, and keeps the routine's keys, so imported history dedupes it:
 
-1. `gh`, read-only, lists constellation-works releases, newly public repositories and notable
-   merged pull requests of the last 7 days.
+1. The helper (`scan`) checks `gh auth status --hostname github.com`, discarding its output,
+   and prefers read-only `gh api` when authenticated; otherwise standard-library `urllib`
+   reads unauthenticated public REST over HTTPS at `api.github.com`, without accepting,
+   reading or passing a token. Both use public organisation repositories (excluding archived
+   ones), releases only for repos pushed in the window, one `is:public` merged-PR search
+   query, and public organisation events. Pagination never follows server-supplied URLs.
+   The window is at most 7 days; candidate shapes and editorial notability rules stay the
+   same. The agent excludes dependency bumps, CI, docs-only changes, refactors, reverts,
+   automated sweeps and PRs already covered by a release candidate.
+   A scan returns its source, window, request count, candidates and `partial`/`error`.
+   It caps requests at 60 and stops on exhausted limits (including HTTP 403/429 with
+   `X-RateLimit-Remaining: 0`), HTTP/network failures, invalid metadata, incomplete search,
+   GitHub's 300-event ceiling, or more than 100 candidates. A partial scan records why
+   and drafts nothing; only a complete empty scan may report nothing new.
 2. The skill helper [x_updates.py](../../../.orbit-plugin/skills/publish/scripts/x_updates.py)
    turns each into its key (`keys`). `pulsar.history` with `keys` returns the rows held under
    them, however old, imported ones included.
@@ -226,6 +238,10 @@ and continues without changing its key. Such a receipt has no publication URL.
 - **A root is a path, not an inode.** The open refuses a symlink anywhere on the resolved
   path, but a real directory renamed onto the root (which needs write access to its parent)
   is the root from then on.
+- **Public GitHub scans are bounded.** Unauthenticated requests share the host IP
+  rate limit, search can be incomplete, and GitHub exposes at most 300 recent events.
+  The helper stops with a partial scan rather than treating missing coverage as nothing new;
+  releases are queried only for repositories pushed within the window.
 - **Dedupe before drafting is by key only.** The helper cannot see an announcement made by
   hand under no key, or by a plan under a different key; the ledger stops a second post only
   for the same key.
@@ -241,5 +257,6 @@ and continues without changing its key. Such a receipt has no publication URL.
 - [ORB-13039] — took the plan claim off the event loop; closed the media-root swap race.
 - [ORB-13726] — plan `key`, `pulsar.history` `keys`, and the x-updates auto-task.
 - [ORB-13746] — made draft filenames injective and terminal receipts replay before policy checks.
+- [ORB-13775] — added unauthenticated public GitHub scanning and explicit partial-scan stops.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

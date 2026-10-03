@@ -61,6 +61,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **x-updates public GitHub fallback.** Scans prefer authenticated `gh` and otherwise
+  use unauthenticated public REST without extra credentials or grants. Rate limits and
+  network failures report a partial scan and stop drafting instead of reporting nothing new.
 - **Scheduled token expiry.** The auto-tasks and publishing skill gate on readiness so
   routine access-token expiry with a stored refresh token can reach the first authorized
   live call. Auth-health no longer files verification tasks for that state with a matching

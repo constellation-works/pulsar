@@ -909,6 +909,15 @@ def test_x_updates_definition_drafts_keyed_plans_and_never_publishes():
     for key in ("release:<repo>:<tag>", "repo:<name>", "pr:<repo>:<n>"):
         assert key in description
     assert "scripts/x_updates.py" in description and X_PLANNER.is_file()
+    assert "x_updates.py scan" in description and "gh auth status" in description
+    assert "unauthenticated public REST" in description and "partial" in description
+    assert (
+        "read-only scan (gh, or unauthenticated public REST)" in template["acceptance_criteria"][0]
+    )
+    assert (
+        "Leave out dependency bumps, CI, docs-only, refactors, reverts, automated sweeps"
+        in description
+    )
     assert "`keys`" in description, "the ledger lookup goes through pulsar.history keys"
     assert "no file" in description.lower(), "nothing new writes no file (ORB-13375)"
     plan = re.search(r"```yaml\n(.*?)```", description, re.S)

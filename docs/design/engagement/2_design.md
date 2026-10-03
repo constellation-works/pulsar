@@ -11,7 +11,7 @@ summary: How a read is budgeted, made and recorded, how a mention is known to be
 tags: [engagement, reads, mentions, metrics, budget, ledger, approvals, dispatch, routines]
 paths: ["src/pulsar/app/core/engagement/**", "src/pulsar/app/approvals.py", "src/pulsar/app/core/ledger/approvals.py", "src/pulsar/cli/commands/approve.py", "src/pulsar/app/core/channels/contract.py", "src/pulsar/app/core/ledger/reads.py", "src/pulsar/app/core/ledger/queries.py", "src/pulsar/app/plugin.py", ".orbit-plugin/definitions/**"]
 related_features: [publishing, channels, surfaces]
-related_artifacts: [ORB-13030, ORB-13375, ORB-13726, ORB-13727]
+related_artifacts: [ORB-13030, ORB-13375, ORB-13726, ORB-13727, ORB-13775]
 ---
 
 # Engagement — Design
@@ -128,7 +128,7 @@ content records, while the engager's and x-updates' follow-up tasks write nothin
 | `engager` | daily 09:00 | `pulsar.engagements`, `pulsar.status`, `pulsar.validate` | reads 24 hours of mentions (at most 20), summarises them, writes one reply plan per mention worth answering under `engagement/YYYY-MM-DD/`, validates them, leaves them uncommitted for pipeline delivery, and creates one `proposed` task requiring `pulsar.publish` that lists each draft, its digest and its approve command |
 | `post-proposer` | Fridays 16:00 | `pulsar.metrics`, `pulsar.status`, `pulsar.validate` | reads 7 days of the account's posts, drafts up to three posts as `plan.yaml` beside their content records (no `not_before`), leaves them uncommitted for pipeline delivery, and creates the same kind of proposal task; drafts nothing while three already wait |
 | `weekly-report` | Mondays 16:00 | `pulsar.history`, `pulsar.metrics`, `pulsar.status` | reports the week from `status`, `history` and one metrics read, every figure with its source and read time; leaves the report uncommitted for pipeline delivery |
-| `x-updates` | daily 10:00 | `pulsar.history`, `pulsar.status`, `pulsar.validate` | scans constellation-works with `gh` (read-only, 7 days) for releases, newly public repos and notable merged PRs; keys each (`release:<repo>:<tag>`, `repo:<name>`, `pr:<repo>:<n>`) with the skill's `x_updates.py`, skips keys `pulsar.history` `keys` finds in the ledger (imported history included) or already drafted (a plan file under `x-updates/`, an open `pulsar-x-update-posts` task); writes at most three keyed plans under `x-updates/YYYY-MM-DD/`, validates them, leaves them uncommitted, and files one proposal task; nothing new writes nothing ([Publishing — Design §8](../publishing/2_design.md#8-importing-postedjsonl-and-the-x-updates-auto-task)) |
+| `x-updates` | daily 10:00 | `pulsar.history`, `pulsar.status`, `pulsar.validate` | scans public constellation-works metadata read-only (authenticated `gh` or unauthenticated public REST, 7 days; partial scans stop before drafting) for releases, newly public repos and notable merged PRs; keys each (`release:<repo>:<tag>`, `repo:<name>`, `pr:<repo>:<n>`) with the skill's `x_updates.py`, skips keys `pulsar.history` `keys` finds in the ledger (imported history included) or already drafted (a plan file under `x-updates/`, an open `pulsar-x-update-posts` task); writes at most three keyed plans under `x-updates/YYYY-MM-DD/`, validates them, leaves them uncommitted, and files one proposal task; nothing new writes nothing ([Publishing — Design §8](../publishing/2_design.md#8-importing-postedjsonl-and-the-x-updates-auto-task)) |
 
 No auto-task requires `pulsar.publish` (a test holds this): drafting and publishing are separate
 tasks with a human between them. Plans are delivered to the workspace's main branch by the pipeline,
@@ -236,5 +236,6 @@ the backend derives from the step's context (`orbit:<agent>`, else `orbit`; a ro
 - [ORB-13375] — allow auto-task delivery on documented no-file paths while preserving file delivery.
 - [ORB-13727] — scheduled dispatch: `pulsar.dispatch` and the `pulsar-dispatch` routine.
 - [ORB-13726] — the x-updates auto-task; `pulsar.publish` honours a plan's `key`.
+- [ORB-13775] — let x-updates scan public GitHub without worker credentials.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
