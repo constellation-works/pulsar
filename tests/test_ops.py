@@ -280,3 +280,41 @@ async def test_reconcile_marks_the_account_when_its_credentials_expired(paths, b
         await make_app(paths, transport=fake_x.transport()).reconcile()
     assert exc.value.code == "auth_expired"
     assert AccountRegistry(paths).get(ALIAS).status == "reauth_required"
+
+
+async def test_publish_uses_the_plans_key_and_never_posts_it_twice(paths, authed, fake_x, tmp_path):
+    keyed = 'account: x:constworks\nkey: "release:orbit:v0.26.0"\ntext: "Orbit v0.26 is out"\n'
+    plan = _plan(tmp_path, keyed)
+    out, code = await make_app(paths, transport=fake_x.transport()).publish(plan, confirm=True)
+    assert code == 0 and out["results"][0]["idempotency_key"] == "release:orbit:v0.26.0"
+    # Another draft of the same announcement is the same key, not a second post.
+    plan.write_text(keyed.replace("is out", "has shipped"))
+    again, code = await make_app(paths, transport=fake_x.transport()).publish(plan, confirm=True)
+    assert code == 1 and again["results"][0]["error"]["code"] == "idempotency_conflict"
+    assert len(fake_x.calls("POST", "/tweets")) == 1
+
+
+async def test_publish_replays_an_imported_key_whatever_the_new_text(
+    paths, authed, fake_x, tmp_path
+):
+    await make_app(paths, transport=fake_x.transport()).import_posted(FIXTURE, confirm=True)
+    plan = _plan(tmp_path, 'account: x:constworks\nkey: "pr:example:5"\ntext: "A new draft"\n')
+    out, code = await make_app(paths, transport=fake_x.transport()).publish(plan, confirm=True)
+    [receipt] = out["results"]
+    assert code == 0 and receipt["replayed"] is True and receipt["state"] == "published"
+    assert fake_x.calls("POST", "/tweets") == []
+
+
+async def test_publish_refuses_a_key_that_differs_from_the_plans(paths, authed, fake_x, tmp_path):
+    plan = _plan(tmp_path, 'account: x:constworks\nkey: "repo:pulsar"\ntext: "hi"\n')
+    for confirm in (False, True):
+        with pytest.raises(PulsarError) as exc:
+            await make_app(paths, transport=fake_x.transport()).publish(
+                plan, confirm=confirm, idempotency_key="repo:other"
+            )
+        assert exc.value.code == "invalid_argument"
+    out, code = await make_app(paths, transport=fake_x.transport()).publish(
+        plan, confirm=True, idempotency_key="repo:pulsar"
+    )
+    assert code == 0 and out["results"][0]["idempotency_key"] == "repo:pulsar"
+    assert len(fake_x.calls("POST", "/tweets")) == 1

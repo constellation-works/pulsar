@@ -45,7 +45,7 @@ from pulsar.app.ops import HISTORY_LIMIT_DEFAULT, HISTORY_LIMIT_MAX
 from pulsar.app.runtime import PLUGIN_STATE_ENV
 from pulsar.app.settings import Settings, load_settings
 from pulsar.internal.errors import INTERNAL, INVALID_ARGUMENT, INVALID_CONFIG, PulsarError
-from pulsar.internal.fs import as_object, resolve_home
+from pulsar.internal.fs import as_list, as_object, resolve_home
 
 log = logging.getLogger(__name__)
 
@@ -58,7 +58,7 @@ PUBLISH_UPLOAD_TIMEOUT_SECONDS = 55.0
 INPUTS: dict[str, frozenset[str]] = {
     "status": frozenset({"account"}),
     "validate": frozenset({"plan", "source", "account"}),
-    "history": frozenset({"account", "limit"}),
+    "history": frozenset({"account", "limit", "keys"}),
     "engagements": frozenset({"account", "hours", "limit"}),
     "metrics": frozenset({"account", "days", "limit"}),
     "publish": frozenset({"source", "account", "dry_run"}),
@@ -84,6 +84,19 @@ class Call:
         if not isinstance(value, str) or not value.strip():
             raise PulsarError(INVALID_ARGUMENT, f"`{name}` must be a non-empty string")
         return value.strip()
+
+    def strings(self, name: str, most: int) -> list[str] | None:
+        """A list of 1..``most`` non-empty strings; None when absent."""
+        value = self.input.get(name)
+        if value is None:
+            return None
+        items = as_list(value)
+        strings = [item for item in items if isinstance(item, str) and item]
+        if not isinstance(value, list) or len(strings) != len(items) or not 1 <= len(items) <= most:
+            raise PulsarError(
+                INVALID_ARGUMENT, f"`{name}` must be a list of 1..{most} non-empty strings"
+            )
+        return strings
 
     def integer(self, name: str, limits: tuple[int, int, int]) -> int:
         """An integer input within ``limits`` (min, default, max); the default when absent."""
@@ -181,8 +194,9 @@ async def history(app: App, call: Call) -> Output:
     limit = call.input.get("limit", HISTORY_LIMIT_DEFAULT)
     if not isinstance(limit, int):
         raise PulsarError(INVALID_ARGUMENT, f"`limit` must be an integer 1..{HISTORY_LIMIT_MAX}")
+    keys = call.strings("keys", HISTORY_LIMIT_MAX)
     async with app.runtime(read_only=True) as rt:
-        return plugin.history(rt, account=account, limit=limit)
+        return plugin.history(rt, account=account, limit=limit, keys=keys)
 
 
 async def engagements(app: App, call: Call) -> Output:

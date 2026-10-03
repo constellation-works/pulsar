@@ -148,6 +148,7 @@ class Prepared:
             "reply_to": self.plan.reply_to,
             "quote": self.plan.quote,
             "not_before": self.plan.not_before.isoformat() if self.plan.not_before else None,
+            **({"key": self.plan.key} if self.plan.key is not None else {}),
             "posts": [
                 {
                     "text": p.check.text,

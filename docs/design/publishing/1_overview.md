@@ -1,7 +1,7 @@
 ---
 title: Publishing — Overview
 owner: claude
-last_updated: 2026-09-26
+last_updated: 2026-10-03
 last_validated: 2026-09-26
 status: Accepted
 feature: publishing
@@ -39,11 +39,11 @@ the account's timeline.
 
 - **Plan.** A provider-neutral description of what to publish: accounts, posts (a thread;
   one post is a thread of one) with media and alt text, reply or quote target, per-provider
-  variants, `not_before`.
+  variants, `not_before`, and optionally its own idempotency `key` (one account).
 - **Digest.** `sha256:…` over the plan's canonical content; the approval and idempotency key.
 - **Row and items.** One ledger row per plan and account; one item per post of its thread.
 - **Idempotency key.** The row's unique key: the digest plus account by default, or a caller's
-  own (`pr:nebula:54`).
+  own (`pr:nebula:54`), passed to the CLI or named by the plan's `key`.
 - **Receipt.** What a finished row answers on a repeat: post ids and URLs, `replayed: true`.
 - **Unknown.** A post that may have reached the provider; blocks its key until reconciled.
 - **Reconcile.** Matching unknown posts against the account's recent posts by text

@@ -85,9 +85,10 @@ Orbit installs only `.orbit-plugin/` from that export. In a checkout, run
 before tagging a release.
 
 The plugin's home is `~/.orbit/state/plugins/pulsar/home`; point the CLI at it with
-`PULSAR_HOME`. Enabling it in a workspace seeds three auto-tasks, switched off: `engager`
-(daily mention summary and reply drafts), `post-proposer` (weekly post drafts from metrics)
-and `weekly-report`.
+`PULSAR_HOME`. Enabling it in a workspace seeds five auto-tasks, switched off: `auth-health`
+(daily offline account check), `engager` (daily mention summary and reply drafts),
+`post-proposer` (weekly post drafts from metrics), `weekly-report` and `x-updates` (drafts
+for new constellation-works releases, repos and PRs, each under a key that posts once).
 
 ## Documentation
 

@@ -1,8 +1,8 @@
 ---
 title: Publishing — Design
 owner: claude
-last_updated: 2026-09-27
-last_validated: 2026-09-27
+last_updated: 2026-10-03
+last_validated: 2026-10-03
 status: Accepted
 feature: publishing
 doc_role: design
@@ -11,7 +11,7 @@ summary: How a plan is normalised and digested, how the publisher admits, claims
 tags: [publishing, plan, ledger, idempotency, policy, reconcile]
 paths: ["src/pulsar/app/core/publishing/plan.py", "src/pulsar/app/core/publishing/publisher.py", "src/pulsar/app/core/ledger/**", "src/pulsar/app/core/publishing/policy.py", "src/pulsar/app/core/ledger/usage.py", "src/pulsar/internal/guard/scanner.py", "src/pulsar/app/core/publishing/media.py", "src/pulsar/app/importer.py", "src/pulsar/app/writelog.py"]
 related_features: [accounts, channels, surfaces]
-related_artifacts: [ORB-13027, ORB-13028, ORB-13030, ORB-13039]
+related_artifacts: [ORB-13027, ORB-13028, ORB-13030, ORB-13039, ORB-13726]
 ---
 
 # Publishing — Design
@@ -36,6 +36,7 @@ reply_to: "1790000000000000000"  # or quote: …; never both
 variants:                        # per-provider replacement for posts
   bsky: {posts: [{text: "Shorter copy"}]}
 not_before: 2026-10-01T16:00:00Z # refused with not_due (retryable) before then
+key: release:orbit:v0.26          # optional idempotency key; one account only
 ```
 
 Unknown keys are `invalid_plan` with `detail.at`. Every media item needs `alt`. Text and alt
@@ -46,6 +47,14 @@ The **digest** covers the accounts, every post's text, every media item's conten
 reply/quote and variants. The media path and `not_before` are excluded, so renaming a file or
 moving the schedule keeps the digest and the idempotency key; see
 [4_decisions.md](./4_decisions.md#the-digest-covers-content-not-where-or-when).
+
+**`key`** names the idempotency key the plan is published under, for something that must go
+out once whatever its wording: `release:<repo>:<tag>`, `repo:<name>`, `pr:<repo>:<n>` (the
+x-updates keys, §8). It follows the key rules (1–200 characters, no whitespace, not a
+credential; a bad one is `invalid_argument` or `secret_detected` with `detail.at: key`) and
+names one account's write, so a plan with a key and two accounts is `invalid_plan`. The key is
+digested when present, so the human's approval covers it and changing it needs a new one; a
+plan without a key digests exactly as before. `validate` and `pulsar approve` show it.
 
 ## 2. The Publisher
 
@@ -79,12 +88,15 @@ last published post. A post whose outcome is ambiguous leaves the row `unknown`.
 
 Summarised here; the contract is [specs/idempotency.md](./specs/idempotency.md).
 
-- Plans key one row per account: `digest + account`, or an explicit key (one account only).
+- Plans key one row per account: `digest + account`, or an explicit key (one account only):
+  the plan's `key`, or `--idempotency-key` on `pulsar publish` (which must equal the plan's `key`
+  when both are given). `pulsar.publish` takes no key argument; it uses the plan's.
 - `create_post` keeps its pre-plan request digest (text, reply, quote, media ids, account user
   id) so keys written by an older pulsar carry over.
 - A repeat replays the receipt; a different request under the same key is
   `idempotency_conflict`; a definitive failure is retried; an unknown or in-flight key answers
-  `outcome_unknown` again.
+  `outcome_unknown` again. So a second draft of an announcement whose key is published (or
+  skipped, or imported) never posts: it replays or conflicts, and a replay needs no approval.
 - `delete_post` keys `delete:<post_id>`. `upload_media` is recorded but not deduplicated: an
   orphaned media id is harmless and expires.
 
@@ -152,7 +164,7 @@ the write lock. States, columns, usage accounting and schema migration are speci
   while a root configured as a symlink still works), size-checked before reading, and typed by
   content. See [specs/media-confinement.md](./specs/media-confinement.md).
 
-## 8. Importing `posted.jsonl`
+## 8. Importing `posted.jsonl` and the x-updates auto-task
 
 The retired x-updates routine kept `{key, ts, post_id|null, text?, note?,
 superseded_post_id?, superseded_note?}` per line.
@@ -167,7 +179,28 @@ The import is idempotent, reports a key held by another write (or an imported ro
 disagrees with its line) as a conflict without touching it, reports malformed lines by number
 and carries on. Imported rows are not exported to `writes.jsonl`. A replay of an imported
 published key returns the imported receipt whatever the new text: the routine kept no request
-to compare.
+to compare; its receipt's `digest` is null.
+
+The routine itself is now the plugin's `x-updates` auto-task
+([x-updates.yaml](../../../.orbit-plugin/definitions/auto_tasks/x-updates.yaml), seeded
+`pulsar-x-updates`, disabled; [Engagement — Design §4](../engagement/2_design.md#4-auto-tasks)).
+It drafts and never publishes, and keeps the routine's keys, so imported history dedupes it:
+
+1. `gh`, read-only, lists constellation-works releases, newly public repositories and notable
+   merged pull requests of the last 7 days.
+2. The skill helper [x_updates.py](../../../.orbit-plugin/skills/publish/scripts/x_updates.py)
+   turns each into its key (`keys`). `pulsar.history` with `keys` returns the rows held under
+   them, however old, imported ones included.
+3. The helper (`plan`) skips a key the ledger holds in any state, one a plan file under
+   `x-updates/` carries (a delivered draft), and one an open `pulsar-x-update-posts` task names
+   (a draft not yet delivered), and returns at most three drafts, releases first.
+4. The agent writes each as a plan with that `key` under `x-updates/YYYY-MM-DD/`, validates it,
+   and files one proposed publishing task. Nothing new writes no file and files no task
+   (`no-diff-expected`).
+
+Publishing stays the approve-then-`pulsar.publish` flow. If two drafts of one key both reach
+it, the ledger replays or refuses the second (§3); a test publishes the same key twice through
+the plugin and sees one provider call.
 
 ## 9. Concerns & Honest Limitations
 
@@ -186,6 +219,9 @@ to compare.
 - **A root is a path, not an inode.** The open refuses a symlink anywhere on the resolved
   path, but a real directory renamed onto the root (which needs write access to its parent)
   is the root from then on.
+- **Dedupe before drafting is by key only.** The helper cannot see an announcement made by
+  hand under no key, or by a plan under a different key; the ledger stops a second post only
+  for the same key.
 - **The fingerprint can collide.** Two posts that differ only in URLs, leading mentions or
   whitespace fingerprint alike; the "never match an id already held" rule limits the damage to
   mis-attributing which of two ambiguous posts went out.
@@ -196,5 +232,6 @@ to compare.
 - [ORB-13028] — added plans, the publisher, ledger v2, policy, reconcile, import.
 - [ORB-13030] — phase 4: approvals, standing policies, dispatch.
 - [ORB-13039] — took the plan claim off the event loop; closed the media-root swap race.
+- [ORB-13726] — plan `key`, `pulsar.history` `keys`, and the x-updates auto-task.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

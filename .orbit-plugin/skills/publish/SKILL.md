@@ -14,7 +14,7 @@ only then may an agent publish it.
 |---|---|
 | `pulsar.status` | see each account's token health, the day and month budget, posts today against the cap, unresolved writes and the last publication; `healthy` and `attention` summarise what needs a human |
 | `pulsar.validate` | check a plan (inline `plan`, or a workspace-relative YAML `source`) and get, per account, the exact posts, weighted lengths, media facts, estimated cost and the plan `digest` |
-| `pulsar.history` | list the newest ledger rows (`limit` 1–100, optional `account`) with state, URL and cost |
+| `pulsar.history` | list the newest ledger rows (`limit` 1–100, optional `account`) with state, URL and cost; `keys` looks up the rows held under those idempotency keys instead |
 | `pulsar.engagements` | read others' posts mentioning the account (`hours` 1–168, default 24; `limit` 1–100, default 20), each with `replied` |
 | `pulsar.metrics` | read the account's own posts (`days` 1–30, default 7; `limit`) with likes, replies, reposts, quotes, impressions and clicks, and `totals` |
 | `pulsar.publish` | publish a workspace plan file (`source`) a human approved; `dry_run: true` checks and sends nothing |
@@ -67,6 +67,13 @@ and general timelines are not its job.
 
 A reply is a plan with `reply_to: "<post_id>"` and one post; keep one reply per
 plan file, so each is approved on its own.
+
+A plan for something that must be announced once (a release, say) names its
+idempotency key: `key: "release:<repo>:<tag>"`, with one `account`. The key is in
+the digest, so the approval covers it. Publishing a plan whose key the ledger
+already holds replays that receipt (an imported one included) or fails
+`idempotency_conflict`; it never posts again. Ask `pulsar.history` with `keys`
+before drafting, and never change a key to get past either.
 
 ## Approve, then publish
 
@@ -138,6 +145,33 @@ The helper copies `health`, `token_state`, `reason`, `reauth_required` and the
 account's exact attention; it reads no files or credentials and calls no
 service. The agent records follow-up IDs and evidence in the execution summary.
 Only a human at a terminal performs the returned remedy.
+
+## X-updates
+
+The plugin seeds `pulsar-x-updates` disabled. When a human enables it, its daily
+run scans constellation-works with `gh` (read-only, the last 7 days) for new
+releases, newly public repositories and notable merged pull requests, and drafts
+at most three plan files under `x-updates/YYYY-MM-DD/`, each with its key, plus
+one proposed `pulsar-x-update-posts` task that a human promotes after approving.
+Nothing new writes no file and creates no task.
+
+The auto-task uses [scripts/x_updates.py](./scripts/x_updates.py), relative to this
+SKILL.md, run with `python3 -B` from the workspace root and JSON on stdin:
+
+- `keys` takes `{"candidates": [...]}` and returns the `keys` to look up. A
+  candidate is `{"kind": "release", "repo", "tag"}`, `{"kind": "repo", "repo"}` or
+  `{"kind": "pr", "repo", "number"}` (plus `title`, `url`, `at`), `repo` without
+  the owner; its key is `release:<repo>:<tag>`, `repo:<name>` or `pr:<repo>:<n>`,
+  the keys the retired routine's imported history uses.
+- `plan` takes `{"candidates", "history", "tasks", "date"}`: `history` is
+  `pulsar.history` with those `keys` (`truncated: false`), `tasks` the complete
+  `orbit.task.list` envelope of `pulsar-x-update-posts` tasks with `description`.
+  It returns `drafts` (each with `key` and `plan` path), `skipped` (in the ledger in
+  any state, carried by a plan file under `x-updates/`, or named in backticks by an
+  open task) and `deferred` (over the cap of three, oldest release first).
+
+The helper calls no service and writes nothing; it reads only the plan files
+under `x-updates/`.
 
 ## Credentials
 

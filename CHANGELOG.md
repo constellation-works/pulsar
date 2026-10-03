@@ -7,6 +7,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **x-updates auto-task.** The retired x-updates routine as a plugin auto-task, seeded
+  disabled: it drafts approval-gated plans for new constellation-works releases, newly
+  public repositories and notable merged pull requests, skipping what the ledger (imported
+  history included) or an earlier draft already holds. It never publishes.
+- **Plan `key`.** A plan may name its idempotency key (`release:<repo>:<tag>`, ...);
+  `pulsar publish` and `pulsar.publish` publish under it, so a second draft of the same
+  announcement replays or conflicts instead of posting again.
+- **`pulsar.history` `keys`.** Looks up the rows held under given idempotency keys.
+
 ## [0.1.0] - 2026-09-27
 
 The first release: agents publish to X as accounts a human bound on the host, without ever

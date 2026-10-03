@@ -56,7 +56,8 @@ spec:
     - name: history
       description: >-
         The newest ledger rows (posts, threads, deletes, uploads, imports, skips) with
-        state, URL and estimated cost, and how many rows match in all. Offline.
+        state, URL and estimated cost, and how many rows match in all; `keys` narrows it
+        to the rows held under those idempotency keys, imported ones included. Offline.
       execution_kind: read_only
       mcp_scope: workspace
       input_schema: { $ref: schemas/history.request.json }
@@ -86,7 +87,8 @@ spec:
         approved each account's exact digest with `pulsar approve`; otherwise it sends
         nothing and fails `approval_required` with the command a human runs. Every
         account is checked (approval, schedule, budget) before any is sent. `dry_run`
-        checks and sends nothing. Replays of a published plan return its receipt.
+        checks and sends nothing. Replays of a published plan return its receipt; a plan's
+        `key` already in the ledger replays or conflicts, never posts again.
       execution_kind: mutating
       mcp_scope: workspace
       input_schema: { $ref: schemas/publish.request.json }

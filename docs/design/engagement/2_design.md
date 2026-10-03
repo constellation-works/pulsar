@@ -11,7 +11,7 @@ summary: How a read is budgeted, made and recorded, how a mention is known to be
 tags: [engagement, reads, mentions, metrics, budget, ledger, approvals]
 paths: ["src/pulsar/app/core/engagement/**", "src/pulsar/app/approvals.py", "src/pulsar/app/core/ledger/approvals.py", "src/pulsar/cli/commands/approve.py", "src/pulsar/app/core/channels/contract.py", "src/pulsar/app/core/ledger/reads.py", "src/pulsar/app/core/ledger/queries.py"]
 related_features: [publishing, channels, surfaces]
-related_artifacts: [ORB-13030, ORB-13375]
+related_artifacts: [ORB-13030, ORB-13375, ORB-13726]
 ---
 
 # Engagement — Design
@@ -93,8 +93,10 @@ it only from a task whose `required_tools` names it, and each records its caller
 | `pulsar.publish` | `source` (workspace plan file), `account`, `dry_run` | prepares every target account, then `preflight(require_approval=True)` for each, then publishes each with `require_approval=True` |
 
 `pulsar.publish` checks every account before it sends for any, so a plan missing one approval
-sends nothing. It takes no idempotency key and no caller: the default key (digest and
-account) is the one the approval is used by. Its `approval_required` names the command for a
+sends nothing. It takes no idempotency key argument and no caller: the plan's `key` when it
+names one, else the default key (digest and account), is the one the approval is used by. A
+key the ledger already holds replays (no approval needed) or is `idempotency_conflict`
+([Publishing — Design §3](../publishing/2_design.md#3-idempotency)). Its `approval_required` names the command for a
 human, pinned to the plugin's home and workspace:
 `PULSAR_HOME=<home> pulsar approve <workspace>/<source> --workspace <workspace> --account <alias>`.
 `--workspace` makes `pulsar approve` resolve and confine media as the plugin does, so the digest
@@ -111,17 +113,21 @@ can hand it to the human.
 switches each on. Each is `dedupe: skip_if_open`, and each minted task is tagged `pulsar`.
 Each template also carries `no-diff-expected`, so Orbit accepts an empty stage when a run
 has no files to deliver. The engager can stop on an unhealthy account or find no replies
-worth drafting; the post-proposer can stop on an unhealthy account or at its queue cap.
+worth drafting; the post-proposer can stop on an unhealthy account or at its queue cap; x-updates
+can stop on an unhealthy account or find nothing new.
 The tag only exempts an empty stage: any plan files or weekly report written are still
 left uncommitted for the pipeline to deliver to `agent-main`.
 The post-proposer's follow-up publishing task also produces a diff when recording receipts in
-content records, while the engager's follow-up task writes nothing and keeps `no-diff-expected`.
+content records, while the engager's and x-updates' follow-up tasks write nothing and keep
+`no-diff-expected`. `auth-health` files human attention tasks and writes no files
+([Accounts — Design](../accounts/2_design.md#8-offline-auth-health-alarm)).
 
 | Auto-task | Schedule (host-local) | Requires | Does |
 |---|---|---|---|
 | `engager` | daily 09:00 | `pulsar.engagements`, `pulsar.status`, `pulsar.validate` | reads 24 hours of mentions (at most 20), summarises them, writes one reply plan per mention worth answering under `engagement/YYYY-MM-DD/`, validates them, leaves them uncommitted for pipeline delivery, and creates one `proposed` task requiring `pulsar.publish` that lists each draft, its digest and its approve command |
 | `post-proposer` | Fridays 16:00 | `pulsar.metrics`, `pulsar.status`, `pulsar.validate` | reads 7 days of the account's posts, drafts up to three posts as `plan.yaml` beside their content records (no `not_before`), leaves them uncommitted for pipeline delivery, and creates the same kind of proposal task; drafts nothing while three already wait |
 | `weekly-report` | Mondays 16:00 | `pulsar.history`, `pulsar.metrics`, `pulsar.status` | reports the week from `status`, `history` and one metrics read, every figure with its source and read time; leaves the report uncommitted for pipeline delivery |
+| `x-updates` | daily 10:00 | `pulsar.history`, `pulsar.status`, `pulsar.validate` | scans constellation-works with `gh` (read-only, 7 days) for releases, newly public repos and notable merged PRs; keys each (`release:<repo>:<tag>`, `repo:<name>`, `pr:<repo>:<n>`) with the skill's `x_updates.py`, skips keys `pulsar.history` `keys` finds in the ledger (imported history included) or already drafted (a plan file under `x-updates/`, an open `pulsar-x-update-posts` task); writes at most three keyed plans under `x-updates/YYYY-MM-DD/`, validates them, leaves them uncommitted, and files one proposal task; nothing new writes nothing ([Publishing — Design §8](../publishing/2_design.md#8-importing-postedjsonl-and-the-x-updates-auto-task)) |
 
 No auto-task requires `pulsar.publish` (a test holds this): drafting and publishing are separate
 tasks with a human between them. Plans are delivered to the workspace's main branch by the pipeline,
@@ -153,5 +159,6 @@ they exist.
 
 - [ORB-13030] — phase 4: drafts, approvals, standing policies, dispatch; approvals land here.
 - [ORB-13375] — allow auto-task delivery on documented no-file paths while preserving file delivery.
+- [ORB-13726] — the x-updates auto-task; `pulsar.publish` honours a plan's `key`.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
