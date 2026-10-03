@@ -12,6 +12,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **x-updates busy-week scans.** Raw collection no longer stops at 100 candidates;
   editorial filtering keeps releases and newly public repos ahead of the newest notable PRs
   within the 100-candidate lookup limit. PR candidates include labels and author for review.
+- **x-updates made-public coverage.** Exhausted org events now report a scoped coverage gap
+  with bounded per-repo fallback, preserving complete release, PR and created-repo evidence;
+  compact PR groups keep busy-week scan output readable without dropping announcements.
 
 ## [0.2.0] - 2026-10-03
 

@@ -184,25 +184,46 @@ SKILL.md, run with `python3 -B` from the workspace root and JSON on stdin:
 - `scan` takes `{}` (last 7 days) or `{"start": "<UTC timestamp>"}` for a narrower
   window. It prefers `gh` when `gh auth status --hostname github.com` succeeds,
   otherwise uses standard-library `urllib` without credentials at `api.github.com`.
-  It returns `source`, `window`, `requests`, `candidates`, `partial` and `error`.
+  It returns `source`, `window`, `requests`, `candidates`, `pr_groups`, `pr_fields`,
+  `coverage`, `partial` and `error`.
   Public non-archived repos, releases of repos pushed in the window, one public
   merged-PR search query, and PublicEvents are paginated within 60 requests.
-  Exhausted rate limits, HTTP/network failures, truncation and invalid responses
+  Exhausted API rate limits, HTTP/network failures, incomplete search and invalid responses
   stop collection. On `partial: true`, record the error and stop before drafting;
   never call that outcome nothing new. The raw scan is bounded by requests and
-  completeness guards, with no 100-candidate cap. PRs include `labels` (label names)
-  and `author` (login, when present) for editorial review. Apply the existing
+  completeness guards, with no 100-candidate cap. Releases and repos remain dictionaries
+  in `candidates`. PRs are grouped in `pr_groups` by `repo`, `labels` (label names)
+  and optional `author` (login), with `rows` of `[number, seconds_since_start, title]`
+  as declared by `pr_fields`. `at` is `window.start` plus those seconds; the PR URL is
+  `https://github.com/constellation-works/<repo>/pull/<number>`. Apply the existing
   notability rules to the returned PRs before passing candidates to `keys`; keep
   every release and newly public repository. Select at most 100 candidates,
-  releases and repositories first, then the newest notable PRs by `at` in the
+  releases and repositories first, then the newest notable PR rows by `seconds_since_start` in the
   remaining slots. Record overflow PRs for a later run. If releases and repositories
   alone exceed 100, stop and record the lookup capacity blocker rather than discard them.
+  `coverage.public_events` reports `complete`, `covered_since` (the oldest org event
+  checked; null if the budget prevented any org-feed request), and `unverified_repos`.
+  Exhausting the org's 300-event feed scopes the gap to made-public repos. Within the
+  remaining 60-request budget, the helper checks one events page per unverified public,
+  non-archived repo created before the window, newest first, skipping PublicEvent matches
+  and repos with merged public PRs. A full recent repo page stays unverified unless it
+  supplies a PublicEvent; an older event or a shorter complete feed resolves the check.
+  A local budget stop during event coverage also leaves the gap scoped.
+  With `partial: false` and `coverage.public_events.complete: false`, draft from verified
+  releases, PRs and created repos, naming the covered-since time and every unverified repo
+  in the summary. Never report "nothing new" for made-public repos while that coverage is
+  incomplete. If no usable candidates remain, record that scoped outcome and the gap,
+  and write no files or tasks.
 - `keys` takes `{"candidates": [...]}` and returns the `keys` to look up. A
   candidate is `{"kind": "release", "repo", "tag"}`, `{"kind": "repo", "repo"}` or
   `{"kind": "pr", "repo", "number"}` (plus `title`, `url`, `at`), `repo` without
   the owner; its key is `release:<repo>:<tag>`, `repo:<name>` or `pr:<repo>:<n>`,
   the keys the retired routine's imported history uses. `keys` accepts at most 100
   editorially filtered candidates; use that same selected list for `plan`.
+  For compact scan PRs, both modes also take `pr_groups` with only selected rows and
+  the scan's `window`, alongside the selected release/repo `candidates`. They expand
+  rows offline to the old PR dictionaries, restoring `at` and `url`. Each row counts
+  toward the 100-candidate limit; old dictionary inputs continue to work.
 - `plan` takes `{"candidates", "history", "tasks", "date"}`: `history` is
   `pulsar.history` with those `keys` (`truncated: false`), `tasks` the complete
   `orbit.task.list` envelope of `pulsar-x-update-posts` tasks with `description`.

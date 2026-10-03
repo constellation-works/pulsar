@@ -1,8 +1,8 @@
 ---
 title: Publishing — Decisions
 owner: claude
-last_updated: 2026-09-27
-last_validated: 2026-09-26
+last_updated: 2026-10-03
+last_validated: 2026-10-03
 status: Accepted
 feature: publishing
 doc_role: decisions
@@ -11,7 +11,7 @@ summary: Record before send, a missed post beats a double post, digest excludes 
 tags: [publishing, ledger, idempotency, policy]
 paths: ["src/pulsar/app/core/ledger/**", "src/pulsar/app/core/publishing/publisher.py", "src/pulsar/app/core/publishing/plan.py"]
 related_features: [channels, surfaces]
-related_artifacts: [ORB-13027, ORB-13028]
+related_artifacts: [ORB-13027, ORB-13028, ORB-13786]
 ---
 
 # Publishing — Decisions
@@ -254,11 +254,50 @@ helper or by `Plan.from_mapping`, and flows on as `str`. Records that hold them 
 - Cost: the type checker cannot tell a validated key from any string; a new entry point must
   call the helper. Revisit if a second provider adds id shapes.
 
+## Event-feed exhaustion scopes made-public coverage
+
+**Recorded:** 2026-10-03 · [ORB-13786]
+**Code anchors:** `.orbit-plugin/skills/publish/scripts/x_updates.py::collect`, `.orbit-plugin/skills/publish/scripts/x_updates.py::scan_output`, `.orbit-plugin/skills/publish/scripts/x_updates.py::selected_candidates`
+
+### Context
+
+GitHub exposes at most 300 org events, which this organisation can fill in less than a
+week. The org feed is evidence for repositories made public, while releases, merged public
+PRs and repositories created in-window have independent collection paths. Treating the
+event ceiling as a whole-scan partial discarded those candidates on ordinary busy weeks.
+The same week's repeated PR dictionaries could exceed the agent's tool-output budget.
+
+### Decision
+
+Finish releases and PRs first. Report event-feed exhaustion and local event-check budget
+stops as `coverage.public_events` with `complete`, `covered_since` and `unverified_repos`.
+Spend only the remaining shared 60-request budget on one events page per unverified public,
+non-archived repo created before the window, newest first; skip independent PublicEvent,
+created-repo and merged-public-PR evidence. Full recent fallback pages remain unverified.
+Real API, network, invalid-response and incomplete-search failures still make the scan
+partial; so does budget exhaustion before releases/PRs finish.
+
+The agent may draft from verified candidates when only made-public coverage is incomplete,
+but must name the gap and never call it nothing new. Group PR metadata and encode row
+timestamps as window-relative seconds so the full scan is readable before editorial
+filtering. Offline `keys` and `plan` expand selected rows, retaining old dictionary inputs,
+the 100-announcement lookup limit, existing keys and the three-draft approval flow.
+
+### Consequences
+
+- Busy weeks can produce release/PR/created-repo drafts with a machine-checkable coverage gap.
+- Fake-fetcher tests exercise exhausted feeds, real failures and the 60-request ceiling;
+  a 600-PR fixture bounds serialized output without truncating announcements.
+- Cost: a one-page fallback cannot prove absence on every active repo, so some made-public
+  announcements can wait. Consumers must carry the window with selected PR groups; output
+  size still depends on titles and metadata diversity. Summaries must retain coverage gaps.
+
 ## Task References
 
 - [ORB-13027] — added the ledger v0 and `outcome_unknown`.
 - [ORB-13028] — added plans, digests, reservations and the publisher.
 - [ORB-13138] — aligned the publishing core with the constellation standards.
 - [ORB-13039] — took the plan claim off the event loop.
+- [ORB-13786] — scoped event-feed gaps to made-public coverage and compacted busy-week PR output.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

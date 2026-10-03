@@ -11,7 +11,7 @@ summary: How a plan is normalised and digested, how the publisher admits, claims
 tags: [publishing, plan, ledger, idempotency, policy, reconcile]
 paths: ["src/pulsar/app/core/publishing/plan.py", "src/pulsar/app/core/publishing/publisher.py", "src/pulsar/app/core/ledger/**", "src/pulsar/app/core/publishing/policy.py", "src/pulsar/app/core/ledger/usage.py", "src/pulsar/internal/guard/scanner.py", "src/pulsar/app/core/publishing/media.py", "src/pulsar/app/importer.py", "src/pulsar/app/writelog.py"]
 related_features: [accounts, channels, surfaces]
-related_artifacts: [ORB-13027, ORB-13028, ORB-13030, ORB-13039, ORB-13726, ORB-13746, ORB-13775, ORB-13779]
+related_artifacts: [ORB-13027, ORB-13028, ORB-13030, ORB-13039, ORB-13726, ORB-13746, ORB-13775, ORB-13779, ORB-13786]
 ---
 
 # Publishing — Design
@@ -195,21 +195,49 @@ It drafts and never publishes, and keeps the routine's keys, so imported history
    reading or passing a token. Both use public organisation repositories (excluding archived
    ones), releases only for repos pushed in the window, one `is:public` merged-PR search
    query, and public organisation events. Pagination never follows server-supplied URLs.
-   The window is at most 7 days. PR candidates retain label names (`labels`) and the
-   author's login (`author`, when present) for editorial review. Before lookup, the agent
+   The window is at most 7 days. Scan JSON keeps release/repo dictionaries in `candidates`
+   and groups PRs in `pr_groups` by bare repo name, label names (`labels`) and the author's
+   login (`author`, when present). Each group's `rows` follow `pr_fields`:
+   `[number, seconds_since_start, title]`. The timestamp is `window.start` plus the offset;
+   the source URL derives from repo and number. Compact JSON and shared metadata keep
+   the 600-PR fixture below 45,000 UTF-8 bytes without dropping titles or announcements.
+   Before lookup, the agent
    excludes dependency bumps, CI, docs-only changes, refactors, reverts, automated sweeps
    and PRs already covered by a release candidate, retaining every release and newly public repo.
-   A scan returns its source, window, request count, candidates and `partial`/`error`.
+   A scan returns its source, window, request count, candidates, PR groups,
+   `coverage.public_events` and `partial`/`error`.
    It caps requests at 60 and stops on exhausted limits (including HTTP 403/429 with
    `X-RateLimit-Remaining: 0`), HTTP/network failures, invalid metadata, incomplete search,
-   GitHub's 300-event ceiling, search results above 1000, or incomplete pagination.
-   Raw collection has no 100-candidate cap. A partial scan records why and drafts nothing;
-   only a complete empty scan may report nothing new.
+   search results above 1000, or incomplete search pagination. Exhausting the local
+   request budget before releases/PRs finish is also partial. Raw collection has no
+   100-candidate cap. A partial scan records why and drafts nothing.
+
+   The org-event ceiling affects only made-public coverage. `coverage.public_events`
+   has `complete` (all current public, non-archived repos verified), `covered_since`
+   (the oldest org event checked, even after fallback; the window start for an empty
+   complete feed, null if no org-feed request was possible), and sorted `unverified_repos`
+   (bare names). If the org feed cannot reach an event older than the window start or a
+   complete listing below the 300-event ceiling, the remaining budget checks one events
+   page per public, non-archived repo created before the window, newest creation first.
+   Repos created in-window, matching PublicEvents and merged public PRs supply independent
+   evidence and are skipped. An older event or a shorter complete repo feed resolves the
+   check; a full recent page stays unverified unless a matching PublicEvent was found.
+   Pagination is always constructed locally. No scan exceeds 60 total requests.
+   A local budget stop during org/repo event checks leaves a coverage gap without making
+   the scan partial; actual API, network and response failures still do. With `partial:
+   false` and incomplete coverage, the agent may draft verified releases, PRs and created
+   repos, naming every unverified repo and the covered-since time in its summary. It never
+   claims nothing new for made-public repos while that coverage is incomplete. If no
+   usable candidates remain, it reports that scoped outcome and the gap without files
+   or follow-up tasks. Only an empty, fully covered scan may report nothing new.
 2. The skill helper [x_updates.py](../../../.orbit-plugin/skills/publish/scripts/x_updates.py)
    turns at most 100 editorially filtered candidates into keys (`keys`), taking releases
    and newly public repos first, then the newest notable PRs by `at` in the remaining slots.
    Overflow PRs wait for a later run; if releases and repos alone exceed 100, the agent
-   records a lookup capacity blocker rather than discarding them. `pulsar.history` with
+   records a lookup capacity blocker rather than discarding them. `keys` and `plan` accept
+   selected release/repo `candidates`, `pr_groups` with only selected rows, and the scan's
+   `window`; they expand PR rows offline, restoring `at` and the public URL. Every selected
+   row counts toward 100; old PR dictionary inputs continue to work. `pulsar.history` with
    `keys` returns the rows held under them, however old, imported ones included.
 3. The helper (`plan`) uses the same selected list (at most 100) and skips a key the ledger
    holds in any state, one a plan file under
@@ -246,8 +274,13 @@ and continues without changing its key. Such a receipt has no publication URL.
   is the root from then on.
 - **Public GitHub scans are bounded.** Unauthenticated requests share the host IP
   rate limit, search can be incomplete, and GitHub exposes at most 300 recent events.
-  The helper stops with a partial scan rather than treating missing coverage as nothing new;
-  releases are queried only for repositories pushed within the window.
+  Real API failures and a budget stop before releases/PRs finish make the scan partial.
+  An event ceiling or local event-check budget stop leaves explicit made-public coverage
+  gaps; one-page repo fallbacks may also be exhausted. Verified releases, PRs and created
+  repos remain usable, but the agent must name the unverified repos and covered-since time
+  and cannot describe their made-public gap as nothing new. Releases are queried only for
+  repositories pushed within the window; compact PR output still grows with title lengths
+  and the number of distinct repo/label/author groups.
 - **Dedupe before drafting is by key only.** The helper cannot see an announcement made by
   hand under no key, or by a plan under a different key; the ledger stops a second post only
   for the same key.
@@ -265,5 +298,6 @@ and continues without changing its key. Such a receipt has no publication URL.
 - [ORB-13746] — made draft filenames injective and terminal receipts replay before policy checks.
 - [ORB-13775] — added unauthenticated public GitHub scanning and explicit partial-scan stops.
 - [ORB-13779] — separated raw scan bounds from the 100-candidate editorial lookup limit.
+- [ORB-13786] — scoped event-feed gaps to made-public coverage and compacted busy-week PR output.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
