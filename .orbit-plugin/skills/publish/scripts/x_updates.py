@@ -14,6 +14,9 @@ with ``pulsar.history``. A candidate is one of::
 
 and its key is ``release:<repo>:<tag>``, ``repo:<name>`` or ``pr:<repo>:<n>``,
 the keys the retired routine used (its history is imported into the ledger).
+``scan`` groups PRs by repo, labels and author; rows are number, seconds since
+window.start, title. ``keys`` and ``plan`` also accept selected ``pr_groups``
+with that ``window``, expanding their rows back to full PR candidates offline.
 
 ``plan``: ``{"candidates", "history", "tasks", "date"?, "max_drafts"?}`` ->
 ``{"drafts", "skipped", "deferred"}``. ``history`` is the ``pulsar.history``
@@ -154,7 +157,9 @@ class Scan:
         self.exhausted = False
 
     def get(self, endpoint: str) -> Response:
-        if self.exhausted or self.requests >= MAX_REQUESTS:
+        if self.exhausted:
+            raise PartialScan("rate_limit", endpoint)
+        if self.requests >= MAX_REQUESTS:
             raise PartialScan("rate_limit", endpoint, request_limit=MAX_REQUESTS)
         self.requests += 1
         try:
@@ -221,6 +226,12 @@ def collect(
     scan = Scan(fetcher)
     candidates: list[dict[str, Any]] = []
     seen: set[str] = set()
+    unverified: set[str] = set()
+    coverage: dict[str, Any] = {
+        "complete": False,
+        "covered_since": None,
+        "unverified_repos": [],
+    }
     endpoint = f"orgs/{ORG}/repos"
 
     def within(value: str | None) -> bool:
@@ -255,6 +266,8 @@ def collect(
                         "at": repo["created_at"],
                     }
                 )
+            elif timestamp(repo["created_at"]) < start:
+                unverified.add(name)
         for name, repo in repos.items():
             if not within(repo["pushed_at"]):
                 continue
@@ -293,46 +306,149 @@ def collect(
                 }
                 if author := (pr.get("user") or {}).get("login"):
                     candidate["author"] = author
+                if (
+                    not isinstance(candidate["title"], str)
+                    or any(not isinstance(label, str) for label in candidate["labels"])
+                    or ("author" in candidate and not isinstance(candidate["author"], str))
+                ):
+                    raise ValueError("expected PR title, label names and author login strings")
                 add(candidate)
-        endpoint = f"orgs/{ORG}/events"
-        count = 0
-        for event in scan.pages(endpoint, per_page=100):
-            count += 1
-            if timestamp(event["created_at"]) < start:
-                break  # Events are newest first; don't spend requests on older pages.
-            name = event["repo"]["name"].removeprefix(f"{ORG}/")
-            if (
-                event["type"] == "PublicEvent"
-                and event["public"] is True
-                and event["repo"]["name"] == f"{ORG}/{name}"
-                and name in repos
-                and within(event["created_at"])
-            ):
-                repo = repos[name]
-                add(
-                    {
-                        "kind": "repo",
-                        "repo": name,
-                        "title": repo.get("description") or name,
-                        "url": repo["html_url"],
-                        "at": event["created_at"],
-                    }
-                )
+                unverified.discard(name)  # The search supplies independent public evidence.
+
+        def events(path: str, *, repo_name: str | None = None) -> bool:
+            """True when this feed covers the window; local budget gaps stay scoped.
+
+            The org feed has at most 300 events. Fallback reads only one page per
+            repo, so a full recent page cannot establish absence of PublicEvent.
+            """
+            nonlocal endpoint
+            count = 0
+            for page in range(1, 4 if repo_name is None else 2):
+                endpoint = f"{path}?{urlencode({'per_page': 100, 'page': page})}"
+                if scan.requests >= MAX_REQUESTS and not scan.exhausted:
+                    return False
+                reply = scan.get(endpoint)
+                rows = reply.body
+                if not isinstance(rows, list):
+                    raise ValueError("expected an event list")
+                count += len(rows)
+                for event in rows:
+                    at = timestamp(event["created_at"])
+                    if repo_name is None:
+                        coverage["covered_since"] = at.isoformat()
+                    if at < start:
+                        return True  # Feeds are newest first; stop before older pages.
+                    name = event["repo"]["name"].removeprefix(f"{ORG}/")
+                    if (
+                        event["type"] == "PublicEvent"
+                        and event["public"] is True
+                        and event["repo"]["name"] == f"{ORG}/{name}"
+                        and name in repos
+                        and (repo_name is None or name == repo_name)
+                        and within(event["created_at"])
+                    ):
+                        repo = repos[name]
+                        add(
+                            {
+                                "kind": "repo",
+                                "repo": name,
+                                "title": repo.get("description") or name,
+                                "url": repo["html_url"],
+                                "at": event["created_at"],
+                            }
+                        )
+                        unverified.discard(name)
+                limit = 300 if repo_name is None else 100
+                if count < limit and not re.search(r'rel="next"', reply.headers.get("link", "")):
+                    return True
+            return False
+
+        if events(f"orgs/{ORG}/events"):
+            unverified.clear()
+            if coverage["covered_since"] is None:
+                coverage["covered_since"] = start.isoformat()
         else:
-            if count >= 300:
-                raise PartialScan("event_limit", endpoint, limit=300)
+            # Newest repositories first. PublicEvents and merged public PRs,
+            # as well as repos created in-window, need no fallback request.
+            pending = sorted(
+                unverified, key=lambda n: (timestamp(repos[n]["created_at"]), n), reverse=True
+            )
+            for name in pending:
+                if scan.requests >= MAX_REQUESTS and not scan.exhausted:
+                    break
+                if events(f"repos/{ORG}/{name}/events", repo_name=name):
+                    unverified.discard(name)
+        coverage["complete"] = not unverified
     except PartialScan as partial_scan:
         error = partial_scan.error
     except (KeyError, TypeError, ValueError, AttributeError) as invalid:
         error = {"code": "invalid_response", "endpoint": endpoint, "reason": type(invalid).__name__}
+    coverage["unverified_repos"] = sorted(unverified)
     return {
         "source": source,
         "window": {"start": start.isoformat(), "end": end.isoformat()},
         "partial": error is not None,
         "error": error,
         "requests": scan.requests,
+        "coverage": {"public_events": coverage},
         "candidates": candidates,
     }
+
+
+def scan_output(result: dict[str, Any]) -> dict[str, Any]:
+    """Group PR metadata and use window-relative seconds to keep busy weeks readable."""
+    start = timestamp(result["window"]["start"])
+    groups: dict[tuple[Any, ...], dict[str, Any]] = {}
+    candidates = []
+    for candidate in result["candidates"]:
+        if candidate["kind"] != "pr":
+            candidates.append(candidate)
+            continue
+        group_key = (candidate["repo"], tuple(candidate["labels"]), candidate.get("author"))
+        if group_key not in groups:
+            group = {"repo": candidate["repo"], "labels": candidate["labels"], "rows": []}
+            if "author" in candidate:
+                group["author"] = candidate["author"]
+            groups[group_key] = group
+        seconds = (timestamp(candidate["at"]) - start).total_seconds()
+        groups[group_key]["rows"].append(
+            [
+                candidate["number"],
+                int(seconds) if seconds.is_integer() else seconds,
+                candidate["title"],
+            ]
+        )
+    return {
+        **result,
+        "candidates": candidates,
+        "pr_fields": ["number", "seconds_since_start", "title"],
+        "pr_groups": list(groups.values()),
+    }
+
+
+def selected_candidates(request: dict[str, Any]) -> list[dict[str, Any]]:
+    """Accept old dictionaries and selected scan PR rows for offline keys/plan."""
+    candidates = list(request["candidates"])
+    for group in request.get("pr_groups", []):
+        start = timestamp(request["window"]["start"])
+        for number, seconds, title in group["rows"]:
+            if isinstance(seconds, bool) or not isinstance(seconds, (int, float)):
+                raise ValueError("PR seconds_since_start must be numeric")
+            if not 0 <= seconds <= timedelta(days=7).total_seconds():
+                raise ValueError("PR seconds_since_start must be within the scan window")
+            candidate = {
+                "kind": "pr",
+                "repo": group["repo"],
+                "number": number,
+                "title": title,
+                "labels": group["labels"],
+                "at": (start + timedelta(seconds=seconds)).isoformat(),
+                "url": f"https://github.com/{ORG}/{group['repo']}/pull/{number}",
+            }
+            if "author" in group:
+                candidate["author"] = group["author"]
+            candidates.append(candidate)
+    return candidates
 
 
 def key_of(candidate: dict[str, Any]) -> str:
@@ -379,7 +495,7 @@ def drafted(root: Path) -> dict[str, str]:
 def plan(request: dict[str, Any], root: Path = PLANS) -> dict[str, Any]:
     """Return the drafts to write (at most ``max_drafts``), what was skipped and why,
     and what is left for a later run."""
-    candidates: list[dict[str, Any]] = request["candidates"]
+    candidates = selected_candidates(request)
     history, tasks = request["history"], request["tasks"]
     if history["truncated"] is not False:
         raise ValueError("pulsar.history was truncated; look the keys up in full")
@@ -430,14 +546,14 @@ def main() -> None:
     request = json.load(sys.stdin)
     if mode == "scan":
         source, fetcher = github_fetcher(subprocess.run, build_opener(NoRedirect()).open)
-        result = collect(request, fetcher, source=source, now=datetime.now(UTC))
+        result = scan_output(collect(request, fetcher, source=source, now=datetime.now(UTC)))
     elif mode == "keys":
-        result = {"keys": keys(request["candidates"])}
+        result = {"keys": keys(selected_candidates(request))}
     elif mode == "plan":
         result = plan(request)
     else:
         raise SystemExit("usage: x_updates.py scan|keys|plan < request.json")
-    json.dump(result, sys.stdout, ensure_ascii=False)
+    json.dump(result, sys.stdout, ensure_ascii=False, separators=(",", ":"))
     sys.stdout.write("\n")
 
 
