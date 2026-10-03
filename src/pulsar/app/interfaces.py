@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Protocol, Self
 
 from pulsar.app.core.account import Account, AccountRegistry
+from pulsar.app.core.channels.credentials import ChannelClient
 from pulsar.app.core.channels.x import XApi
 from pulsar.app.core.engagement import Reader
 from pulsar.app.core.ledger import Ledger
@@ -51,7 +52,7 @@ class Runtime(Protocol):
 
     def account(self, alias: str | None = None) -> Account: ...
 
-    def client_for(self, alias: str) -> XApi: ...
+    def client_for(self, alias: str) -> ChannelClient: ...
 
     def watch_expiry(self, alias: str) -> AbstractAsyncContextManager[None]: ...
 

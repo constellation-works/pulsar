@@ -1,13 +1,13 @@
 ---
 title: Channels — Vision
 owner: claude
-last_updated: 2026-09-26
-last_validated: 2026-09-26
+last_updated: 2026-10-03
+last_validated: 2026-10-03
 status: Draft
 feature: channels
 doc_role: vision
 type: design
-summary: Bluesky as the second channel, per-provider auth flows, and an optional metrics capability.
+summary: Per-provider auth flows (Bluesky's login next), metrics, and how variants are chosen.
 tags: [channels, providers, bluesky, mastodon, linkedin, metrics]
 paths: ["src/pulsar/app/core/channels/contract.py", "src/pulsar/app/core/channels/**"]
 related_features: [accounts, publishing]
@@ -16,15 +16,18 @@ related_artifacts: [ORB-13031]
 
 # Channels — Vision
 
-What the adapter boundary is expected to carry next. Nothing here is built.
+What the adapter boundary is expected to carry next. Nothing here is built; the Bluesky
+channel itself is, in [2_design.md](./2_design.md).
 
 ## 1. Open Questions
 
-1. **Does the contract survive Bluesky?** Phase 5 ([ORB-13031]) adds Bluesky as the cheapest
-   real test: grapheme-counted length (300), rich-text facets for links and mentions, threads
-   as reply chains with root and parent references, free posting. Pricing a free provider at
-   zero already works; facets and reply references may push work into `create`.
-2. **What does `AuthFlow` need?** Bluesky uses OAuth with DPoP and PAR; Mastodon needs
+1. **The contract survived Bluesky.** [ORB-13031] added it without changing `Channel`:
+   facets, reply references and media embeds all moved into `create`, and media ids became
+   blob CIDs the channel keeps until then. What is left open is whether a provider's media
+   should outlive one channel instance (a resumed publish uploads again).
+2. **What does `AuthFlow` need?** Bluesky's login (OAuth with PAR, PKCE and DPoP) is the
+   next task: it must store the DPoP key, PDS URL and token endpoint with the bundle and wire
+   `Es256Proof` into the factory. Mastodon needs
    per-instance dynamic client registration; LinkedIn needs a confidential client secret, which
    pulsar would have to hold like a token. The protocol's `begin`/`complete` may not be enough.
 3. **Should channels report metrics?** Marketing's results-review auto-task wants impressions
@@ -64,6 +67,6 @@ Failure semantics are part of the contract: every adapter must separate "did not
 
 ## Task References
 
-- [ORB-13031] — phase 5: Bluesky through the adapter boundary; optional metrics.
+- [ORB-13031] — phase 5: Bluesky through the adapter boundary; left the login to a sibling task.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

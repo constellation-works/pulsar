@@ -1,6 +1,6 @@
 # pulsar
 
-**pulsar** lets agents publish to social accounts (X today) as accounts a human bound on the
+**pulsar** lets agents publish to social accounts (X and Bluesky) as accounts a human bound on the
 host, without ever holding a credential. Every post goes through one publisher: offline
 checks, a secret scanner, a budget and daily-cap policy, and a ledger written before anything
 is sent, so a retry never pays for a second post.
@@ -33,7 +33,8 @@ pulsar auth status            # add --live to prove the refresh works
 ```
 
 pulsar checks with X that the token belongs to `@<handle>` before storing it, encrypted,
-in the pulsar home (`PULSAR_HOME`, default `~/.config/pulsar`).
+in the pulsar home (`PULSAR_HOME`, default `~/.config/pulsar`). Bluesky accounts
+(`bsky:<handle>`) publish through the same plans; their login is not built yet.
 
 ## Configure
 
@@ -66,6 +67,9 @@ posts:
   - text: "Notes: https://example.com/notes"
 ```
 
+`accounts: [x:<handle>, bsky:<handle>]` publishes one plan to both, and
+`variants: {bsky: {posts: [...]}}` gives one provider its own posts.
+
 As an Orbit plugin (`pulsar.status`, `validate`, `history`; and, from tasks that require
 them, `engagements`, `metrics` and `publish`, which publishes only what a human approved with
 `pulsar approve`), install from an export of the release tag, in a clone:
@@ -93,7 +97,7 @@ Design docs live in [docs/design](docs/design/) ([conventions](docs/design/CONVE
 - [Accounts](docs/design/accounts/1_overview.md): login, token storage, refresh.
 - [Publishing](docs/design/publishing/1_overview.md): plans, the ledger, idempotency, policy,
   reconcile.
-- [Channels](docs/design/channels/1_overview.md): the provider adapter and X.
+- [Channels](docs/design/channels/1_overview.md): the provider adapter, X and Bluesky.
 - [Surfaces](docs/design/surfaces/1_overview.md): MCP tools, CLI, Orbit plugin,
   [error codes](docs/design/surfaces/references/error-codes.md).
 

@@ -1,14 +1,14 @@
 ---
 title: Channels — Overview
 owner: claude
-last_updated: 2026-09-26
-last_validated: 2026-09-26
+last_updated: 2026-10-03
+last_validated: 2026-10-03
 status: Accepted
 feature: channels
 doc_role: overview
 type: design
-summary: The channel adapter contract between pulsar's provider-neutral core and each social provider, and the X adapter that implements it.
-tags: [channels, providers, x, adapter]
+summary: The channel adapter contract between pulsar's provider-neutral core and each social provider, and the X and Bluesky adapters that implement it.
+tags: [channels, providers, x, bluesky, adapter]
 paths: ["src/pulsar/app/core/channels/contract.py", "src/pulsar/app/core/channels/**"]
 related_features: [publishing, accounts]
 related_artifacts: [ORB-12124, ORB-13006, ORB-13028, ORB-13031]
@@ -18,8 +18,8 @@ related_artifacts: [ORB-12124, ORB-13006, ORB-13028, ORB-13031]
 
 A channel is one provider bound to one account's credentials. pulsar's core validates plans
 against the channel's declared capabilities and drives it one network step at a time, so the
-ledger can record each step before it happens. X is the only channel today; the contract is
-shaped so a second provider (Bluesky, phase 5) is an adapter, not a rewrite.
+ledger can record each step before it happens. X and Bluesky are the channels today; Bluesky
+was added as an adapter behind the same contract, with no change to it.
 
 ## 1. Motivation
 
@@ -53,12 +53,16 @@ shaped so a second provider (Bluesky, phase 5) is an adapter, not a rewrite.
 | X v2 API client, error mapping, chunked media | [app/core/channels/x/client.py](../../../src/pulsar/app/core/channels/x/client.py) | [ORB-12124], [ORB-13006] |
 | X text rules: weighted length, URLs | [app/core/channels/x/text.py](../../../src/pulsar/app/core/channels/x/text.py) | [ORB-12124] |
 | X endpoints, scopes, limits | [app/core/channels/x/config.py](../../../src/pulsar/app/core/channels/x/config.py) | [ORB-12124] |
+| Bluesky channel: records, facets, embeds, reads | [app/core/channels/bluesky/adapter.py](../../../src/pulsar/app/core/channels/bluesky/adapter.py) | [ORB-13031] |
+| Bluesky XRPC client, refresh, DPoP hook, error mapping | [app/core/channels/bluesky/client.py](../../../src/pulsar/app/core/channels/bluesky/client.py) | [ORB-13031] |
+| Bluesky text rules: graphemes, facets | [app/core/channels/bluesky/text.py](../../../src/pulsar/app/core/channels/bluesky/text.py) | [ORB-13031] |
+| Provider -> channel factory | [app/runtime.py](../../../src/pulsar/app/runtime.py) `client_for`, `channel` | [ORB-13031] |
 
 ## Task References
 
 - [ORB-12124] — built the X client and text rules.
 - [ORB-13006] — added MP4 video with chunked upload and a processing poll.
 - [ORB-13028] — introduced the adapter contract and the X channel.
-- [ORB-13031] — phase 5: Bluesky as the second channel.
+- [ORB-13031] — phase 5: Bluesky as the second channel, and the provider -> channel factory.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

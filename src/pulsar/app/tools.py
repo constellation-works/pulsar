@@ -29,8 +29,9 @@ from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from typing import Any
 
+from pulsar.app.core.account import alias_provider
 from pulsar.app.core.channels.contract import MAX_IMAGE_BYTES, MAX_VIDEO_BYTES, Prices
-from pulsar.app.core.channels.x import MediaProcessingError, check_x_id, validate_text
+from pulsar.app.core.channels.x import PROVIDER, MediaProcessingError, check_x_id, validate_text
 from pulsar.app.core.ledger import PUBLISHED, SKIPPED, check_key, request_digest
 from pulsar.app.core.publishing import (
     STALE_SUBMITTING,
@@ -40,7 +41,13 @@ from pulsar.app.core.publishing import (
     Prepared,
     load_media,
 )
-from pulsar.internal.errors import API_ERROR, IDEMPOTENCY_CONFLICT, OutcomeUnknown, PulsarError
+from pulsar.internal.errors import (
+    API_ERROR,
+    IDEMPOTENCY_CONFLICT,
+    UNSUPPORTED,
+    OutcomeUnknown,
+    PulsarError,
+)
 
 from .interfaces import Runtime
 
@@ -89,16 +96,21 @@ async def create_post(
     media = [check_x_id(m, "media_ids") for m in media_ids or []]
     key = check_key(idempotency_key)
     who = rt.caller(caller)
+    alias = (await asyncio.to_thread(rt.account, account)).alias
+    if alias_provider(alias) != PROVIDER:
+        # X's text rules and X ids above; another provider publishes a plan.
+        raise PulsarError(
+            UNSUPPORTED, f"{alias}: create_post is X's; publish a plan for this account"
+        )
     if dry_run:
         # Not a write: nothing reaches the ledger or writes.jsonl. The same
         # offline checks as the live call, in the same order: the account, the plan, the policy.
-        alias = (await asyncio.to_thread(rt.account, account)).alias
         prepared = await asyncio.to_thread(
             _legacy_post, rt, rt.offline_bound(alias), text, reply_to_post_id, quote_post_id, media
         )
         await asyncio.to_thread(rt.publisher.preflight, prepared, idempotency_key=key)
         return {**validated, "dry_run": True}
-    bound = await rt.bound(account)
+    bound = await rt.bound(alias)
     prepared = await asyncio.to_thread(
         _legacy_post, rt, bound, text, reply_to_post_id, quote_post_id, media
     )

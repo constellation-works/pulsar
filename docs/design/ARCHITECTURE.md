@@ -25,7 +25,7 @@ src/pulsar/
 ├── app/                 the application: what every front end calls
 │   ├── interfaces.py    the App and Runtime protocols
 │   ├── facade.py        LocalApp: the verbs over one home
-│   ├── runtime.py       LocalRuntime: builds and joins the core for one call
+│   ├── runtime.py       LocalRuntime: builds and joins the core; the provider -> channel factory
 │   ├── ops.py           the CLI's operator verbs (status, publish, reconcile, ...)
 │   ├── tools.py         the MCP tools (create_post, upload_media, delete_post, ...)
 │   ├── plugin.py        the Orbit plugin's tools (status, validate, history, engagements, metrics, publish)
@@ -36,7 +36,7 @@ src/pulsar/
 │       ├── publishing/  plan, publisher, policy, media        ─▶ ledger, account, channels
 │       ├── account/     aliases, registry, store, clients    ─▶ channels
 │       ├── ledger/      the ledger: writes, reads, approvals and their usage
-│       └── channels/    contract (Channel, posts, prices, media limits), credentials, x/
+│       └── channels/    contract (Channel, posts, prices, media limits), credentials, x/, bluesky/
 └── internal/            leaf utilities anyone may use; they use nothing above them
     ├── errors/          codes, exceptions
     ├── fs/              files, paths, jsonx
@@ -51,8 +51,11 @@ The rules, which `tests/test_layers.py` checks on every `make check`:
   other two (`serve`, `orbit-tool`).
 - **`app`**'s own modules consume `core` and join it into the verbs. Only `runtime.py` and
   `facade.py` name the implementations (`SqliteLedger`, `FernetFileStore`, `XChannel`,
-  `XClient`); everything else types against the protocols (`App`, `Runtime`, `Ledger`,
-  `CredentialStore`, `Channel`, `XApi`).
+  `XClient`, `BlueskyChannel`, `BlueskyClient`); everything else types against the protocols
+  (`App`, `Runtime`, `Ledger`, `CredentialStore`, `Channel`, `XApi`).
+- **A provider** is one package under `app/core/channels/` that stands on the contract alone.
+  Outside it, only `runtime.py` (the provider -> channel factory) names it; X's login, health
+  check and single-post tools predate the rule and are the listed exceptions.
 - **`core`** never imports `app`. What it needs from the app, it declares as a protocol and is
   handed (the settings it reads, for example). Inside it, `engagement` stands on `publishing`
   (its policy and `Bound`), `ledger` and `channels`; `publishing` on `ledger`, `account` and
