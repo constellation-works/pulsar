@@ -18,8 +18,8 @@ related_artifacts: [ORB-13027, ORB-13028, ORB-13030, ORB-13039, ORB-13726]
 
 The publish path as built: plan, digest, publisher, policy, ledger, reconcile, import. The
 invariants each part must keep are in [specs/](./specs/); approvals are in
-[Engagement — Design §2](../engagement/2_design.md#2-approvals), dispatch in
-[3_vision.md](./3_vision.md).
+[Engagement — Design §2](../engagement/2_design.md#2-approvals), scheduled dispatch in
+[Engagement — Design §5](../engagement/2_design.md#5-scheduled-dispatch).
 
 ## 1. Plans
 

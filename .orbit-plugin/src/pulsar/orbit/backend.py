@@ -25,6 +25,8 @@ policy is enforced against one ledger, so it must have one source. The
 Paths in a call (a plan ``source``, plan media) are relative to the
 workspace root, and media must resolve inside it: the sandbox grants the
 workspace read-only and nothing else outside the plugin's state.
+``pulsar.dispatch`` takes no path at all: it reads the plans its
+``[dispatch] plans`` globs match in the workspace.
 """
 
 from __future__ import annotations
@@ -52,6 +54,9 @@ log = logging.getLogger(__name__)
 NAMESPACE = "pulsar"
 ENVELOPE_VERSION = 1
 PUBLISH_UPLOAD_TIMEOUT_SECONDS = 55.0
+# Dispatch starts no reconcile or publish after this long, so the one it is in
+# finishes inside the upload cap and the manifest's backend timeout.
+DISPATCH_WORK_SECONDS = 40.0
 
 # Each tool's input keys: the request schemas' properties (a test holds them
 # equal). Anything else is refused, not ignored.
@@ -62,6 +67,7 @@ INPUTS: dict[str, frozenset[str]] = {
     "engagements": frozenset({"account", "hours", "limit"}),
     "metrics": frozenset({"account", "days", "limit"}),
     "publish": frozenset({"source", "account", "dry_run"}),
+    "dispatch": frozenset({"max_publish", "dry_run"}),
 }
 
 Output = dict[str, Any]
@@ -245,6 +251,31 @@ async def publish(app: App, call: Call) -> Output:
         )
 
 
+async def dispatch(app: App, call: Call) -> Output:
+    """Publish the approved, due plans ``[dispatch] plans`` names in the workspace,
+    and reconcile unknown writes. Takes no path: the plan location is config."""
+    if call.workspace is None:
+        raise PulsarError(INVALID_ARGUMENT, "dispatch needs a workspace")
+    max_publish = call.integer("max_publish", plugin.DISPATCH_PUBLISHES)
+    dry_run = call.flag("dry_run")
+    started = time.monotonic()
+    rt = app.runtime(
+        read_only=dry_run,
+        settings=_settings(app, call),
+        media_base=call.workspace,
+        upload_deadline=started + PUBLISH_UPLOAD_TIMEOUT_SECONDS,
+    )
+    async with rt:
+        return await plugin.dispatch(
+            rt,
+            workspace=call.workspace,
+            max_publish=max_publish,
+            dry_run=dry_run,
+            caller=call.caller,
+            deadline=started + DISPATCH_WORK_SECONDS,
+        )
+
+
 Handler = Callable[[App, Call], Coroutine[Any, Any, Output]]
 
 TOOLS: dict[str, Handler] = {
@@ -254,6 +285,7 @@ TOOLS: dict[str, Handler] = {
     "engagements": engagements,
     "metrics": metrics,
     "publish": publish,
+    "dispatch": dispatch,
 }
 
 

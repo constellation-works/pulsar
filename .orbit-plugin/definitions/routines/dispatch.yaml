@@ -1,0 +1,15 @@
+# Seeded disabled into the workspace's .orbit/routines as pulsar-dispatch. A human
+# enables it after setting `[dispatch] plans` in the pulsar home's config.toml.
+schemaVersion: 1
+name: dispatch
+description: >-
+  Every 5 minutes, publish the plans a human approved whose `not_before` has come,
+  and reconcile writes with an unknown outcome. Deterministic: no model.
+enabled: false
+trigger:
+  cron: "*/5 * * * *"
+  missed_run: skip
+target: job:pulsar_dispatch_pipeline
+policy:
+  timeout_minutes: 5
+  overlap: forbid

@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "max_publish": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 3,
+      "maximum": 10,
+      "description": "The most plans this call publishes; the rest wait for a later call."
+    },
+    "dry_run": {
+      "type": "boolean",
+      "default": false,
+      "description": "Report what is pending and ready, and send, reconcile and record nothing."
+    }
+  },
+  "additionalProperties": false
+}

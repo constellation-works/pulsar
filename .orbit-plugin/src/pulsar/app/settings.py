@@ -23,6 +23,9 @@ timezone = "UTC"                       # the day/month boundary and quiet hours 
 
 [media]
 roots = ["~/workspace/constellation/marketing"]   # default: none, path uploads off
+
+[dispatch]                             # where `pulsar.dispatch` looks for plans
+plans = ["x-updates/**/*.yaml", "engagement/**/*.yaml"]   # default: none, dispatch idle
 ```
 
 The flat ``[prices]`` keys of the first config format (``plain_post_usd``,
@@ -40,6 +43,11 @@ and may not be ``/``, the user's home, or an ancestor of it; name the
 directory the media actually lives in. ``~`` expands against the user's home
 the surface resolved (``Paths.user_home``); pulsar never looks it up itself.
 
+``[dispatch] plans`` are glob patterns relative to the workspace the Orbit
+plugin runs in, never absolute, never ``~`` and never through ``..``: the
+dispatcher reads plans only from there, and only from paths that stay inside
+the workspace. Without them it publishes nothing.
+
 Numbers are checked at load: finite (TOML's ``nan`` and ``inf``
 are refused), within the ``MAX_*`` bounds below, integers where integers are
 meant. The file itself must not be a symlink, another user's, or writable by
@@ -54,7 +62,7 @@ import re
 import tomllib
 from dataclasses import dataclass, field
 from datetime import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -75,6 +83,7 @@ MAX_PRICE_USD = 100.0
 MAX_DAILY_BUDGET_USD = 10_000.0
 MAX_MONTHLY_BUDGET_USD = 100_000.0
 MAX_POSTS_PER_DAY = 10_000
+MAX_DISPATCH_PATTERNS = 20
 
 # Each provider's prices when config.toml names none. Bluesky has no per-call price.
 PROVIDER_DEFAULTS: tuple[tuple[str, Prices], ...] = (("bsky", FREE), ("x", Prices()))
@@ -92,6 +101,8 @@ class Settings:
     default_account: str | None = None
     accounts: tuple[AccountConfig, ...] = ()
     policy: PolicyConfig = field(default_factory=PolicyConfig)
+    # Workspace-relative globs naming the plan files dispatch may publish; empty means none.
+    dispatch_plans: tuple[str, ...] = ()
 
     def prices_for(self, provider: str) -> Prices:
         return dict(self.provider_prices).get(provider, FREE)
@@ -214,6 +225,38 @@ def _parse_media(data: dict[str, Any], user_home: Path | None) -> tuple[Path, ..
     return tuple(_media_root(r, user_home) for r in roots)
 
 
+def _plan_pattern(raw: str) -> str:
+    pattern = raw.strip()
+    parts = PurePosixPath(pattern).parts
+    if (
+        not pattern
+        or "\\" in pattern
+        or pattern.startswith("~")
+        or PurePosixPath(pattern).is_absolute()
+        or ".." in parts
+    ):
+        raise _fail(
+            f"dispatch.plans pattern {raw!r} must be a glob relative to the workspace "
+            "(no leading /, no ~, no ..)",
+            "dispatch.plans",
+        )
+    return pattern
+
+
+def _parse_dispatch(data: dict[str, Any]) -> tuple[str, ...]:
+    dispatch = _table(data, "dispatch", {"plans"}, "dispatch")
+    raw_plans: object = dispatch.get("plans", [])
+    entries = as_list(raw_plans)
+    patterns = [p for p in entries if isinstance(p, str)]
+    if not isinstance(raw_plans, list) or len(patterns) != len(entries):
+        raise _fail("dispatch.plans must be a list of glob patterns", "dispatch.plans")
+    if len(patterns) > MAX_DISPATCH_PATTERNS:
+        raise _fail(
+            f"dispatch.plans takes at most {MAX_DISPATCH_PATTERNS} patterns", "dispatch.plans"
+        )
+    return tuple(dict.fromkeys(_plan_pattern(p) for p in patterns))
+
+
 def _alias(raw: object, where: str) -> str:
     if not isinstance(raw, str):
         raise _fail(f"{where} must be a provider:handle string", where)
@@ -300,7 +343,7 @@ def _parse_policy(data: dict[str, Any]) -> PolicyConfig:
 
 
 def _parse(data: dict[str, Any], user_home: Path | None) -> Settings:
-    unknown = set(data) - {"default_account", "accounts", "prices", "policy", "media"}
+    unknown = set(data) - {"default_account", "accounts", "prices", "policy", "media", "dispatch"}
     if unknown:
         raise _fail(f"unknown keys: {sorted(unknown)}")
     default_account = data.get("default_account")
@@ -312,6 +355,7 @@ def _parse(data: dict[str, Any], user_home: Path | None) -> Settings:
         ),
         accounts=_parse_accounts(data),
         policy=_parse_policy(data),
+        dispatch_plans=_parse_dispatch(data),
     )
 
 

@@ -2,9 +2,11 @@
 
 ``pulsar.status``, ``pulsar.validate`` and ``pulsar.history`` are offline and
 read-only. ``pulsar.engagements`` and ``pulsar.metrics`` are paid reads
-(budgeted and recorded like writes), and ``pulsar.publish`` publishes a plan
-only under a human approval of its digest: Orbit lets an agent call these
-three only from a task whose ``required_tools`` names them.
+(budgeted and recorded like writes), ``pulsar.publish`` publishes a plan
+only under a human approval of its digest, and ``pulsar.dispatch`` publishes
+the approved plans that are due and reconciles unknown writes: Orbit lets an
+agent call these four only from a task whose ``required_tools`` names them,
+and the ``pulsar-dispatch`` routine calls ``dispatch`` with no model.
 
 Each takes the ``Runtime`` it runs against and returns the tool's output, or
 raises ``PulsarError``; the Orbit backend (``pulsar.orbit``) owns the
@@ -16,22 +18,38 @@ from __future__ import annotations
 import os
 import shlex
 import stat
-from collections.abc import Mapping, Sequence
+import time
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from pulsar.app.core.account import home_command
 from pulsar.app.core.channels.contract import Mention, Metrics, OwnPost
-from pulsar.app.core.ledger import PUBLISHED, PlanRecord, approval_missing
-from pulsar.app.core.publishing import Plan, Prepared, open_beneath
+from pulsar.app.core.ledger import (
+    FAILED,
+    PARTIAL,
+    PUBLISHED,
+    SKIPPED,
+    SUBMITTING,
+    UNKNOWN,
+    PlanRecord,
+    approval_missing,
+    default_key,
+)
+from pulsar.app.core.publishing import STALE_SUBMITTING, Plan, Prepared, open_beneath
 from pulsar.internal.errors import (
     APPROVAL_REQUIRED,
+    BUDGET_EXCEEDED,
+    DAILY_CAP,
     INVALID_ARGUMENT,
     INVALID_MEDIA,
     INVALID_PLAN,
     INVALID_TEXT,
+    NOT_DUE,
+    OUTCOME_UNKNOWN,
+    QUIET_HOURS,
     SECRET_DETECTED,
     UNSUPPORTED,
     PulsarError,
@@ -41,7 +59,7 @@ from pulsar.internal.fs import as_object
 from .health import attention as health_attention
 from .health import auth_report
 from .interfaces import Runtime
-from .ops import budget_report, check_limit, receipt_entry, refused_entry
+from .ops import budget_report, check_limit, receipt_entry, reconcile_report, refused_entry
 
 # A plan source is small YAML; refuse anything that is plainly not one.
 SOURCE_MAX_BYTES = 256 * 1024
@@ -410,3 +428,265 @@ def _needs_approval(
     command = approve_command(rt, workspace, source, alias)
     last = (as_object(exc.detail) or {}).get("last_approval")
     return approval_missing(alias, ready.digest, str(last) if last else None, command=command)
+
+
+# -- dispatch ---------------------------------------------------------------------------
+
+# Plans one call may publish: min, default, max. Each may be a thread with media.
+DISPATCH_PUBLISHES = (1, 3, 10)
+# Plan files one call looks at, in path order; more is reported as ``truncated``.
+DISPATCH_SCAN_MAX = 200
+
+# Refusals a later call may not meet: dispatch passes over the plan with the code
+# as its reason. ``outcome_unknown`` is another caller sending the same write.
+DEFERRED = frozenset(
+    {NOT_DUE, APPROVAL_REQUIRED, QUIET_HOURS, BUDGET_EXCEEDED, DAILY_CAP, OUTCOME_UNKNOWN}
+)
+# Dispatch's own reasons, beside those codes.
+UNSCHEDULED = "unscheduled"  # no ``not_before``: the publish task's job, not the clock's
+APPROVAL_STALE = "approval_stale"  # approved, then edited: the new digest has no approval
+ALREADY_PUBLISHED = "published"
+IN_FLIGHT = "in_flight"  # unknown or being sent; reconcile settles it
+NEEDS_HUMAN = "failed"  # an earlier attempt failed; a human retries it
+TICK_LIMIT = "tick_limit"
+DEADLINE = "deadline"
+
+
+def plan_sources(workspace: Path, patterns: Sequence[str]) -> tuple[list[str], bool]:
+    """The files ``patterns`` match under ``workspace``, workspace-relative and
+    sorted, at most ``DISPATCH_SCAN_MAX``; and whether there were more.
+
+    A path through a dot-directory (``.git``, ``.orbit`` and its worktrees) is
+    never a candidate. Each match is still read through ``read_source``, which
+    refuses one that resolves outside the workspace.
+    """
+    found: set[str] = set()
+    for pattern in patterns:
+        for path in workspace.glob(pattern):
+            relative = path.relative_to(workspace)
+            if any(part.startswith(".") for part in relative.parts) or not path.is_file():
+                continue
+            found.add(relative.as_posix())
+    ordered = sorted(found)
+    return ordered[:DISPATCH_SCAN_MAX], len(ordered) > DISPATCH_SCAN_MAX
+
+
+async def dispatch(
+    rt: Runtime,
+    *,
+    workspace: Path,
+    max_publish: int,
+    dry_run: bool,
+    caller: str,
+    deadline: float,
+    clock: Callable[[], float] = time.monotonic,
+) -> Output:
+    """Reconcile every account's unknown writes, then publish the plans under
+    ``[dispatch] plans`` that are approved, due and not yet published.
+
+    A plan goes out only when every one of its accounts passes the checks
+    ``pulsar.publish`` makes (due, a live approval of the current digest, the
+    policy), and then exactly as ``pulsar.publish`` sends it: through the
+    ledger claim with ``require_approval``, which consumes the approval, so a
+    second dispatch or a manual publish racing this one finds the row claimed
+    and sends nothing. Dispatch records and skips no approval. A plan with no
+    ``not_before`` is left to the task that publishes it.
+
+    At most ``max_publish`` plans are published, and none is started after
+    ``deadline`` (``clock``'s time); the rest wait for a later call. A dry run
+    reports what is pending and ready and calls nothing.
+    """
+    max_publish = bounded("max_publish", max_publish, DISPATCH_PUBLISHES)
+    who = rt.caller(caller)
+    patterns = list(rt.settings.dispatch_plans)
+    out: Output = {
+        "dry_run": dry_run,
+        "patterns": patterns,
+        "scanned": 0,
+        "truncated": False,
+        "reconciled": [],
+        "published": [],
+        "ready": [],
+        "skipped": [],
+        "errors": [],
+        "note": None,
+    }
+    await _reconcile_unknown(rt, out, dry_run=dry_run, deadline=deadline, clock=clock)
+    if not patterns:
+        out["note"] = (
+            "no plan location is configured: set [dispatch] plans (workspace-relative globs) "
+            "in config.toml in the pulsar home"
+        )
+        return out
+    sources, out["truncated"] = plan_sources(workspace, patterns)
+    out["scanned"] = len(sources)
+    sent = 0
+    for source in sources:
+        if clock() >= deadline:
+            _skip(out, source, None, DEADLINE, "out of time for this call; a later one tries again")
+            continue
+        ready = _ready(rt, out, workspace, source)
+        if ready is None:
+            continue
+        if dry_run:
+            out["ready"].append({"source": source, "accounts": [_brief(p) for p in ready]})
+            continue
+        if sent >= max_publish:
+            _skip(out, source, None, TICK_LIMIT, f"{max_publish} plan(s) per call; next call")
+            continue
+        if await _send(rt, out, ready[0].plan, source, who):
+            sent += 1
+    return out
+
+
+async def _reconcile_unknown(
+    rt: Runtime, out: Output, *, dry_run: bool, deadline: float, clock: Callable[[], float]
+) -> None:
+    """``pulsar reconcile`` for each account with an unknown or abandoned write."""
+    pending: dict[str, list[str]] = {}
+    for record in rt.ledger.unresolved(stale_after=STALE_SUBMITTING, now=datetime.now(UTC)):
+        if record.account_alias is not None:
+            pending.setdefault(record.account_alias, []).append(record.key)
+    for alias, keys in sorted(pending.items()):
+        entry: dict[str, Any] = {"account": alias, "pending": keys, "results": [], "note": None}
+        out["reconciled"].append(entry)
+        if dry_run:
+            entry["note"] = "dry run: not reconciled"
+            continue
+        if clock() >= deadline:
+            entry["note"] = "out of time for this call; a later one reconciles"
+            continue
+        try:
+            report, _ = await reconcile_report(rt, account=alias)
+        except PulsarError as exc:
+            out["errors"].append(_error(None, alias, exc))
+            continue
+        entry["results"] = report["results"]
+
+
+def _ready(rt: Runtime, out: Output, workspace: Path, source: str) -> list[Prepared] | None:
+    """The plan at ``source`` prepared for each account, if every one may be
+    published now; else None, with the reason recorded in ``out``."""
+    try:
+        plan = Plan.from_yaml(read_source(workspace, source))
+        plan, targets = rt.plan_targets(plan, None)
+        prepared = [rt.publisher.prepare(plan, rt.offline_bound(alias)) for alias in targets]
+    except PulsarError as exc:
+        out["errors"].append(_error(source, None, exc))
+        return None
+    if plan.not_before is None:
+        _skip(out, source, None, UNSCHEDULED, "no `not_before`: its publish task publishes it")
+        return None
+    records = [rt.ledger.get_plan(_key(p)) for p in prepared]
+    if all(r is not None and r.state in (PUBLISHED, SKIPPED) for r in records):
+        _skip(out, source, None, ALREADY_PUBLISHED, "the ledger holds it as published")
+        return None
+    for ready, record in zip(prepared, records, strict=True):
+        if record is None:
+            continue
+        alias = ready.bound.alias
+        if record.state in (SUBMITTING, UNKNOWN):
+            _skip(out, source, alias, IN_FLIGHT, f"{record.key} is {record.state}")
+            return None
+        if record.state in (FAILED, PARTIAL):
+            message = (
+                f"{record.key} is {record.state} ({record.error_code}); a human retries it "
+                "with `pulsar.publish` or `pulsar publish`"
+            )
+            _skip(out, source, alias, NEEDS_HUMAN, message)
+            return None
+    for ready in prepared:
+        try:
+            rt.publisher.preflight(ready, idempotency_key=ready.plan.key, require_approval=True)
+        except PulsarError as exc:
+            if exc.code not in DEFERRED:
+                out["errors"].append(_error(source, ready.bound.alias, exc))
+                return None
+            reason, message = exc.code, exc.message
+            if exc.code == APPROVAL_REQUIRED:
+                reason, message = _unapproved(rt, ready, workspace, source, exc)
+            retry = (as_object(exc.detail) or {}).get("retry_after")
+            _skip(out, source, ready.bound.alias, reason, message, retry_after=retry)
+            return None
+    return prepared
+
+
+def _unapproved(
+    rt: Runtime, ready: Prepared, workspace: Path, source: str, exc: PulsarError
+) -> tuple[str, str]:
+    """``approval_stale`` when this file was approved and has changed since,
+    else ``approval_required``; with the command a human runs either way."""
+    message = _needs_approval(rt, ready, workspace, source, exc).message
+    path = workspace / source
+    names = {str(path), str(path.resolve())}
+    now = rt.ledger.now()
+    for approval in rt.ledger.approvals(account_alias=ready.bound.alias, limit=100):
+        if approval.source in names and approval.digest != ready.digest:
+            if approval.state(now) == "active":
+                return APPROVAL_STALE, (
+                    f"{source} changed after it was approved (approved {approval.digest[:19]}, "
+                    f"now {ready.digest[:19]}); {message}"
+                )
+    return APPROVAL_REQUIRED, message
+
+
+async def _send(rt: Runtime, out: Output, plan: Plan, source: str, who: str) -> bool:
+    """Publish ``plan`` to each account as ``pulsar.publish`` does. True when
+    any account's claim was made (the plan counts against the call's limit)."""
+    try:
+        prepared = [rt.publisher.prepare(plan, await rt.bound(alias)) for alias in plan.accounts]
+    except PulsarError as exc:
+        out["errors"].append(_error(source, None, exc))
+        return False
+    claimed = False
+    for ready in prepared:
+        alias = ready.bound.alias
+        try:
+            async with rt.watch_expiry(alias):
+                outcome = await rt.publisher.publish(
+                    ready, idempotency_key=plan.key, caller=who, require_approval=True
+                )
+        except PulsarError as exc:
+            if exc.code == OUTCOME_UNKNOWN:
+                _skip(out, source, alias, IN_FLIGHT, exc.message)
+            elif exc.code in DEFERRED:
+                retry = (as_object(exc.detail) or {}).get("retry_after")
+                _skip(out, source, alias, exc.code, exc.message, retry_after=retry)
+            else:
+                out["errors"].append(_error(source, alias, exc))
+            continue
+        claimed = True
+        out["published"].append({"source": source, **receipt_entry(outcome)})
+    return claimed
+
+
+def _key(ready: Prepared) -> str:
+    return ready.plan.key or default_key(ready.digest, ready.bound.user_id)
+
+
+def _brief(ready: Prepared) -> dict[str, Any]:
+    return {"account": ready.bound.alias, "digest": ready.digest, "idempotency_key": _key(ready)}
+
+
+def _skip(
+    out: Output,
+    source: str,
+    account: str | None,
+    reason: str,
+    message: str,
+    *,
+    retry_after: object = None,
+) -> None:
+    out["skipped"].append(
+        {
+            "source": source,
+            "account": account,
+            "reason": reason,
+            "message": message,
+            "retry_after": retry_after if isinstance(retry_after, str) else None,
+        }
+    )
+
+
+def _error(source: str | None, account: str | None, exc: PulsarError) -> dict[str, Any]:
+    return {"source": source, "account": account, "error": exc.to_result()}

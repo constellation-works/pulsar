@@ -218,3 +218,34 @@ tests:
   expect:
     error:
       code: invalid_argument
+- name: dispatch_without_a_plan_location_does_nothing
+  tool: dispatch
+  input: {}
+  expect:
+    output:
+      dry_run: false
+      patterns: []
+      scanned: 0
+      truncated: false
+      reconciled: []
+      published: []
+      ready: []
+      skipped: []
+      errors: []
+      note: 'no plan location is configured: set [dispatch] plans (workspace-relative globs) in config.toml in the pulsar home'
+- name: dispatch_dry_run_without_a_plan_location
+  tool: dispatch
+  input:
+    dry_run: true
+  expect:
+    output:
+      dry_run: true
+      patterns: []
+      scanned: 0
+      truncated: false
+      reconciled: []
+      published: []
+      ready: []
+      skipped: []
+      errors: []
+      note: 'no plan location is configured: set [dispatch] plans (workspace-relative globs) in config.toml in the pulsar home'

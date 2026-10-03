@@ -1,7 +1,7 @@
 ---
 title: Surfaces — Design
 owner: claude
-last_updated: 2026-09-27
+last_updated: 2026-10-03
 last_validated: 2026-09-26
 status: Accepted
 feature: surfaces
@@ -11,7 +11,7 @@ summary: The MCP tools and the caller boundary, the operator CLI, and how the Or
 tags: [surfaces, mcp, cli, orbit-plugin]
 paths: ["src/pulsar/**", ".orbit-plugin/**"]
 related_features: [publishing, accounts]
-related_artifacts: [ORB-13029, ORB-13032, ORB-13114, ORB-13115, ORB-13138]
+related_artifacts: [ORB-13029, ORB-13032, ORB-13114, ORB-13115, ORB-13138, ORB-13727]
 ---
 
 # Surfaces — Design
@@ -136,7 +136,7 @@ beneath them, `src/pulsar/cli/toolkit/` holds what they are written against: `co
 ## 3. Orbit Plugin
 
 The tool-specific manifest (schemaVersion 2, namespace `pulsar`, exec backend, requires Orbit `>=0.24.0
-<1.0.0`, platforms linux and macos, program `uv`). Three offline tools and three that spend
+<1.0.0`, platforms linux and macos, program `uv`). Three offline tools and four that spend
 money:
 
 | Tool | CLI | Output |
@@ -147,15 +147,18 @@ money:
 | `pulsar.engagements` | — | others' posts mentioning the account (`hours` 1–168, `limit` 1–100), each with `replied`; a paid read |
 | `pulsar.metrics` | — | the account's own posts (`days` 1–30, `limit` 1–100) with their metrics and `totals`; a paid read |
 | `pulsar.publish` | — | publishes a workspace plan `source` under a human approval of each account's digest; `dry_run` checks only |
+| `pulsar.dispatch` | — | reconciles unknown writes, then publishes the approved, due plans `[dispatch] plans` matches (`max_publish` 1–10); `dry_run` reports only |
 
 The first three are `execution_kind: read_only` and read the home without writing to it. The
-last three are `mutating`, so Orbit lets an agent call them only from a task whose
+last four are `mutating`, so Orbit lets an agent call them only from a task whose
 `required_tools` names them ([Engagement — Design §3](../engagement/2_design.md#3-plugin-tools)).
 All are `mcp_scope: workspace`, with request and response schemas under
 [schemas/](../../../.orbit-plugin/schemas/). An input key the request schema does not list is
 refused (`invalid_argument` naming it). Panels: *Pulsar accounts* (kv, `status`) and
 *Recent publications* (table, `history`). Auto-tasks: `auth-health`, `engager`, `post-proposer`,
-`weekly-report` and `x-updates`, seeded disabled ([Engagement — Design §4](../engagement/2_design.md#4-auto-tasks)). The skill [skills/publish](../../../.orbit-plugin/skills/publish/SKILL.md) is linked as `pulsar-publish`:
+`weekly-report` and `x-updates`, seeded disabled ([Engagement — Design §4](../engagement/2_design.md#4-auto-tasks)).
+Routine: `dispatch`, seeded disabled as `pulsar-dispatch`, with the activity and job it fires
+([Engagement — Design §5](../engagement/2_design.md#5-scheduled-dispatch)). The skill [skills/publish](../../../.orbit-plugin/skills/publish/SKILL.md) is linked as `pulsar-publish`:
 checking accounts, reading engagement, drafting and validating a plan, the approve-then-publish
 handoff, and, in
 [references/setup.md](../../../.orbit-plugin/skills/publish/references/setup.md), walking a human through
@@ -226,6 +229,7 @@ no request schema has a credential-shaped property.
 - [ORB-13114] — Orbit: keep `retryable` and `detail` in plugin errors (ws_orbit).
 - [ORB-13115] — Orbit: task and run id in the plugin context (ws_orbit).
 - [ORB-13138] — aligned the surfaces with the constellation standards.
+- [ORB-13727] — added `pulsar.dispatch` and the `pulsar-dispatch` routine.
 - [ORB-13630] — moved the plugin to `.orbit-plugin/` with a checked generated runtime copy.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

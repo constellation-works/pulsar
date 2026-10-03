@@ -50,7 +50,7 @@ def test_plugin_layout_and_manifest_paths():
     for path in paths:
         resolved = (PLUGIN / path).resolve()
         assert resolved.is_relative_to(PLUGIN.resolve()) and resolved.exists(), path
-    for pattern in [*spec["definitions"]["auto_tasks"], *spec["tests"]]:
+    for pattern in [*(g for globs in spec["definitions"].values() for g in globs), *spec["tests"]]:
         matches = list(PLUGIN.glob(pattern))
         assert matches and all(p.resolve().is_relative_to(PLUGIN.resolve()) for p in matches)
 

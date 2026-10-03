@@ -1,0 +1,19 @@
+# The deterministic step behind the pulsar-dispatch routine: one pulsar.dispatch
+# call, no model. Dispatch publishes only plans a human approved (pulsar approve)
+# that are due, and reconciles unknown writes; it records no approval.
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: pulsar_dispatch
+spec:
+  type: deterministic
+  description: >-
+    Publish the approved, due plans that pulsar's `[dispatch] plans` globs match in
+    the workspace, and reconcile unknown writes, through pulsar.dispatch.
+  input_schema_json:
+    type: object
+  action: plugin.tool_call
+  config:
+    tool: pulsar.dispatch
+    input:
+      max_publish: 3
