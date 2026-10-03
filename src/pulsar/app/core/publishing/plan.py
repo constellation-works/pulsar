@@ -13,8 +13,15 @@ tool call, or YAML from a content record)::
     variants:                        # per-provider replacement for `posts`
       bsky: {posts: [{text: "Shorter copy for Bluesky"}]}
     not_before: 2026-10-01T16:00:00Z
+    key: release:orbit:v0.26         # optional idempotency key; one account only
 
 ``text`` / ``media`` at the top level are shorthand for a single post.
+
+**Key.** A plan may name the idempotency key its publish is recorded under
+(``release:<repo>:<tag>`` for an announcement), so a different draft of the
+same announcement replays or conflicts with the first instead of posting
+again. A key names one account's write, so a plan with a key names at most
+one account. Without one, publishing derives the key from the digest.
 
 **Normalisation.** Account aliases are ``provider:handle``, lower-cased, a
 leading ``@`` dropped (``X:@ConstWorks`` is ``x:constworks``). Text and alt
@@ -26,7 +33,9 @@ exact bytes that go out.
 whitespace) of: the sorted account aliases, every post's text, every media
 item's *content* hash and alt text, reply/quote, and the variants. Key
 order, YAML formatting and alias spelling do not change it; any change to
-what would be published does. Two things are deliberately left out:
+what would be published does. A plan's ``key`` is digested when it has one
+(a plan without one digests as it always has), so an approval covers the key
+it is published under. Two things are deliberately left out:
 
 - the media *path* (the bytes are what is published, so a rename is not a
   change), and
@@ -49,6 +58,7 @@ import yaml
 
 from pulsar.app.core.account import normalize_alias
 from pulsar.app.core.channels.contract import MediaRef, PostSpec
+from pulsar.app.core.ledger import check_key
 from pulsar.internal.errors import INVALID_PLAN, PulsarError
 from pulsar.internal.fs import as_list, as_object
 
@@ -56,7 +66,18 @@ DIGEST_VERSION = 1
 MAX_THREAD_POSTS = 25
 
 _PLAN_KEYS = frozenset(
-    {"account", "accounts", "posts", "text", "media", "reply_to", "quote", "variants", "not_before"}
+    {
+        "account",
+        "accounts",
+        "posts",
+        "text",
+        "media",
+        "reply_to",
+        "quote",
+        "variants",
+        "not_before",
+        "key",
+    }
 )
 _POST_KEYS = frozenset({"text", "media"})
 _MEDIA_KEYS = frozenset({"path", "alt"})
@@ -80,6 +101,7 @@ class Plan:
     quote: str | None = None
     variants: tuple[tuple[str, tuple[PostSpec, ...]], ...] = ()  # sorted by provider
     not_before: datetime | None = None
+    key: str | None = None  # the idempotency key to publish under; None derives one
 
     # -- construction ---------------------------------------------------------
 
@@ -122,6 +144,7 @@ class Plan:
             quote=_id(plan.get("quote"), "quote"),
             variants=tuple(sorted(variants.items())),
             not_before=_when(plan.get("not_before")),
+            key=_key(plan.get("key"), accounts),
         )
 
     @classmethod
@@ -154,6 +177,7 @@ class Plan:
             quote=self.quote,
             variants=self.variants,
             not_before=self.not_before,
+            key=self.key,
         )
 
     # -- digest ---------------------------------------------------------------
@@ -170,7 +194,7 @@ class Plan:
                 for p in items
             ]
 
-        return {
+        canonical: dict[str, Any] = {
             "v": DIGEST_VERSION,
             "accounts": list(self.accounts),
             "posts": posts(self.posts),
@@ -178,6 +202,9 @@ class Plan:
             "quote": self.quote,
             "variants": {provider: posts(items) for provider, items in self.variants},
         }
+        if self.key is not None:  # absent, not null: keyless digests stay what they were
+            canonical["key"] = self.key
+        return canonical
 
     def digest(self, media_sha256: Callable[[MediaRef], str]) -> str:
         blob = json.dumps(
@@ -187,6 +214,18 @@ class Plan:
             ensure_ascii=False,
         )
         return "sha256:" + hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def _key(value: object, accounts: list[str]) -> str | None:
+    if value is None:
+        return None
+    try:
+        key = check_key(value)
+    except PulsarError as exc:  # invalid, or a credential: keep the code, say where
+        raise PulsarError(exc.code, f"key: {exc.message}", detail={"at": "key"}) from None
+    if len(set(accounts)) > 1:
+        raise _invalid("a key names one account's write; give one `account`", "key")
+    return key
 
 
 def _no_unknown(data: Mapping[str, Any], allowed: frozenset[str], where: str) -> None:

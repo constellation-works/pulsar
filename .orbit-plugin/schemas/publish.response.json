@@ -76,8 +76,12 @@
             "type": "string"
           },
           "digest": {
-            "type": "string",
-            "pattern": "^sha256:[0-9a-f]{64}$"
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "description": "The digest the row was published under; null when a plan's `key` replays a row imported from `posted.jsonl`, which kept no plan."
           },
           "replayed": {
             "type": "boolean"

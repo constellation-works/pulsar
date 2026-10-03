@@ -137,6 +137,7 @@ async def publish_report(
     key = check_key(idempotency_key)
     # Registry reads and media hashing go to a thread.
     plan, targets = await asyncio.to_thread(rt.plan_targets, read_plan(plan_path), account)
+    key = _plan_key(key, plan)
     _one_account_per_key(key, targets)
     prepared: list[Prepared] = []
     for alias in targets:
@@ -196,6 +197,7 @@ def _publish_preview(
     rt.caller(caller, default=CLI_CALLER)
     key = check_key(idempotency_key)
     plan, targets = rt.plan_targets(read_plan(plan_path), account)
+    key = _plan_key(key, plan)
     _one_account_per_key(key, targets)
     reports: list[dict[str, Any]] = []
     for alias in targets:
@@ -208,6 +210,18 @@ def _publish_preview(
         "accounts": reports,
         "note": "validated only; re-run with --confirm to publish (this costs money)",
     }, 0
+
+
+def _plan_key(key: str | None, plan: Plan) -> str | None:
+    """The key to publish under: ``--key``, else the plan's own ``key``. They
+    must agree when both are given, so neither silently wins."""
+    if key is not None and plan.key is not None and key != plan.key:
+        raise PulsarError(
+            INVALID_ARGUMENT,
+            "the idempotency key differs from the plan's `key`; drop one",
+            detail={"idempotency_key": key, "plan_key": plan.key},
+        )
+    return key if key is not None else plan.key
 
 
 def _one_account_per_key(key: str | None, targets: list[str]) -> None:

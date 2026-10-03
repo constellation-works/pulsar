@@ -274,7 +274,10 @@ def test_an_unknown_input_key_is_refused(state, workspace):
     response = run(state, workspace, "history", {"limt": 5})
     assert response["error"]["code"] == "invalid_argument"
     assert "`limt`" in response["error"]["message"]
-    assert response["error"]["detail"] == {"unknown": ["limt"], "accepted": ["account", "limit"]}
+    assert response["error"]["detail"] == {
+        "unknown": ["limt"],
+        "accepted": ["account", "keys", "limit"],
+    }
 
 
 # -- tools ----------------------------------------------------------------------------
@@ -463,6 +466,7 @@ def test_the_manifest_ships_the_auto_task_definitions():
         "engager",
         "post-proposer",
         "weekly-report",
+        "x-updates",
     ]
 
 
@@ -487,13 +491,13 @@ def test_an_auto_task_may_call_only_what_it_requires(path):
     assert "no-diff-expected" in template["tags"], (
         "ORB-13375: a documented no-file stop must survive Orbit's empty-stage gate"
     )
-    # Engager's publish task writes nothing (keeps no-diff-expected);
+    # Engager's and x-updates' publish tasks write nothing (keep no-diff-expected);
     # post-proposer's records receipts in content records (drops no-diff-expected).
     for spawned in re.findall(r"tags `\[([^\]]*)\]`", template["description"]):
         tags = [t.strip() for t in spawned.split(",")]
         if path.stem == "post-proposer":
             assert "no-diff-expected" not in tags
-        elif path.stem == "engager":
+        elif path.stem in ("engager", "x-updates"):
             assert "no-diff-expected" in tags
 
 
@@ -656,3 +660,192 @@ def test_auth_health_refuses_truncated_task_lists(workspace):
     assert result.returncode != 0
     assert "complete task list is required" in result.stderr
     assert result.stdout == ""
+
+
+# -- x-updates ------------------------------------------------------------------------
+
+X_UPDATES = PLUGIN / "definitions" / "auto_tasks" / "x-updates.yaml"
+X_PLANNER = PLUGIN / "skills" / "publish" / "scripts" / "x_updates.py"
+POSTED = ROOT / "tests" / "fixtures" / "posted.jsonl"
+
+
+def test_x_updates_definition_drafts_keyed_plans_and_never_publishes():
+    definition = yaml.safe_load(X_UPDATES.read_text())
+    assert definition["enabled"] is False and definition["dedupe"] == "skip_if_open"
+    assert definition["schedule"] == {"cron": "0 10 * * *"}
+    template = definition["template"]
+    assert template["required_tools"] == ["pulsar.history", "pulsar.status", "pulsar.validate"]
+    assert "no-diff-expected" in template["tags"], "nothing new delivers without a file"
+    description = template["description"]
+    for key in ("release:<repo>:<tag>", "repo:<name>", "pr:<repo>:<n>"):
+        assert key in description
+    assert "scripts/x_updates.py" in description and X_PLANNER.is_file()
+    assert "`keys`" in description, "the ledger lookup goes through pulsar.history keys"
+    assert "no file" in description.lower(), "nothing new writes no file (ORB-13375)"
+    plan = re.search(r"```yaml\n(.*?)```", description, re.S)
+    assert plan is not None and "key:" in plan.group(1) and "not_before" not in plan.group(1)
+
+
+def x_updates(mode, request, workspace, *, check=True):
+    result = subprocess.run(
+        [sys.executable, "-B", str(X_PLANNER), mode],
+        input=json.dumps(request),
+        capture_output=True,
+        text=True,
+        check=check,
+        cwd=workspace,
+    )
+    return json.loads(result.stdout) if check else result
+
+
+CANDIDATES = [
+    {"kind": "pr", "repo": "orbit", "number": 41, "title": "Faster drains", "at": "2026-10-02"},
+    {"kind": "pr", "repo": "example", "number": 5, "title": "Provenance", "at": "2026-10-01"},
+    {"kind": "repo", "repo": "example", "at": "2026-09-30"},
+    {"kind": "release", "repo": "orbit", "tag": "v0.21.0", "at": "2026-09-29"},
+    {"kind": "release", "repo": "orbit", "tag": "v0.26.0", "at": "2026-10-01"},
+    {"kind": "release", "repo": "pulsar", "tag": "v0.2.0", "at": "2026-10-02"},
+    {"kind": "repo", "repo": "nebula", "at": "2026-10-02"},
+    {"kind": "pr", "repo": "pulsar", "number": 7, "title": "Keyed plans", "at": "2026-10-03"},
+]
+
+
+def tasks_envelope(tasks):
+    return {"tasks": tasks, "total": len(tasks), "truncated": False}
+
+
+def test_x_updates_keys_are_the_routines_keys(workspace):
+    out = x_updates("keys", {"candidates": CANDIDATES + CANDIDATES[:1]}, workspace)
+    assert out["keys"] == [
+        "pr:orbit:41",
+        "pr:example:5",
+        "repo:example",
+        "release:orbit:v0.21.0",
+        "release:orbit:v0.26.0",
+        "release:pulsar:v0.2.0",
+        "repo:nebula",
+        "pr:pulsar:7",
+    ]
+    for bad in (
+        {"kind": "release", "repo": "constellation-works/orbit", "tag": "v1"},
+        {"kind": "release", "repo": "orbit", "tag": "v 1"},
+        {"kind": "pr", "repo": "orbit", "number": "41"},
+        {"kind": "issue", "repo": "orbit"},
+    ):
+        failed = x_updates("keys", {"candidates": [bad]}, workspace, check=False)
+        assert failed.returncode != 0 and failed.stdout == ""
+    too_many = [{"kind": "pr", "repo": "orbit", "number": n} for n in range(1, 102)]
+    assert x_updates("keys", {"candidates": too_many}, workspace, check=False).returncode != 0
+
+
+def test_x_updates_skips_keys_in_the_ledger_or_already_drafted(
+    state, home, bundle, workspace, fake_x
+):
+    register(home, bundle, ALIAS)
+    # The retired routine's history, imported: published and skipped keys alike.
+    asyncio.run(make_app(home, transport=fake_x.transport()).import_posted(POSTED, confirm=True))
+    keys = x_updates("keys", {"candidates": CANDIDATES}, workspace)["keys"]
+    history = run(state, workspace, "history", {"keys": keys, "limit": 100})["output"]
+    assert {row["key"] for row in history["rows"]} == {
+        "pr:example:5",  # published by the routine
+        "repo:example",  # published by the routine
+        "release:orbit:v0.21.0",  # skipped by the routine (a baseline)
+    }
+    assert history["truncated"] is False
+    # Drafted by an earlier run: a delivered plan file, and an open task not yet delivered.
+    (workspace / "x-updates" / "2026-10-01").mkdir(parents=True)
+    (workspace / "x-updates" / "2026-10-01" / "release-orbit-v0.26.0.yaml").write_text(
+        f'account: {ALIAS}\nkey: "release:orbit:v0.26.0"\ntext: "Orbit v0.26.0"\n'
+    )
+    open_task = {
+        "id": "fixture-open",
+        "terminal": False,
+        "description": "- idempotency key `release:pulsar:v0.2.0`, plan x-updates/...",
+    }
+    closed_task = {"id": "fixture-done", "terminal": True, "description": "`repo:nebula`"}
+    before = sorted(p for p in workspace.rglob("*"))
+    out = x_updates(
+        "plan",
+        {
+            "candidates": CANDIDATES,
+            "history": history,
+            "tasks": tasks_envelope([open_task, closed_task]),
+            "date": "2026-10-03",
+        },
+        workspace,
+    )
+    assert sorted(p for p in workspace.rglob("*")) == before, "the helper writes nothing"
+    skipped = {s["key"]: s["reason"] for s in out["skipped"]}
+    drafted = "x-updates/2026-10-01/release-orbit-v0.26.0.yaml"
+    assert skipped == {
+        "pr:example:5": "in the ledger (published, import:posted.jsonl)",
+        "repo:example": "in the ledger (published, import:posted.jsonl)",
+        "release:orbit:v0.21.0": "in the ledger (skipped, import:posted.jsonl)",
+        "release:orbit:v0.26.0": f"already drafted in {drafted}",
+        "release:pulsar:v0.2.0": "an open task lists it",
+    }
+    # Three at most, releases before repos before PRs, oldest first; the rest wait.
+    assert [(d["key"], d["plan"]) for d in out["drafts"]] == [
+        ("repo:nebula", "x-updates/2026-10-03/repo-nebula.yaml"),
+        ("pr:orbit:41", "x-updates/2026-10-03/pr-orbit-41.yaml"),
+        ("pr:pulsar:7", "x-updates/2026-10-03/pr-pulsar-7.yaml"),
+    ]
+    assert out["drafts"][1]["title"] == "Faster drains"
+    assert out["deferred"] == []
+    capped = x_updates(
+        "plan",
+        {"candidates": CANDIDATES, "history": history, "tasks": tasks_envelope([]),
+         "date": "2026-10-03", "max_drafts": 1},
+        workspace,
+    )  # fmt: skip
+    assert [d["key"] for d in capped["drafts"]] == ["release:pulsar:v0.2.0"]
+    assert capped["deferred"] == ["repo:nebula", "pr:orbit:41", "pr:pulsar:7"]
+
+
+def test_x_updates_with_nothing_new_drafts_nothing(state, home, bundle, workspace, fake_x):
+    register(home, bundle, ALIAS, handle="constworks", provider_user_id="1")
+    asyncio.run(make_app(home, transport=fake_x.transport()).import_posted(POSTED, confirm=True))
+    known = [{"kind": "repo", "repo": "example"}, {"kind": "pr", "repo": "example", "number": 4}]
+    keys = x_updates("keys", {"candidates": known}, workspace)["keys"]
+    history = run(state, workspace, "history", {"keys": keys})["output"]
+    out = x_updates(
+        "plan", {"candidates": known, "history": history, "tasks": tasks_envelope([])}, workspace
+    )
+    assert out["drafts"] == [] and out["deferred"] == [] and len(out["skipped"]) == 2
+    empty = {"rows": [], "total": 0, "truncated": False}
+    out = x_updates("plan", {"candidates": [], "history": empty, "tasks": tasks_envelope([])},
+                    workspace)  # fmt: skip
+    assert out == {"drafts": [], "skipped": [], "deferred": []}
+    assert list(workspace.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    ("history", "tasks"),
+    [
+        ({"rows": [], "total": 1, "truncated": True}, tasks_envelope([])),
+        (
+            {"rows": [], "total": 0, "truncated": False},
+            {"tasks": [], "total": 1, "truncated": True},
+        ),
+    ],
+)
+def test_x_updates_refuses_an_incomplete_lookup(workspace, history, tasks):
+    request = {"candidates": CANDIDATES, "history": history, "tasks": tasks}
+    failed = x_updates("plan", request, workspace, check=False)
+    assert failed.returncode != 0 and failed.stdout == ""
+
+
+def test_history_looks_up_keys_however_old(state, home, bundle, workspace, fake_x):
+    register(home, bundle, ALIAS, handle="constworks", provider_user_id="1")
+    asyncio.run(make_app(home, transport=fake_x.transport()).import_posted(POSTED, confirm=True))
+    newest = run(state, workspace, "history", {"limit": 1})["output"]
+    assert newest["truncated"] is True
+    out = run(state, workspace, "history", {"keys": ["release:orbit:v0.20.0", "pr:none:1"]})
+    [row] = out["output"]["rows"]
+    assert row["key"] == "release:orbit:v0.20.0" and row["state"] == "skipped"
+    assert out["output"]["total"] == 1 and out["output"]["truncated"] is False
+    other = run(state, workspace, "history", {"keys": ["release:orbit:v0.20.0"], "account": ALIAS})
+    assert other["output"]["total"] == 1
+    for bad in ([], ["k"] * 101, [""], "release:orbit:v0.20.0", [7]):
+        response = run(state, workspace, "history", {"keys": bad})
+        assert response["error"]["code"] == "invalid_argument", bad

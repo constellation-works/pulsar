@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: idempotency keys — derivation, replay, conflict, retry and outcome_unknown"
-last_validated: 2026-09-26
+last_validated: 2026-10-03
 ---
 
 # Spec: Idempotency
@@ -19,9 +19,11 @@ retry after a timeout is a second paid post.
 ## Keys
 
 - 1–200 characters, no whitespace or control characters; scanned by the secret scanner.
-- **Plans** (`pulsar publish`): one row per account, key `digest + account` by default. An
-  explicit key works for one account only (`invalid_argument` otherwise). Routines pass their
-  own (`release:<repo>:<tag>`, `pr:<repo>:<n>`).
+- **Plans** (`pulsar publish`, `pulsar.publish`): one row per account, key `digest + account`
+  by default. An explicit key works for one account only: the plan's own `key` (digested, so
+  the approval covers it; `invalid_plan` with two accounts), or `--idempotency-key` on the CLI
+  (`invalid_argument` with several accounts, or when it differs from the plan's `key`).
+  Routines put their own in the plan (`release:<repo>:<tag>`, `repo:<name>`, `pr:<repo>:<n>`).
 - **`create_post`**: default key derived from the request (text, `reply_to_post_id`,
   `quote_post_id`, `media_ids`) and the posting account's user id, using the pre-plan request
   digest so keys from an older pulsar carry over.
@@ -38,7 +40,7 @@ retry after a timeout is a second paid post.
 | partial thread | resumes after the last published post; never re-sends one |
 | unknown, or still in flight | `outcome_unknown` again; nothing is sent |
 | skipped | plans: reported as skipped; `create_post`: `idempotency_conflict` with `detail.state: skipped` |
-| imported as published | the imported receipt, whatever the new text |
+| imported as published | the imported receipt, whatever the new text (its `digest` is null) |
 
 Policy is checked in the same transaction that claims a new row or re-arms a failed one; a
 refused call leaves no row, and a replay is never re-checked.

@@ -151,6 +151,44 @@ tests:
       rows: []
       total: 0
       truncated: false
+- name: history_looks_up_keys_on_an_empty_ledger
+  tool: history
+  input:
+    keys:
+    - release:orbit:v0.26.0
+    - repo:pulsar
+  expect:
+    output:
+      rows: []
+      total: 0
+      truncated: false
+- name: validate_reports_a_plans_key
+  tool: validate
+  input:
+    plan:
+      account: x:constworks
+      key: release:orbit:v0.26.0
+      text: Orbit v0.26.0 is out
+  expect:
+    output:
+      valid: true
+      accounts:
+      - account: x:constworks
+        provider: x
+        digest: sha256:4cc9a4e2ffa97c94d99c1a2ab25f2ca388046fccde4082df195efe6253a5ddd9
+        estimated_cost_usd: 0.015
+        reply_to: null
+        quote: null
+        not_before: null
+        key: release:orbit:v0.26.0
+        posts:
+        - text: Orbit v0.26.0 is out
+          length: 20
+          max_length: 280
+          has_url: false
+          estimated_cost_usd: 0.015
+          media: []
+        pricing_note: from the configured price table; verify on the provider's portal
 - name: history_for_an_unknown_account
   tool: history
   input:

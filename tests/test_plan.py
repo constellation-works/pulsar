@@ -155,3 +155,37 @@ def test_yaml_booleans_are_not_silently_text():
 )
 def test_alias_normalisation(raw, alias):
     assert normalize_alias(raw) == alias
+
+
+def test_a_key_is_digested_only_when_given():
+    keyed = {"account": "x:constworks", "text": "hi", "key": "release:orbit:v0.26.0"}
+    plain = {"account": "x:constworks", "text": "hi"}
+    assert Plan.from_mapping(plain).key is None
+    assert Plan.from_mapping(keyed).key == "release:orbit:v0.26.0"
+    # A plan without a key keeps the digest it always had; the key is approved with the content.
+    assert '"key"' not in str(Plan.from_mapping(plain).canonical(_sha))
+    assert digest(keyed) != digest(plain)
+    assert digest(keyed) != digest({**keyed, "key": "release:orbit:v0.26.1"})
+    assert Plan.from_mapping(keyed).with_accounts(("x:constworks",)).key == keyed["key"]
+
+
+@pytest.mark.parametrize(
+    ("key", "code"),
+    [
+        ("", "invalid_argument"),
+        ("release: orbit", "invalid_argument"),
+        (7, "invalid_argument"),
+        ("ghp_" + "a" * 36, "secret_detected"),
+    ],
+)
+def test_a_bad_key_says_where(key, code):
+    with pytest.raises(PulsarError) as exc:
+        Plan.from_mapping({"text": "hi", "key": key})
+    assert exc.value.code == code and exc.value.detail == {"at": "key"}
+
+
+def test_a_key_names_one_accounts_write():
+    with pytest.raises(PulsarError) as exc:
+        Plan.from_mapping({"accounts": ["x:a", "x:b"], "text": "hi", "key": "repo:pulsar"})
+    assert exc.value.code == "invalid_plan" and exc.value.detail == {"at": "key"}
+    assert Plan.from_mapping({"accounts": ["x:a", "X:@A"], "text": "hi", "key": "k"}).key == "k"

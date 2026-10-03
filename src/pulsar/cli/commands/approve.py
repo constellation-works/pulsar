@@ -131,6 +131,8 @@ def describe(preview: Mapping[str, Any]) -> str:
             f"about ${account['estimated_cost_usd']} (from the configured prices)",
             f"  digest   {account['digest']}",
         ]
+        if account.get("key"):
+            lines.append(f"  key      {account['key']} (published once under this key)")
         if account.get("reply_to"):
             lines.append(f"  replies to post {account['reply_to']}")
         if account.get("quote"):

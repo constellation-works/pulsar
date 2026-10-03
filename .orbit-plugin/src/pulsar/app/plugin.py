@@ -16,7 +16,7 @@ from __future__ import annotations
 import os
 import shlex
 import stat
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict
 from datetime import timedelta
 from pathlib import Path
@@ -218,12 +218,26 @@ def _reason(exc: BaseException) -> str:
     return exc.strerror if isinstance(exc, OSError) and exc.strerror else type(exc).__name__
 
 
-def history(rt: Runtime, *, account: str | None, limit: int) -> Output:
-    """The newest ledger rows, flattened for a table, and how many there are."""
+def history(
+    rt: Runtime, *, account: str | None, limit: int, keys: Sequence[str] | None = None
+) -> Output:
+    """The newest ledger rows, flattened for a table, and how many there are.
+
+    ``keys`` narrows it to the rows held under those idempotency keys (each
+    key holds at most one row), so a drafting task can ask whether an
+    announcement was already published, skipped or imported however old it is.
+    """
     limit = check_limit(limit)
     alias = rt.account(account).alias if account is not None else None
-    rows = [_row(r) for r in rt.ledger.history(limit=limit, account_alias=alias)]
-    total = rt.ledger.count(account_alias=alias)
+    if keys is None:
+        records = rt.ledger.history(limit=limit, account_alias=alias)
+        total = rt.ledger.count(account_alias=alias)
+    else:
+        found = [r for k in dict.fromkeys(keys) if (r := rt.ledger.get_plan(k)) is not None]
+        found = [r for r in found if alias is None or r.account_alias == alias]
+        found.sort(key=lambda r: r.created_at, reverse=True)
+        records, total = found[:limit], len(found)
+    rows = [_row(r) for r in records]
     return {"rows": rows, "total": total, "truncated": total > len(rows)}
 
 
@@ -351,8 +365,11 @@ async def publish(
     Every account's plan is prepared and checked (due, approved, admitted by
     the policy) before the first is published, so a missing approval for one
     account sends nothing for any. A dry run makes the same checks offline and
-    sends nothing. The plugin takes no idempotency key: the default one, from
-    the digest and account, is the one an approval is used by.
+    sends nothing. The plugin takes no idempotency key argument: the plan's
+    ``key`` when it names one (digested, so the approval covers it), else the
+    default one from the digest and account, is the one an approval is used
+    by. A key the ledger already holds replays its receipt (an imported or
+    skipped row included) or is ``idempotency_conflict``; it never posts again.
     """
     plan = Plan.from_yaml(read_source(workspace, source))
     plan, targets = rt.plan_targets(plan, account)
@@ -363,7 +380,7 @@ async def publish(
         prepared = [rt.publisher.prepare(plan, await rt.bound(alias)) for alias in targets]
     for ready in prepared:
         try:
-            rt.publisher.preflight(ready, require_approval=True)
+            rt.publisher.preflight(ready, idempotency_key=plan.key, require_approval=True)
         except PulsarError as exc:
             if exc.code != APPROVAL_REQUIRED:
                 raise
@@ -374,9 +391,11 @@ async def publish(
     for ready in prepared:
         try:
             async with rt.watch_expiry(ready.bound.alias):
-                outcome = await rt.publisher.publish(ready, caller=who, require_approval=True)
+                outcome = await rt.publisher.publish(
+                    ready, idempotency_key=plan.key, caller=who, require_approval=True
+                )
         except PulsarError as exc:
-            results.append(refused_entry(ready, None, exc))
+            results.append(refused_entry(ready, plan.key, exc))
             continue
         results.append(receipt_entry(outcome))
     return {"published": True, "results": results}

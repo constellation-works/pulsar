@@ -221,6 +221,70 @@ def test_an_edit_after_approval_needs_a_new_one(
     assert fake_x.calls("POST") == []
 
 
+UPDATE = f"""\
+account: {ALIAS}
+key: "release:orbit:v0.26.0"
+text: "Orbit v0.26.0 is out: https://github.com/constellation-works/orbit/releases/tag/v0.26.0"
+"""
+
+
+def draft(workspace: Path, name: str, text: str) -> str:
+    source = f"x-updates/2026-10-03/{name}.yaml"
+    (workspace / source).parent.mkdir(parents=True, exist_ok=True)
+    (workspace / source).write_text(text)
+    return source
+
+
+def test_a_keyed_plan_drafted_and_published_twice_reaches_x_once(
+    state, home, workspace, fake_x, monkeypatch, capsys
+):
+    """The x-updates path: each run drafts a plan under the announcement's key, a human
+    approves it, a task publishes it. Two runs of that path with one key post once."""
+    for run_no, text in enumerate((UPDATE, UPDATE.replace("is out", "has shipped"))):
+        source = draft(workspace, f"release-orbit-v0.26.0-{run_no}", text)
+        out = call(state, workspace, fake_x, "validate", {"source": source})["output"]
+        [account] = out["accounts"]
+        assert account["key"] == "release:orbit:v0.26.0"
+        assert approve_as_printed(account["approve_command"], monkeypatch, capsys) == 0
+        [result] = call(state, workspace, fake_x, "publish", {"source": source})["output"][
+            "results"
+        ]
+        assert result["idempotency_key"] == "release:orbit:v0.26.0"
+        if run_no == 0:
+            assert result["ok"] and result["state"] == "published" and not result["replayed"]
+        else:  # a second draft of the same announcement is refused by the ledger
+            assert result["error"]["code"] == "idempotency_conflict"
+        again = call(state, workspace, fake_x, "publish", {"source": source})["output"]
+        assert not again["results"][0]["ok"] or again["results"][0]["replayed"] is True
+    assert len(fake_x.calls("POST", "/tweets")) == 1
+    assert rows(home, "SELECT idempotency_key, state FROM writes") == [
+        ("release:orbit:v0.26.0", "published")
+    ]
+
+
+def test_a_keyed_plan_the_imported_history_holds_replays_without_posting(
+    state, home, workspace, fake_x
+):
+    posted = workspace.parent / "posted.jsonl"
+    posted.write_text(
+        '{"key": "release:orbit:v0.25.0", "ts": "2026-09-13T01:08:12+00:00",'
+        ' "post_id": "1000000000000000009", "text": "Orbit v0.25.0"}\n'
+        '{"key": "repo:example", "ts": "2026-09-13T01:08:12+00:00", "post_id": null,'
+        ' "note": "never post"}\n'
+    )
+    asyncio.run(make_app(home, transport=fake_x.transport()).import_posted(posted, confirm=True))
+    for key in ("release:orbit:v0.25.0", "repo:example"):
+        source = draft(
+            workspace, key.replace(":", "-"), UPDATE.replace("release:orbit:v0.26.0", key)
+        )
+        # No approval: a replay sends nothing, so it needs none.
+        [result] = call(state, workspace, fake_x, "publish", {"source": source})["output"][
+            "results"
+        ]
+        assert result["replayed"] is True and result["idempotency_key"] == key
+    assert fake_x.calls("POST") == []
+
+
 def test_publish_takes_no_key_or_approval_input(state, home, workspace, fake_x, reply):
     for extra in ({"idempotency_key": "k"}, {"approved": True}, {"caller": "human"}):
         response = call(state, workspace, fake_x, "publish", {"source": reply, **extra})
