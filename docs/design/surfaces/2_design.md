@@ -11,7 +11,7 @@ summary: The MCP tools and the caller boundary, the operator CLI, and how the Or
 tags: [surfaces, mcp, cli, orbit-plugin]
 paths: ["src/pulsar/**", ".orbit-plugin/**"]
 related_features: [publishing, accounts]
-related_artifacts: [ORB-13029, ORB-13032, ORB-13114, ORB-13115, ORB-13138, ORB-13727]
+related_artifacts: [ORB-13029, ORB-13032, ORB-13114, ORB-13115, ORB-13138, ORB-13727, ORB-13751]
 ---
 
 # Surfaces — Design
@@ -187,7 +187,11 @@ installing pulsar and binding an account.
   --no-install-project` once per `uv.lock` checksum, then execs the venv's Python with
   `PYTHONPATH` at the plugin's generated `src/`. Root `src/`, `pyproject.toml` and `uv.lock`
   are canonical; `make plugin` refreshes their committed copies inside `.orbit-plugin/`, and
-  `tests/test_plugin_package.py` detects drift. `requires.programs: [uv]` lets Orbit resolve uv at
+  `tests/test_plugin_package.py` detects drift. The canonical `pyproject.toml` declares an
+  explicit uv workspace with no additional members, so the generated plugin stops project
+  discovery at its own root. Without that boundary, uv inspects the enclosing checkout's
+  `pyproject.toml` outside the conformance sandbox's read grants and fails before syncing
+  ([ORB-13751]). Warm calls still skip uv. `requires.programs: [uv]` lets Orbit resolve uv at
   enable ([ORB-13032]); older hosts need uv on the caller's `PATH`.
 - **Envelope.** [orbit/backend.py](../../../src/pulsar/orbit/backend.py) reads
   `{schema_version: 1, tool, input, context}` and writes exactly one JSON line,
@@ -231,5 +235,6 @@ no request schema has a credential-shaped property.
 - [ORB-13138] — aligned the surfaces with the constellation standards.
 - [ORB-13727] — added `pulsar.dispatch` and the `pulsar-dispatch` routine.
 - [ORB-13630] — moved the plugin to `.orbit-plugin/` with a checked generated runtime copy.
+- [ORB-13751] — bounded uv project discovery to the plugin root so sandboxed cold syncs succeed.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
