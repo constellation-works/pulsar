@@ -47,6 +47,39 @@ tests:
           estimated_cost_usd: 0.2
           media: []
         pricing_note: from the configured price table; verify on the provider's portal
+- name: validate_bluesky_links_use_offline_tlds_for_bare_domains
+  tool: validate
+  input:
+    plan:
+      account: bsky:constworks.bsky.social
+      posts:
+      - text: reads config.toml and plugin.yaml with Node.js
+      - text: example.com https://localhost/notes
+  expect:
+    output:
+      valid: true
+      accounts:
+      - account: bsky:constworks.bsky.social
+        provider: bsky
+        digest: sha256:4783f6a78270d2fff2b1c670668a250c6a024ec7e7796e5184557ea7f649d451
+        estimated_cost_usd: 0.0
+        reply_to: null
+        quote: null
+        not_before: null
+        posts:
+        - text: reads config.toml and plugin.yaml with Node.js
+          length: 46
+          max_length: 300
+          has_url: false
+          estimated_cost_usd: 0.0
+          media: []
+        - text: example.com https://localhost/notes
+          length: 35
+          max_length: 300
+          has_url: true
+          estimated_cost_usd: 0.0
+          media: []
+        pricing_note: from the configured price table; verify on the provider's portal
 - name: validate_counts_weighted_length
   tool: validate
   input:

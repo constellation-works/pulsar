@@ -30,6 +30,7 @@ import sys
 from datetime import date as Date
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 PLANS = Path("x-updates")
 MAX_CANDIDATES = 100  # pulsar.history looks up at most 100 keys
@@ -122,7 +123,8 @@ def plan(request: dict[str, Any], root: Path = PLANS) -> dict[str, Any]:
 
 
 def _slug(key: str) -> str:
-    return re.sub(r"[^A-Za-z0-9._-]+", "-", key.replace(":", "-")).strip("-.")
+    """Encode the entire key reversibly, including separators and literal percent signs."""
+    return quote(key, safe="")
 
 
 def main() -> None:

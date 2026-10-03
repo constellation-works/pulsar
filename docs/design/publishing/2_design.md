@@ -11,7 +11,7 @@ summary: How a plan is normalised and digested, how the publisher admits, claims
 tags: [publishing, plan, ledger, idempotency, policy, reconcile]
 paths: ["src/pulsar/app/core/publishing/plan.py", "src/pulsar/app/core/publishing/publisher.py", "src/pulsar/app/core/ledger/**", "src/pulsar/app/core/publishing/policy.py", "src/pulsar/app/core/ledger/usage.py", "src/pulsar/internal/guard/scanner.py", "src/pulsar/app/core/publishing/media.py", "src/pulsar/app/importer.py", "src/pulsar/app/writelog.py"]
 related_features: [accounts, channels, surfaces]
-related_artifacts: [ORB-13027, ORB-13028, ORB-13030, ORB-13039, ORB-13726]
+related_artifacts: [ORB-13027, ORB-13028, ORB-13030, ORB-13039, ORB-13726, ORB-13746]
 ---
 
 # Publishing — Design
@@ -97,6 +97,9 @@ Summarised here; the contract is [specs/idempotency.md](./specs/idempotency.md).
   `idempotency_conflict`; a definitive failure is retried; an unknown or in-flight key answers
   `outcome_unknown` again. So a second draft of an announcement whose key is published (or
   skipped, or imported) never posts: it replays or conflicts, and a replay needs no approval.
+  Preflight resolves terminal published and skipped rows before policy admission too, so a
+  skipped receipt (including an imported skip with no items) is available during quiet hours
+  or when a cap or budget blocks new posts. The ledger claim still checks for conflicts.
 - `delete_post` keys `delete:<post_id>`. `upload_media` is recorded but not deduplicated: an
   orphaned media id is harmless and expires.
 
@@ -194,13 +197,17 @@ It drafts and never publishes, and keeps the routine's keys, so imported history
 3. The helper (`plan`) skips a key the ledger holds in any state, one a plan file under
    `x-updates/` carries (a delivered draft), and one an open `pulsar-x-update-posts` task names
    (a draft not yet delivered), and returns at most three drafts, releases first.
-4. The agent writes each as a plan with that `key` under `x-updates/YYYY-MM-DD/`, validates it,
+4. The agent writes each as a plan with that `key` under `x-updates/YYYY-MM-DD/`, using the
+   helper's filename (the full key percent-encoded, so distinct keys cannot overwrite each
+   other's drafts), validates it,
    and files one proposed publishing task. Nothing new writes no file and files no task
    (`no-diff-expected`).
 
 Publishing stays the approve-then-`pulsar.publish` flow. If two drafts of one key both reach
 it, the ledger replays or refuses the second (§3); a test publishes the same key twice through
 the plugin and sees one provider call.
+The publishing follow-up records a skipped receipt as already skipped, including its note,
+and continues without changing its key. Such a receipt has no publication URL.
 
 ## 9. Concerns & Honest Limitations
 
@@ -233,5 +240,6 @@ the plugin and sees one provider call.
 - [ORB-13030] — phase 4: approvals, standing policies, dispatch.
 - [ORB-13039] — took the plan claim off the event loop; closed the media-root swap race.
 - [ORB-13726] — plan `key`, `pulsar.history` `keys`, and the x-updates auto-task.
+- [ORB-13746] — made draft filenames injective and terminal receipts replay before policy checks.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

@@ -39,11 +39,15 @@ retry after a timeout is a second paid post.
 | failed definitively (never reached the provider, or rejected) | retried |
 | partial thread | resumes after the last published post; never re-sends one |
 | unknown, or still in flight | `outcome_unknown` again; nothing is sent |
-| skipped | plans: reported as skipped; `create_post`: `idempotency_conflict` with `detail.state: skipped` |
+| skipped | plans: the skipped receipt, `replayed: true`, including imported skips with no items; `create_post`: `idempotency_conflict` with `detail.state: skipped` |
 | imported as published | the imported receipt, whatever the new text (its `digest` is null) |
 
 Policy is checked in the same transaction that claims a new row or re-arms a failed one; a
 refused call leaves no row, and a replay is never re-checked.
+Plan preflight also resolves published and skipped rows before approval and policy checks:
+quiet hours, the daily cap and budget limits cannot prevent a terminal receipt from replaying.
+The ledger claim still verifies that the key belongs to this account and checks request
+conflicts under its write lock before returning a receipt.
 
 ## `outcome_unknown`
 

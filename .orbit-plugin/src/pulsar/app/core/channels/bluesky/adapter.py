@@ -18,7 +18,7 @@ reply and quote targets are AT URIs too.
   the blobs ``upload`` stored; a quote is a record embed, or
   ``recordWithMedia`` when the post also has media.
 
-``upload`` sends the bytes as a blob and returns its CID; the blob and its
+``upload`` sends the bytes as a blob and returns an opaque media id; the blob and its
 alt text stay in this channel until ``create`` embeds them, so a media id is
 good only on the channel that uploaded it (the publisher uploads each item's
 media just before posting it).
@@ -44,6 +44,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any, Literal
+from uuid import uuid4
 
 from pulsar.internal.errors import (
     API_ERROR,
@@ -232,7 +233,7 @@ class BlueskyChannel:
         self.did = did
         self.handle = handle
         self._now = now
-        self._blobs: dict[str, _Blob] = {}  # by CID, until create embeds them
+        self._blobs: dict[str, _Blob] = {}  # by upload occurrence, until create embeds them
         self._refs: dict[str, _Ref] = {}  # posts this channel created, by URI
         self._dids: dict[str, str | None] = {}  # resolved mention handles
 
@@ -296,8 +297,10 @@ class BlueskyChannel:
     async def upload(self, media: LoadedMedia) -> str:
         blob = await self.client.upload_blob(media.data, media.mime)
         cid = str(obj(blob.get("ref"))["$link"])
-        self._blobs[cid] = _Blob(blob=blob, mime=media.mime, alt=media.alt)
-        return cid
+        # Identical bytes share a CID, but each attachment has its own alt text.
+        media_id = f"{cid}:{uuid4().hex}"
+        self._blobs[media_id] = _Blob(blob=blob, mime=media.mime, alt=media.alt)
+        return media_id
 
     async def create(
         self,

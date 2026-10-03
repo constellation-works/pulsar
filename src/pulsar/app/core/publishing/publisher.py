@@ -301,7 +301,8 @@ class Publisher:
         """The checks ``publish`` makes before claiming, without claiming: when
         the plan is due, whether it is approved (if that is required) and
         whether the policy admits it now. A dry run calls this so it refuses
-        what the live call would."""
+        what the live call would. A terminal replay sends nothing, so it needs
+        neither approval nor policy admission; the live claim checks conflicts."""
         now = self._now()
         self._check_due(prepared.plan, now)
         key = check_key(idempotency_key) or default_key(prepared.digest, prepared.bound.user_id)
@@ -309,7 +310,9 @@ class Publisher:
         ledger = self.ledger.reader()
         already = ledger.get_plan(key)
         replay = already is not None and already.state in (PUBLISHED, SKIPPED)
-        if require_approval and not replay:  # a replay sends nothing, so needs none
+        if replay:  # the claim checks conflicts; a replay needs no approval or policy admission
+            return
+        if require_approval:
             self.approval(prepared, key, ledger)
         remaining = self._remaining(prepared, key, ledger)
         tz = self.settings.policy.tz
