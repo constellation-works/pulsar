@@ -58,6 +58,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Sandboxed media validation.** Extension claims no longer initialize the host MIME
+  database, avoiding a denied `/etc/mime.types` read for workspace-contained MP4s and
+  images. Confinement, content checks, secret scanning and approval digests are unchanged.
 - **No-file auto-task delivery.** `engager`, `post-proposer` and `weekly-report` declare
   `no-diff-expected`, so their documented paths that write no files can deliver task evidence.
 - **Plugin test isolation.** Package layout checks inspect tracked and non-ignored untracked
